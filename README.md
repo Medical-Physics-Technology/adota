@@ -30,6 +30,15 @@ uv sync
 
 ## Usage
 
+### Prerequisites
+
+Before running the model, please download the required files:
+
+1. **[Download Pre-trained Models](models/README.md)** - Model weights and configuration files
+2. **[Download Example Data](data/README.md)** - Input data for evaluation
+
+### Running Evaluation
+
 Run model evaluation on test data:
 
 ```bash
