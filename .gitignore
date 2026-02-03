@@ -206,11 +206,13 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# Models
-models/
+# Models (keep README.md)
+models/*
+!models/README.md
 
-# Data
-data/
+# Data (keep README.md)
+data/*
+!data/README.md
 
 # Runs (evaluation outputs)
 runs/
