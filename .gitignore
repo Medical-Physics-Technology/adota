@@ -208,3 +208,9 @@ __marimo__/
 
 # Models
 models/
+
+# Data
+data/
+
+# Runs (evaluation outputs)
+runs/

@@ -1,0 +1,16 @@
+[project]
+name = "adota"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "matplotlib>=3.9.4",
+    "numpy>=2.0.2",
+    "pymedphys>=0.40.0",
+    "ruff>=0.15.0",
+    "scipy>=1.13.0",
+    "torch>=2.8.0",
+    "tqdm>=4.66.0",
+    "typer>=0.21.1",
+]
