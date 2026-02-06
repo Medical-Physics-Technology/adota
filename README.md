@@ -17,6 +17,20 @@ Developed by:
 
 **Affiliation:** Radiation Science and Technology, Medical Physics and Technology Group, Delft University of Technology (TU Delft)
 
+If use this work, pleae cite the following paper: https://arxiv.org/pdf/2602.04375
+
+```
+@misc{stryja2026angledependentdosetransformer,
+      title={Angle dependent dose transformer algorithm for fast proton therapy dose calculations}, 
+      author={Mikołaj Stryja and Danny Lathouwers and Zoltán Perkó},
+      year={2026},
+      eprint={2602.04375},
+      archivePrefix={arXiv},
+      primaryClass={physics.med-ph},
+      url={https://arxiv.org/abs/2602.04375}, 
+}
+```
+
 ## Installation
 
 ```bash
