@@ -17,7 +17,7 @@ Developed by:
 
 **Affiliation:** Radiation Science and Technology, Medical Physics and Technology Group, Delft University of Technology (TU Delft)
 
-If use this work, pleae cite the following paper: https://arxiv.org/pdf/2602.04375
+If use this work, please cite the following paper: https://arxiv.org/pdf/2602.04375
 
 ```
 @misc{stryja2026angledependentdosetransformer,
