@@ -7,6 +7,7 @@ requires-python = ">=3.9"
 dependencies = [
     "matplotlib>=3.9.4",
     "numpy>=2.0.2",
+    "pydicom>=2.4.4",
     "pymedphys>=0.40.0",
     "ruff>=0.15.0",
     "scipy>=1.13.0",

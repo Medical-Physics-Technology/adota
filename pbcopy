@@ -1,0 +1,82 @@
+2026-02-13 20:36:00,874 - INFO - Log file: /home/mstryja/projects/adota/runs/20260213_203600/logs.out
+2026-02-13 20:36:00,874 - INFO - ============================================================
+2026-02-13 20:36:00,874 - INFO - HPTC Model Run
+2026-02-13 20:36:00,874 - INFO - ============================================================
+2026-02-13 20:36:00,874 - INFO - 
+Input CT directory: /home/mstryja/projects/adota/data/DeepLearningMikolajAndZoltanOutput/QA_Pat01_Overig_1943/Inputs
+2026-02-13 20:36:00,874 - INFO - Input plan file: /home/mstryja/projects/adota/data/DeepLearningMikolajAndZoltanOutput/QA_Pat01_Overig_1943/PlanPencil.txt
+2026-02-13 20:36:00,874 - INFO - Input config file: /home/mstryja/projects/adota/data/DeepLearningMikolajAndZoltanOutput/QA_Pat01_Overig_1943/config.txt
+2026-02-13 20:36:00,874 - INFO - --------------------------------------------------
+2026-02-13 20:36:00,874 - INFO - 
+Parsing configuration file...
+2026-02-13 20:36:00,874 - INFO - Configuration parameters loaded: 68 parameters
+2026-02-13 20:36:00,875 - INFO -   Num_Threads: 0
+2026-02-13 20:36:00,875 - INFO -   RNG_Seed: 0
+2026-02-13 20:36:00,875 - INFO -   Num_Primaries: 10000000.0
+2026-02-13 20:36:00,875 - INFO -   E_Cut_Pro: 0.5
+2026-02-13 20:36:00,875 - INFO -   D_Max: 0.2
+2026-02-13 20:36:00,875 - INFO -   Epsilon_Max: 0.25
+2026-02-13 20:36:00,875 - INFO -   Te_Min: 0.05
+2026-02-13 20:36:00,875 - INFO -   CT_File: CT.mhd
+2026-02-13 20:36:00,875 - INFO -   HU_Density_Conversion_File: Y:\ali\projects\IDCMCsquare\MCsquare\Scanners\hptc_cirs\HU_Density_Conversion.txt
+2026-02-13 20:36:00,875 - INFO -   HU_Material_Conversion_File: Y:\ali\projects\IDCMCsquare\MCsquare\Scanners\hptc_cirs\HU_Material_Conversion.txt
+2026-02-13 20:36:00,875 - INFO -   BDL_Machine_Parameter_File: Y:\ali\projects\IDCMCsquare\MCsquare\BDL\hptc_beam_model_rsnone.txt
+2026-02-13 20:36:00,875 - INFO -   BDL_Plan_File: PlanPencil.txt
+2026-02-13 20:36:00,875 - INFO -   Simulate_Nuclear_Interactions: True
+2026-02-13 20:36:00,875 - INFO -   Simulate_Secondary_Protons: True
+2026-02-13 20:36:00,875 - INFO -   Simulate_Secondary_Deuterons: True
+2026-02-13 20:36:00,875 - INFO -   Simulate_Secondary_Alphas: True
+2026-02-13 20:36:00,875 - INFO -   4D_Mode: False
+2026-02-13 20:36:00,875 - INFO -   4D_Dose_Accumulation: False
+2026-02-13 20:36:00,875 - INFO -   Field_type: Velocity
+2026-02-13 20:36:00,875 - INFO -   Create_Ref_from_4DCT: False
+2026-02-13 20:36:00,875 - INFO -   Create_4DCT_from_Ref: False
+2026-02-13 20:36:00,875 - INFO -   Dynamic_delivery: False
+2026-02-13 20:36:00,875 - INFO -   Breathing_period: 7.0
+2026-02-13 20:36:00,875 - INFO -   Robustness_Mode: False
+2026-02-13 20:36:00,875 - INFO -   Scenario_selection: All
+2026-02-13 20:36:00,875 - INFO -   Simulate_nominal_plan: True
+2026-02-13 20:36:00,875 - INFO -   Num_Random_Scenarios: 100
+2026-02-13 20:36:00,875 - INFO -   Systematic_Setup_Error: 0.25 0.25 0.25
+2026-02-13 20:36:00,875 - INFO -   Random_Setup_Error: 0.1 0.1 0.1
+2026-02-13 20:36:00,875 - INFO -   Systematic_Range_Error: 3.0
+2026-02-13 20:36:00,875 - INFO -   Systematic_Amplitude_Error: 5.0
+2026-02-13 20:36:00,875 - INFO -   Random_Amplitude_Error: 5.0
+2026-02-13 20:36:00,875 - INFO -   Systematic_Period_Error: 5.0
+2026-02-13 20:36:00,875 - INFO -   Random_Period_Error: 5.0
+2026-02-13 20:36:00,875 - INFO -   Beamlet_Mode: False
+2026-02-13 20:36:00,876 - INFO -   Beamlet_Parallelization: False
+2026-02-13 20:36:00,876 - INFO -   Compute_stat_uncertainty: True
+2026-02-13 20:36:00,876 - INFO -   Stat_uncertainty: 1.0
+2026-02-13 20:36:00,876 - INFO -   Ignore_low_density_voxels: True
+2026-02-13 20:36:00,876 - INFO -   Export_batch_dose: False
+2026-02-13 20:36:00,876 - INFO -   Max_Num_Primaries: 0
+2026-02-13 20:36:00,876 - INFO -   Max_Simulation_time: 0
+2026-02-13 20:36:00,876 - INFO -   Output_Directory: Outputs
+2026-02-13 20:36:00,876 - INFO -   Energy_ASCII_Output: False
+2026-02-13 20:36:00,876 - INFO -   Energy_MHD_Output: False
+2026-02-13 20:36:00,876 - INFO -   Energy_Sparse_Output: False
+2026-02-13 20:36:00,876 - INFO -   Dose_ASCII_Output: False
+2026-02-13 20:36:00,876 - INFO -   Dose_MHD_Output: True
+2026-02-13 20:36:00,876 - INFO -   Dose_Sparse_Output: False
+2026-02-13 20:36:00,876 - INFO -   LET_ASCII_Output: False
+2026-02-13 20:36:00,876 - INFO -   LET_MHD_Output: False
+2026-02-13 20:36:00,876 - INFO -   LET_Sparse_Output: False
+2026-02-13 20:36:00,876 - INFO -   Densities_Output: False
+2026-02-13 20:36:00,876 - INFO -   Materials_Output: False
+2026-02-13 20:36:00,876 - INFO -   Compute_DVH: False
+2026-02-13 20:36:00,876 - INFO -   Dose_Sparse_Threshold: 0.0
+2026-02-13 20:36:00,876 - INFO -   Energy_Sparse_Threshold: 0.0
+2026-02-13 20:36:00,876 - INFO -   LET_Sparse_Threshold: 0.0
+2026-02-13 20:36:00,876 - INFO -   Score_PromptGammas: False
+2026-02-13 20:36:00,876 - INFO -   PG_LowEnergyCut: 0.0
+2026-02-13 20:36:00,876 - INFO -   PG_HighEnergyCut: 50.0
+2026-02-13 20:36:00,876 - INFO -   PG_Spectrum_NumBin: 150
+2026-02-13 20:36:00,876 - INFO -   PG_Spectrum_Binning: 0.1
+2026-02-13 20:36:00,876 - INFO -   LET_Calculation_Method: StopPow
+2026-02-13 20:36:00,876 - INFO -   Export_Beam_dose: False
+2026-02-13 20:36:00,876 - INFO -   Dose_to_Water_conversion: OnlineSPR
+2026-02-13 20:36:00,876 - INFO -   Dose_Segmentation: False
+2026-02-13 20:36:00,876 - INFO -   Density_Threshold_for_Segmentation: 0.01
+2026-02-13 20:36:00,876 - INFO - 
+Parsing treatment plan file...
