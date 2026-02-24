@@ -9,7 +9,14 @@ A command-line tool for running DoTA model inference on dose prediction tasks.
 ### Usage
 
 ```bash
+# Run with CLI arguments
 uv run python scripts/run_model.py <MODEL_NAME> <TEST_DATA> [OPTIONS]
+
+# Run from YAML config file
+uv run python scripts/run_model.py --config scripts/config_run_model.yaml
+
+# Mix: YAML config with CLI overrides (CLI takes precedence)
+uv run python scripts/run_model.py --config scripts/config_run_model.yaml --dose-threshold 3.0
 ```
 
 ### Arguments
@@ -23,6 +30,7 @@ uv run python scripts/run_model.py <MODEL_NAME> <TEST_DATA> [OPTIONS]
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
+| `--config` | path | - | Path to YAML configuration file |
 | `--downsampling-method` | string | `interpolation` | Downsampling method: `interpolation` or `avg_pooling` |
 | `--model-fname` | string | `best_model.pth` | Model filename within the model directory |
 | `--device-index` | int | `0` | CUDA device index (-1 for CPU) |
@@ -75,6 +83,40 @@ uv run python scripts/run_model.py DoTA_v3_grid_search_v11 data/example_inputs \
 uv run python scripts/run_model.py --help
 ```
 
+### YAML Configuration
+
+Instead of passing all options via the CLI, you can use a YAML config file. A default configuration file is provided at `scripts/config_run_model.yaml`:
+
+```yaml
+# --- Required Arguments ---
+model_name: DoTA_v3_grid_search_v11
+test_data: data/example_inputs
+
+# --- Optional Settings ---
+downsampling_method: interpolation
+model_fname: best_model.pth
+device_index: 0
+dose_threshold: 2.0
+distance_threshold: 2.0
+no_progress: false
+verbose: false
+```
+
+**Run entirely from YAML:**
+```bash
+uv run python scripts/run_model.py --config scripts/config_run_model.yaml
+```
+
+**Override specific YAML values with CLI flags:**
+```bash
+uv run python scripts/run_model.py --config scripts/config_run_model.yaml \
+    --dose-threshold 3.0 --distance-threshold 3.0 --verbose
+```
+
+**Precedence order:** CLI arguments > YAML config > built-in defaults.
+
+For reproducibility, the YAML config file is automatically copied to the run output directory (`runs/<YYYYMMDD_HHMMSS>/config_run_model.yaml`).
+
 ### Input Data Format
 
 The `TEST_DATA` directory should contain input files with the following naming convention:
@@ -93,6 +135,7 @@ Each run creates a timestamped directory in `runs/` with the format `YYYYMMDD_HH
 ```
 runs/
 └── 20260203_143022/
+    ├── config_run_model.yaml   # Copy of config (if --config was used)
     ├── evaluation.log          # Complete log with results table
     └── figures/
         ├── gpr_vs_energy.png   # Plot of Gamma Pass Rate vs Energy

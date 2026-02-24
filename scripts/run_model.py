@@ -7,12 +7,15 @@ A command-line tool for running DoTA model inference on dose prediction tasks.
 import json
 import logging
 import os
+import shutil
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Annotated, Optional
+
+import yaml
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -556,37 +559,130 @@ def validate_inputs(test_data: Path, model_path: Path, hyperparams_path: Path) -
         raise typer.BadParameter(f"Hyperparams file not found: {hyperparams_path}")
 
 
+def load_yaml_config(config_path: Path) -> dict:
+    """Load configuration from a YAML file.
+
+    Args:
+        config_path: Path to the YAML configuration file.
+
+    Returns:
+        Dictionary with configuration values.
+
+    Raises:
+        typer.BadParameter: If the YAML file cannot be read or parsed.
+    """
+    if not config_path.exists():
+        raise typer.BadParameter(f"Config file not found: {config_path}")
+
+    try:
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        raise typer.BadParameter(f"Failed to parse YAML config: {e}")
+
+    if config is None:
+        return {}
+
+    return config
+
+
 @app.command()
 def main(
-    model_name: Annotated[str, typer.Argument(help="Name of the model directory")],
+    model_name: Annotated[
+        Optional[str], typer.Argument(help="Name of the model directory")
+    ] = None,
     test_data: Annotated[
-        Path, typer.Argument(help="Path to the directory with input data to evaluate")
-    ],
+        Optional[Path],
+        typer.Argument(help="Path to the directory with input data to evaluate"),
+    ] = None,
+    config: Annotated[
+        Optional[Path],
+        typer.Option(help="Path to YAML configuration file"),
+    ] = None,
     downsampling_method: Annotated[
-        str, typer.Option(help="Downsampling method: 'interpolation' or 'avg_pooling'")
-    ] = "interpolation",
-    model_fname: Annotated[str, typer.Option(help="Model filename")] = "best_model.pth",
+        Optional[str],
+        typer.Option(help="Downsampling method: 'interpolation' or 'avg_pooling'"),
+    ] = None,
+    model_fname: Annotated[Optional[str], typer.Option(help="Model filename")] = None,
     device_index: Annotated[
-        int, typer.Option(help="CUDA device index (-1 for CPU)")
-    ] = 0,
+        Optional[int], typer.Option(help="CUDA device index (-1 for CPU)")
+    ] = None,
     dose_threshold: Annotated[
-        float, typer.Option(help="Dose percent threshold for gamma")
-    ] = 2.0,
+        Optional[float], typer.Option(help="Dose percent threshold for gamma")
+    ] = None,
     distance_threshold: Annotated[
-        float, typer.Option(help="Distance threshold (mm) for gamma")
-    ] = 2.0,
-    no_progress: Annotated[bool, typer.Option(help="Disable progress bar")] = False,
-    verbose: Annotated[bool, typer.Option(help="Enable verbose output")] = False,
+        Optional[float], typer.Option(help="Distance threshold (mm) for gamma")
+    ] = None,
+    no_progress: Annotated[
+        Optional[bool], typer.Option(help="Disable progress bar")
+    ] = None,
+    verbose: Annotated[
+        Optional[bool], typer.Option(help="Enable verbose output")
+    ] = None,
 ) -> None:
     """Run the DoTA model for dose prediction.
 
     Evaluates the model on all samples in the test data directory,
     computes metrics (GPR, RMSE, MAPE, RDE), and generates publication figures.
+
+    Can be configured via CLI arguments, a YAML config file (--config), or both.
+    CLI arguments take precedence over YAML values.
     """
+    # Load YAML config if provided
+    yaml_config: dict = {}
+    config_path: Optional[Path] = None
+    if config is not None:
+        config_path = config if config.is_absolute() else PROJECT_ROOT / config
+        yaml_config = load_yaml_config(config_path)
+
+    # Merge: CLI args override YAML values, YAML overrides defaults
+    model_name = model_name or yaml_config.get("model_name")
+    test_data = test_data or (
+        Path(yaml_config["test_data"]) if "test_data" in yaml_config else None
+    )
+    downsampling_method = downsampling_method or yaml_config.get(
+        "downsampling_method", "interpolation"
+    )
+    model_fname = model_fname or yaml_config.get("model_fname", "best_model.pth")
+    device_index = (
+        device_index if device_index is not None else yaml_config.get("device_index", 0)
+    )
+    dose_threshold = (
+        dose_threshold
+        if dose_threshold is not None
+        else yaml_config.get("dose_threshold", 2.0)
+    )
+    distance_threshold = (
+        distance_threshold
+        if distance_threshold is not None
+        else yaml_config.get("distance_threshold", 2.0)
+    )
+    no_progress = (
+        no_progress
+        if no_progress is not None
+        else yaml_config.get("no_progress", False)
+    )
+    verbose = verbose if verbose is not None else yaml_config.get("verbose", False)
+
+    # Validate required arguments
+    if model_name is None:
+        raise typer.BadParameter(
+            "MODEL_NAME is required (via CLI argument or YAML config)"
+        )
+    if test_data is None:
+        raise typer.BadParameter(
+            "TEST_DATA is required (via CLI argument or YAML config)"
+        )
+
     # Setup run directory and logging first
     runs_dir = PROJECT_ROOT / "runs"
     run_dir = setup_run_directory(runs_dir)
     log_file = setup_logging(run_dir, verbose=verbose)
+
+    # Copy YAML config to run directory for reproducibility
+    if config_path is not None:
+        shutil.copy2(config_path, run_dir / config_path.name)
+        logger.info(f"Config file copied to {run_dir / config_path.name}")
 
     logger.info(f"Run directory: {run_dir}")
     logger.info(f"Log file: {log_file}")
@@ -668,6 +764,7 @@ def main(
         rdes=[r.rde for r in results],
         gamma_params=config.gamma_params,
         beamlet_angles=[list(r.beamlet_angles) for r in results],
+        logger=logger,
     )
 
     # Print summary
