@@ -1,0 +1,116 @@
+# CT Texture Analysis Configuration
+# ====================================
+# This YAML file configures the ct_texture_analysis.py pipeline.
+# All options correspond to CLI arguments and can be overridden
+# by passing CLI flags (CLI takes precedence over YAML values).
+#
+# Usage:
+#   uv run python scripts/ct_texture_analysis.py --config scripts/config_texture_analysis.yaml
+#
+# A copy of this file is saved in the run directory for reproducibility.
+
+# --- Input Settings ---
+
+# Path to a CT image file or a directory containing CT images.
+input_path: /scratch/mstryja/texture_analysis/ct_grid_790.mhd
+
+# Image file format: mhd, dcm, or npy
+format: mhd
+
+# --- Output Settings ---
+
+# Base directory where timestamped run results are stored.
+# Each run creates a sub-directory: runs/texture_YYYYMMDD_HHMMSS/
+runs_dir: runs
+
+# Enable debug-level logging (true / false)
+verbose: false
+
+# --- GLCM Homogeneity Settings ---
+
+# Parameters for the Gray-Level Co-occurrence Matrix (GLCM) homogeneity score.
+# The metric is computed per axial slice on a sample of slices, then
+# averaged over the volume.
+glcm:
+  # Number of gray levels after discretization
+  levels: 64
+
+  # Homogeneity variant:
+  #   "idm"  – Inverse Difference Moment:  Σ p(i,j) / (1 + (i-j)²)
+  #   "idmn" – Normalized variant:         Σ p(i,j) / (1 + ((i-j)/Ng)²)
+  variant: idm
+
+  # Pixel distances for GLCM offsets
+  distances: [1]
+
+  # Angles in degrees (converted to radians internally)
+  angles_deg: [0, 45, 90, 135]
+
+  # Make GLCM symmetric: P(i,j) += P(j,i)
+  symmetric: true
+
+  # Explicit value range [min, max] for discretization (HU).
+  # Set to null to auto-detect from each slice.
+  value_range: null
+
+  # Number of axial slices to sample for per-volume statistics.
+  # Evenly spaced through the volume. Set to a large number to use all slices.
+  n_sample_slices: 10
+
+# --- Edge Detection Settings ---
+
+# Parameters for Laplacian-of-Gaussian (LoG) edge detection and visualisation.
+# A 3×2 figure (3 axial slices × [CT, edges]) is saved per image.
+edge_detection:
+  # Enable or disable edge detection figure generation
+  enabled: false
+
+  # Detection method:
+  #   "significant" – advanced detector with MAD thresholding, gradient gating,
+  #                   and optional hysteresis (recommended)
+  #   "simple"      – basic zero-crossing on raw LoG response
+  method: significant
+
+  # Gaussian sigma in mm for LoG filter
+  sigma_mm: 1.0
+
+  # CT display windowing for the PNG figure (in HU)
+  window_center: 0.0
+  window_width: 1500.0
+
+  # --- Simple method parameters (used only when method = "simple") ---
+
+  # Minimum |LoG| jump across a zero-crossing to count as edge.
+  # Increase to suppress noise; 0.0 keeps all zero-crossings.
+  zero_cross_thresh: 0.0
+
+  # Neighbourhood connectivity for zero-crossing detector:
+  #   1 => 4-connected (2D) / 6-connected (3D)
+  #   2 => 8-connected (2D) / 26-connected (3D)
+  connectivity: 1
+
+  # --- Significant method parameters (used only when method = "significant") ---
+
+  significant:
+    # Use σ²-normalized LoG for stable thresholding across scales
+    scale_normalized: true
+
+    # LoG jump threshold = log_k_mad × MAD(L_norm).
+    # Higher values → fewer, stronger edges only.
+    log_k_mad: 6.0
+
+    # Gradient magnitude gate: only zero-crossings at voxels whose
+    # |∇(Gσ*I)| ≥ this percentile are kept. E.g. 95 = top 5% gradients.
+    grad_percentile: 95.0
+
+    # Enable hysteresis: seed strong edges, grow into weaker connected ones.
+    hysteresis: true
+
+    # Low threshold = low_high_ratio × high threshold (for hysteresis)
+    low_high_ratio: 0.5
+
+    # Neighbourhood connectivity (1 = axis-aligned, 2 = full)
+    connectivity: 1
+
+    # Border handling mode passed to scipy filters
+    mode: reflect

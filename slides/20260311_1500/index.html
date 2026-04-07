@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CT Density Variability &amp; Model Performance</title>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', -apple-system, sans-serif; background: #fff; color: #37352f; }
+  </style>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <div id="root"></div>
+  <script type="text/babel">
+
+const { useState, useEffect, useCallback } = React;
+
+/* ── Slide Data ────────────────────────────────────────────── */
+
+const slides = [
+  /* 0 ─ Title */
+  {
+    type: "title",
+    title: "CT Density Profile Variability\n& Dose Prediction Accuracy",
+    subtitle: "Investigating the relationship between tissue heterogeneity metrics\nand gamma pass rate across anatomical sites",
+    meta: "ADoTA · March 2026",
+  },
+
+  /* 1 ─ Motivation */
+  {
+    type: "content",
+    title: "Motivation",
+    icon: "💡",
+    blocks: [
+      {
+        kind: "text",
+        value: "Proton dose prediction accuracy is influenced by the tissue composition along the beam path. We hypothesise that quantifiable variability in the CT density profile correlates with model performance.",
+      },
+      {
+        kind: "callout",
+        emoji: "🎯",
+        value: "Goal: propose simple, interpretable metrics that quantify density-profile variability and test whether they predict gamma pass rate degradation.",
+      },
+      {
+        kind: "text",
+        value: "Two complementary metrics were selected — one capturing local roughness, the other global spread.",
+      },
+    ],
+  },
+
+  /* 2 ─ Methodology: TV */
+  {
+    type: "content",
+    title: "Metric 1 — Total Variation (TV)",
+    icon: "📐",
+    blocks: [
+      {
+        kind: "text",
+        value: "Total Variation measures the accumulated absolute change in average density between consecutive depth slices.",
+      },
+      {
+        kind: "equation",
+        label: "Definition",
+        value: "TV  =  Σ  | ρ̄ₖ₊₁  −  ρ̄ₖ |     for k = 1 … D−1",
+      },
+      {
+        kind: "text",
+        value: "where ρ̄ₖ is the laterally-averaged CT density (in HU) at depth slice k, and D is the number of depth slices.",
+      },
+      {
+        kind: "callout",
+        emoji: "🔬",
+        value: "Physical interpretation: high TV indicates many sharp tissue transitions (e.g. bone → air → soft tissue) along the beam axis. These interfaces are known to challenge dose calculation accuracy in proton therapy.",
+      },
+      {
+        kind: "props",
+        items: [
+          ["Units", "HU (Hounsfield Units)"],
+          ["Range", "[0, ∞)"],
+          ["Sensitivity", "Local slice-to-slice transitions"],
+        ],
+      },
+    ],
+  },
+
+  /* 3 ─ Methodology: CV */
+  {
+    type: "content",
+    title: "Metric 2 — Coefficient of Variation (CV)",
+    icon: "📊",
+    blocks: [
+      {
+        kind: "text",
+        value: "The Coefficient of Variation captures the relative spread of the density profile, normalised by its mean.",
+      },
+      {
+        kind: "equation",
+        label: "Definition",
+        value: "CV  =  σ(ρ̄)  /  |μ(ρ̄)|",
+      },
+      {
+        kind: "text",
+        value: "where σ and μ are the standard deviation and mean of the depth-averaged density profile respectively.",
+      },
+      {
+        kind: "callout",
+        emoji: "🔬",
+        value: "Physical interpretation: high CV means the beam traverses tissues with widely different densities relative to the average. Unlike TV, this metric is insensitive to the ordering of tissues — it captures global heterogeneity.",
+      },
+      {
+        kind: "props",
+        items: [
+          ["Units", "Dimensionless"],
+          ["Range", "[0, ∞)"],
+          ["Sensitivity", "Global spread of density values"],
+        ],
+      },
+    ],
+  },
+
+  /* 4 ─ TV vs CV comparison */
+  {
+    type: "content",
+    title: "TV vs CV — Complementary Perspectives",
+    icon: "⚖️",
+    blocks: [
+      {
+        kind: "table",
+        headers: ["Property", "Total Variation (TV)", "Coefficient of Variation (CV)"],
+        rows: [
+          ["What it measures", "Local roughness / transitions", "Global relative spread"],
+          ["Sensitive to ordering?", "Yes — detects abrupt jumps", "No — only distribution matters"],
+          ["Units", "HU", "Dimensionless"],
+          ["High value means", "Many sharp tissue interfaces", "Wide density diversity"],
+          ["Example scenario", "Bone → air → tissue", "Mixed lung / mediastinum"],
+        ],
+      },
+      {
+        kind: "callout",
+        emoji: "💡",
+        value: "A sample can have high TV but low CV (many small oscillations around a stable mean) or low TV but high CV (one large gradual transition). Using both metrics gives a richer picture.",
+      },
+    ],
+  },
+
+  /* 5 ─ Experimental Setup */
+  {
+    type: "content",
+    title: "Experimental Setup",
+    icon: "⚙️",
+    blocks: [
+      {
+        kind: "table",
+        headers: ["", "Lung PET-CT-Dx", "StageII Colorectal CT"],
+        rows: [
+          ["Samples", "132", "110"],
+          ["Anatomy", "Thorax (lung)", "Pelvis (colorectal)"],
+          ["Model", "DoTA v3 (grid search v11)", "DoTA v3 (grid search v11)"],
+          ["Gamma criteria", "2% / 2mm / 10% cutoff", "2% / 2mm / 10% cutoff"],
+          ["Downsampling", "Trilinear interpolation", "Trilinear interpolation"],
+          ["Best GPR", "100.00%", "100.00%"],
+          ["Worst GPR", "89.61%", "95.64%"],
+        ],
+      },
+      {
+        kind: "callout",
+        emoji: "📌",
+        value: "Both datasets use individualised beam angles — no fixed-angle constraint.",
+      },
+    ],
+  },
+
+  /* 6 ─ Results: Lung */
+  {
+    type: "results",
+    title: "Results — Lung PET-CT-Dx",
+    icon: "🫁",
+    dataset: "132 samples · Thorax",
+    metrics: [
+      { label: "TV vs GPR", r: "−0.137", p: "0.117", significant: false },
+      { label: "CV vs GPR", r: "0.231", p: "0.008", significant: true },
+    ],
+    interpretation: "CV shows a statistically significant positive correlation with GPR (p < 0.01), suggesting that in lung tissue, higher global density spread is paradoxically associated with slightly better GPR. TV shows a weak negative trend that does not reach significance.",
+    imgPath: null,
+  },
+
+  /* 7 ─ Results: Colorectal */
+  {
+    type: "results",
+    title: "Results — StageII Colorectal CT",
+    icon: "🩻",
+    dataset: "110 samples · Pelvis",
+    metrics: [
+      { label: "TV vs GPR", r: "0.072", p: "0.457", significant: false },
+      { label: "CV vs GPR", r: "−0.068", p: "0.483", significant: false },
+    ],
+    interpretation: "Neither metric shows a statistically significant correlation with GPR for the pelvic anatomy. The model performs consistently well (worst GPR = 95.64%), leaving little variance for the metrics to explain.",
+    imgPath: null,
+  },
+
+  /* 8 ─ Cross-site comparison */
+  {
+    type: "content",
+    title: "Cross-Site Comparison",
+    icon: "🔄",
+    blocks: [
+      {
+        kind: "table",
+        headers: ["Metric", "Lung r (p)", "Colorectal r (p)", "Interpretation"],
+        rows: [
+          ["TV vs GPR", "−0.137 (0.117)", "0.072 (0.457)", "No consistent effect"],
+          ["CV vs GPR", "0.231 (0.008)", "−0.068 (0.483)", "Site-dependent"],
+        ],
+      },
+      {
+        kind: "callout",
+        emoji: "⚠️",
+        value: "The density variability → GPR relationship is anatomy-dependent. Lung tissue (with air cavities, ribs, and mediastinum) shows a detectable CV effect, while the more homogeneous pelvic anatomy does not.",
+      },
+      {
+        kind: "text",
+        value: "The colorectal dataset has a narrow GPR range (95.6–100%), which limits the power to detect correlations — a ceiling effect.",
+      },
+    ],
+  },
+
+  /* 9 ─ Key Takeaways */
+  {
+    type: "content",
+    title: "Key Takeaways",
+    icon: "🔑",
+    blocks: [
+      {
+        kind: "checklist",
+        items: [
+          "TV and CV are simple, interpretable metrics computable from the CT input alone — no inference needed.",
+          "CV correlates significantly with GPR in lung anatomy (r = 0.231, p = 0.008), but not in pelvis.",
+          "TV does not reach significance in either site — local transitions alone do not predict model accuracy.",
+          "The relationship is site-dependent: anatomical context matters more than a universal heterogeneity score.",
+          "Pelvic data exhibits a ceiling effect — model already performs very well, masking potential correlations.",
+        ],
+      },
+    ],
+  },
+
+  /* 10 ─ Next Steps */
+  {
+    type: "content",
+    title: "Next Steps",
+    icon: "🚀",
+    blocks: [
+      {
+        kind: "numbered",
+        items: [
+          "Extend to additional anatomical sites (head & neck, liver) to confirm site-dependency.",
+          "Investigate non-linear relationships — fit polynomial or use Spearman rank correlation alongside Pearson.",
+          "Combine TV and CV into a joint predictor (e.g. multivariate regression) to improve explanatory power.",
+          "Explore spatial heterogeneity metrics (GLCM, beam-aligned gradient) as stronger predictors.",
+          "Stratify analysis by energy range — density effects may be more pronounced at higher energies.",
+          "Evaluate whether density metrics can serve as pre-screening flags for cases requiring Monte Carlo verification.",
+        ],
+      },
+    ],
+  },
+];
+
+/* ── Slide Components ──────────────────────────────────────── */
+
+function TitleSlide({ data }) {
+  return (
+    <div style={st.slide}>
+      <div style={{ display:"flex", flexDirection:"column", justifyContent:"center", alignItems:"center", height:"100%", textAlign:"center", padding:"0 80px" }}>
+        <div style={{ fontSize:13, fontWeight:500, letterSpacing:2, color:"#9b9a97", textTransform:"uppercase", marginBottom:28 }}>{data.meta}</div>
+        <h1 style={{ fontSize:42, fontWeight:700, lineHeight:1.25, whiteSpace:"pre-line", marginBottom:24 }}>{data.title}</h1>
+        <p style={{ fontSize:18, color:"#6b6b6b", lineHeight:1.6, whiteSpace:"pre-line", maxWidth:700 }}>{data.subtitle}</p>
+      </div>
+    </div>
+  );
+}
+
+function ResultsSlide({ data }) {
+  return (
+    <div style={st.slide}>
+      <div style={st.slideInner}>
+        <Header icon={data.icon} title={data.title} />
+        <div style={{ fontSize:14, color:"#9b9a97", marginBottom:20 }}>{data.dataset}</div>
+        <div style={{ display:"flex", gap:24, marginBottom:28 }}>
+          {data.metrics.map((m, i) => (
+            <div key={i} style={{
+              flex:1, background: m.significant ? "#f0faf4" : "#f7f6f3",
+              borderRadius:8, padding:"20px 24px",
+              border: m.significant ? "1.5px solid #4daa7a" : "1px solid #e9e9e7",
+            }}>
+              <div style={{ fontSize:13, fontWeight:500, color:"#9b9a97", marginBottom:8 }}>{m.label}</div>
+              <div style={{ fontSize:32, fontWeight:700, color: m.significant ? "#2d8659" : "#37352f" }}>r = {m.r}</div>
+              <div style={{ fontSize:14, color: m.significant ? "#2d8659" : "#9b9a97", marginTop:4 }}>
+                p = {m.p} {m.significant ? " ✓ significant" : " — not significant"}
+              </div>
+            </div>
+          ))}
+        </div>
+        <Callout emoji="📝" value={data.interpretation} />
+      </div>
+    </div>
+  );
+}
+
+function ContentSlide({ data }) {
+  return (
+    <div style={st.slide}>
+      <div style={st.slideInner}>
+        <Header icon={data.icon} title={data.title} />
+        {data.blocks.map((b, i) => <Block key={i} block={b} />)}
+      </div>
+    </div>
+  );
+}
+
+function Header({ icon, title }) {
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:28 }}>
+      <span style={{ fontSize:28 }}>{icon}</span>
+      <h2 style={{ fontSize:28, fontWeight:700 }}>{title}</h2>
+    </div>
+  );
+}
+
+function Block({ block }) {
+  const b = block;
+  switch (b.kind) {
+    case "text":
+      return <p style={{ fontSize:17, lineHeight:1.7, color:"#37352f", marginBottom:18 }}>{b.value}</p>;
+
+    case "callout":
+      return <Callout emoji={b.emoji} value={b.value} />;
+
+    case "equation":
+      return (
+        <div style={{ background:"#f7f6f3", borderRadius:8, padding:"18px 24px", marginBottom:18, fontFamily:"'Courier New', monospace" }}>
+          <div style={{ fontSize:12, fontWeight:600, color:"#9b9a97", marginBottom:6, textTransform:"uppercase", letterSpacing:1, fontFamily:"Inter, sans-serif" }}>{b.label}</div>
+          <div style={{ fontSize:22, fontWeight:500, color:"#37352f", letterSpacing:1 }}>{b.value}</div>
+        </div>
+      );
+
+    case "props":
+      return (
+        <div style={{ display:"flex", gap:16, marginBottom:18, flexWrap:"wrap" }}>
+          {b.items.map(([k, v], i) => (
+            <div key={i} style={{ background:"#f7f6f3", borderRadius:6, padding:"10px 16px", flex:"1 1 auto" }}>
+              <div style={{ fontSize:11, fontWeight:600, color:"#9b9a97", textTransform:"uppercase", letterSpacing:1 }}>{k}</div>
+              <div style={{ fontSize:15, fontWeight:500, marginTop:4 }}>{v}</div>
+            </div>
+          ))}
+        </div>
+      );
+
+    case "table":
+      return (
+        <div style={{ overflowX:"auto", marginBottom:18 }}>
+          <table style={{ width:"100%", borderCollapse:"collapse", fontSize:15 }}>
+            <thead>
+              <tr>
+                {b.headers.map((h, i) => (
+                  <th key={i} style={{ textAlign:"left", padding:"10px 14px", borderBottom:"2px solid #e9e9e7", fontWeight:600, fontSize:13, color:"#9b9a97", textTransform:"uppercase", letterSpacing:.5 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {b.rows.map((row, ri) => (
+                <tr key={ri} style={{ background: ri % 2 === 0 ? "#fff" : "#fafafa" }}>
+                  {row.map((cell, ci) => (
+                    <td key={ci} style={{ padding:"10px 14px", borderBottom:"1px solid #f0f0ed", fontWeight: ci === 0 ? 500 : 400 }}>{cell}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+
+    case "checklist":
+      return (
+        <div style={{ marginBottom:18 }}>
+          {b.items.map((item, i) => (
+            <div key={i} style={{ display:"flex", alignItems:"flex-start", gap:10, padding:"8px 0", borderBottom:"1px solid #f0f0ed" }}>
+              <span style={{ color:"#4daa7a", fontSize:18, lineHeight:1, marginTop:2 }}>✓</span>
+              <span style={{ fontSize:16, lineHeight:1.6 }}>{item}</span>
+            </div>
+          ))}
+        </div>
+      );
+
+    case "numbered":
+      return (
+        <div style={{ marginBottom:18 }}>
+          {b.items.map((item, i) => (
+            <div key={i} style={{ display:"flex", alignItems:"flex-start", gap:14, padding:"10px 0", borderBottom:"1px solid #f0f0ed" }}>
+              <span style={{ background:"#f7f6f3", borderRadius:"50%", width:28, height:28, display:"flex", alignItems:"center", justifyContent:"center", fontSize:13, fontWeight:600, color:"#9b9a97", flexShrink:0 }}>{i + 1}</span>
+              <span style={{ fontSize:16, lineHeight:1.6, paddingTop:3 }}>{item}</span>
+            </div>
+          ))}
+        </div>
+      );
+
+    default:
+      return null;
+  }
+}
+
+function Callout({ emoji, value }) {
+  return (
+    <div style={{ background:"#f7f6f3", borderRadius:8, padding:"16px 20px", marginBottom:18, display:"flex", gap:12, alignItems:"flex-start", borderLeft:"3px solid #e9e9e7" }}>
+      <span style={{ fontSize:20, lineHeight:1 }}>{emoji}</span>
+      <p style={{ fontSize:15, lineHeight:1.65, color:"#37352f" }}>{value}</p>
+    </div>
+  );
+}
+
+/* ── Styles ────────────────────────────────────────────────── */
+
+const st = {
+  slide: {
+    width: "100%",
+    height: "100vh",
+    display: "flex",
+    flexDirection: "column",
+    justifyContent: "flex-start",
+    background: "#ffffff",
+    position: "relative",
+  },
+  slideInner: {
+    padding: "56px 72px",
+    maxWidth: 960,
+    width: "100%",
+    overflowY: "auto",
+    flex: 1,
+  },
+};
+
+/* ── App ───────────────────────────────────────────────────── */
+
+function App() {
+  const [idx, setIdx] = useState(0);
+  const total = slides.length;
+
+  const go = useCallback((dir) => {
+    setIdx((prev) => Math.max(0, Math.min(total - 1, prev + dir)));
+  }, [total]);
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === "ArrowRight" || e.key === " ") { e.preventDefault(); go(1); }
+      if (e.key === "ArrowLeft") { e.preventDefault(); go(-1); }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [go]);
+
+  const slide = slides[idx];
+
+  return (
+    <div style={{ width:"100vw", height:"100vh", overflow:"hidden", position:"relative" }}>
+      {slide.type === "title" && <TitleSlide data={slide} />}
+      {slide.type === "content" && <ContentSlide data={slide} />}
+      {slide.type === "results" && <ResultsSlide data={slide} />}
+
+      {/* Navigation bar */}
+      <div style={{
+        position:"fixed", bottom:0, left:0, right:0,
+        display:"flex", justifyContent:"space-between", alignItems:"center",
+        padding:"12px 32px",
+        background:"rgba(255,255,255,0.92)", backdropFilter:"blur(8px)",
+        borderTop:"1px solid #f0f0ed",
+        zIndex:10,
+      }}>
+        <button onClick={() => go(-1)} disabled={idx === 0}
+          style={{ ...st_btn, opacity: idx === 0 ? 0.3 : 1 }}>← Prev</button>
+        <div style={{ display:"flex", gap:6, alignItems:"center" }}>
+          {slides.map((_, i) => (
+            <div key={i} onClick={() => setIdx(i)} style={{
+              width: i === idx ? 24 : 8, height:8, borderRadius:4,
+              background: i === idx ? "#37352f" : "#d9d9d6",
+              transition:"all .2s", cursor:"pointer",
+            }} />
+          ))}
+        </div>
+        <button onClick={() => go(1)} disabled={idx === total - 1}
+          style={{ ...st_btn, opacity: idx === total - 1 ? 0.3 : 1 }}>Next →</button>
+      </div>
+
+      {/* Slide counter */}
+      <div style={{ position:"fixed", bottom:48, right:32, fontSize:12, color:"#bbb", zIndex:10 }}>
+        {idx + 1} / {total}
+      </div>
+    </div>
+  );
+}
+
+const st_btn = {
+  background:"none", border:"1px solid #e9e9e7", borderRadius:6,
+  padding:"6px 16px", fontSize:13, fontWeight:500, color:"#37352f",
+  cursor:"pointer", fontFamily:"Inter, sans-serif",
+};
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+
+  </script>
+</head>
+<body></body>
+</html>

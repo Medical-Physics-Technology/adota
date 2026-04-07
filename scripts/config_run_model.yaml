@@ -15,7 +15,7 @@
 model_name: DoTA_v3_grid_search_v11
 
 # Path to the directory with input data to evaluate
-test_data: /scratch/mstryja/DoTA_dataset_v2/testsetLung-PET-CT-Dx_758
+test_data: /scratch/mstryja/DoTA_dataset_v2/testset_Lung-PET-CT-Dx_v2 # pelvis_abdominal_testset_paper #/scratch/mstryja/DoTA_dataset_v2/fixed_theta_y_StageII-Colorectal-CT_v0 # /scratch/mstryja/DoTA_dataset_v2/fixed_theta_y_Lung-PET-CT-Dx_v0 #
 
 # --- Optional Settings ---
 
@@ -29,10 +29,10 @@ model_fname: best_model.pth
 device_index: 1
 
 # Dose percent threshold for gamma calculation
-dose_threshold: 3.0
+dose_threshold: 2.0
 
 # Distance threshold (mm) for gamma calculation
-distance_threshold: 3.0
+distance_threshold: 2.0
 
 # Disable progress bar
 no_progress: false

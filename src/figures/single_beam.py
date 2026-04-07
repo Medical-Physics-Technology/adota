@@ -64,18 +64,24 @@ def publication_figure(
         "lower_percent_dose_cutoff": 0.1,
     },
     lateral_profiles_per_slice: bool = False,
+    beamlet_shape: bool = False,
 ):
     # Preprocessing - handled here for simplicity
     bp_idx_gt = estimate_bragg_peak(ground_truth)
     bp_idx_pred = estimate_bragg_peak(prediction)
 
     if not lateral_profiles_per_slice:
-        mosaic = "AAABBB;CCCDDD;EEEFFF;TTTTTT;GHJKLM;NOPQRS;UVWXYZ"
+        if beamlet_shape:
+            # Insert CT + flux overlay row below GT dose row
+            mosaic = "AAABBB;111222;CCCDDD;EEEFFF;TTTTTT;GHJKLM;NOPQRS;UVWXYZ"
+        else:
+            mosaic = "AAABBB;CCCDDD;EEEFFF;TTTTTT;GHJKLM;NOPQRS;UVWXYZ"
     else:
         # Last row represents lateral profiles per displayed slice in the rows above
         mosaic = "AAABBB;CCCDDD;EEEFFF;TTTTTT;GHIJKL;MNOPQR;STUVWX;lfyzab"
 
-    fig = plt.figure(layout="constrained", figsize=(18, 16), dpi=300)
+    fig_height = 18 if beamlet_shape else 16
+    fig = plt.figure(layout="constrained", figsize=(18, fig_height), dpi=300)
     ax_dict = fig.subplot_mosaic(mosaic)
 
     alphas = np.zeros_like(ground_truth)
@@ -140,6 +146,56 @@ def publication_figure(
     ax.set_xticklabels([""] * len(x_axis_ticks))
 
     ax.grid(linestyle="--", linewidth=0.5, color="white")
+
+    # ── Beamlet shape row: CT + Flux overlay ─────────────────────────────
+    if beamlet_shape:
+        flux = x_np[1]  # (D, H, W) – flux channel
+
+        # Build a flux alpha mask: transparent where flux is negligible
+        flux_alpha_threshold = 0.01 * np.max(flux)
+
+        # Axial CT + Flux
+        ax = ax_dict["1"]
+        ax.imshow(np.rot90(x_np[0][:, bp_idx_gt[1], :]), cmap="gray")
+        flux_axial = np.rot90(flux[:, bp_idx_gt[1], :])
+        flux_alpha_axial = np.where(flux_axial > flux_alpha_threshold, 0.65, 0.0)
+        flux_im = ax.imshow(flux_axial, cmap="hot", alpha=flux_alpha_axial)
+        for i in range(len(depth_layers_to_disp)):
+            ax.axvline(x=depth_layers_to_disp[i], color="red", linewidth=2)
+            ax.text(
+                depth_layers_to_disp[i] + 0.5,
+                32 if i % 2 == 0 else -2,
+                f"{depth_layers_to_disp[i] * 2} mm",
+                transform=ax.transData,
+                fontsize=14,
+                color="red",
+                va="center",
+                ha="left",
+            )
+        ax.set_ylabel("CT + Flux\n[mm]", fontsize=16)
+        y_ticks = ax.get_yticks()
+        y_tick_labels = (y_ticks * 2).astype(int)
+        ax.set_yticklabels(y_tick_labels)
+        ax.tick_params(labelsize=16)
+        x_axis_ticks = np.arange(0, x_np[0].shape[0], 10)
+        ax.set_xticks(x_axis_ticks)
+        ax.set_xticklabels([""] * len(x_axis_ticks))
+        ax.grid(linestyle="--", linewidth=0.5, color="white")
+
+        # Sagittal CT + Flux
+        ax = ax_dict["2"]
+        ax.imshow(np.rot90(x_np[0][:, :, bp_idx_gt[2]]), cmap="gray")
+        flux_sag = np.rot90(flux[:, :, bp_idx_gt[2]])
+        flux_alpha_sag = np.where(flux_sag > flux_alpha_threshold, 0.65, 0.0)
+        flux_im = ax.imshow(flux_sag, cmap="hot", alpha=flux_alpha_sag)
+        aligned_colorbar(fig, flux_im, ax, "Flux [a.u.]")
+        y_ticks = ax.get_yticks()
+        ax.set_yticklabels([""] * len(y_ticks))
+        x_axis_ticks = np.arange(0, x_np[0].shape[0], 10)
+        ax.set_xticks(x_axis_ticks)
+        ax.set_xticklabels([""] * len(x_axis_ticks))
+        ax.grid(linestyle="--", linewidth=0.5, color="white")
+        ax.tick_params(labelsize=14)
 
     # Axial - Prediction
     ax = ax_dict["C"]

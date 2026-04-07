@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import typer
+from scipy.stats import pearsonr
 from tqdm import tqdm
 
 # Add project root to path
@@ -31,6 +32,7 @@ from src.adota.models import DoTA3D_v3
 from src.adota.utils import count_parameters_per_block, count_total_parameters
 from src.figures.single_beam import publication_figure
 from src.loaders.dir_based import get_single_record, save_prediction
+from src.loaders.utils import validate_inputs
 from src.metrics.classic import (
     calculate_pure_mape,
     calculate_relative_dose_error,
@@ -331,7 +333,11 @@ def evaluate_samples(
         tqdm(sample_ids, desc="Evaluating samples") if show_progress else sample_ids
     )
 
-    for sample_id in iterator:
+    for i, sample_id in enumerate(iterator):
+        if i == 169:
+            logger.debug(f"Debug breakpoint: sample_id={sample_id}")
+            continue
+
         result = evaluate_single_sample(
             model=model,
             sample_id=sample_id,
@@ -384,6 +390,485 @@ def generate_gpr_plot(
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     logger.info(f"GPR plot saved to {output_path}")
+
+
+def density_variability_vs_gpr(
+    results: list,
+    output_dir: Path,
+    config: EvaluationConfig,
+    gamma_params: dict,
+) -> None:
+    """Study the correlation between CT density-profile variability and GPR.
+
+    Two variability metrics are computed for the average CT density profile
+    (mean HU per depth slice) of every sample:
+
+    1. **Total Variation (TV)** – sum of absolute differences between
+       consecutive depth slices:
+       ``TV = Σ|ρ̄_{k+1} − ρ̄_k|``.
+       Captures the roughness / heterogeneity of the tissue composition
+       along the beam path.
+
+    2. **Coefficient of Variation (CV)** – ratio of the standard deviation
+       to the absolute mean of the density profile:
+       ``CV = σ(ρ̄) / |μ(ρ̄)|``.
+       Captures the overall relative spread of density values.
+
+    The function produces a single figure with two subplots:
+    (a) TV vs GPR and (b) CV vs GPR, each annotated with the Pearson
+    correlation coefficient.
+
+    Args:
+        results: List of EvaluationResult objects (with cached tensors).
+        output_dir: Directory where the figure will be stored.
+        config: EvaluationConfig (used for de-normalisation scale).
+        gamma_params: Gamma parameters (for axis labelling).
+    """
+    scale = config.scale
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    tv_values: list[float] = []
+    cv_values: list[float] = []
+    gpr_values: list[float] = []
+    sample_ids: list[str] = []
+
+    for result in results:
+        if result.input_data is None:
+            continue
+
+        ct_norm = result.input_data[0].numpy()  # (D, H, W)
+        ct_hu = inverse_minmax(ct_norm, scale["min_ct"], scale["max_ct"])
+        avg_density = ct_hu.mean(axis=(1, 2))  # (D,)
+
+        # Metric 1: Total Variation
+        tv = float(np.sum(np.abs(np.diff(avg_density))))
+
+        # Metric 2: Coefficient of Variation
+        mu = np.mean(avg_density)
+        sigma = np.std(avg_density)
+        cv = float(sigma / np.abs(mu)) if np.abs(mu) > 1e-9 else 0.0
+
+        tv_values.append(tv)
+        cv_values.append(cv)
+        gpr_values.append(result.gpr)
+        sample_ids.append(result.sample_id)
+
+    if len(tv_values) < 3:
+        logger.info("Skipping density-variability study – fewer than 3 samples")
+        return
+
+    tv_arr = np.array(tv_values)
+    cv_arr = np.array(cv_values)
+    gpr_arr = np.array(gpr_values)
+
+    # Pearson correlations
+    r_tv, p_tv = pearsonr(tv_arr, gpr_arr)
+    r_cv, p_cv = pearsonr(cv_arr, gpr_arr)
+
+    logger.info(
+        f"Density variability vs GPR – "
+        f"TV: r = {r_tv:.4f} (p = {p_tv:.4e}), "
+        f"CV: r = {r_cv:.4f} (p = {p_cv:.4e})"
+    )
+
+    gpr_label = (
+        f"GPR ({gamma_params['dose_percent_threshold']}%, "
+        f"{gamma_params['distance_mm_threshold']}mm, "
+        f"{gamma_params['lower_percent_dose_cutoff']}%) [%]"
+    )
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5), dpi=300)
+
+    # (a) TV vs GPR
+    ax = axes[0]
+    ax.scatter(tv_arr, gpr_arr, s=20, alpha=0.7, edgecolors="k", linewidths=0.3)
+    # linear fit
+    z = np.polyfit(tv_arr, gpr_arr, 1)
+    x_fit = np.linspace(tv_arr.min(), tv_arr.max(), 100)
+    ax.plot(
+        x_fit,
+        np.polyval(z, x_fit),
+        "r--",
+        linewidth=1.0,
+        label=f"fit (r = {r_tv:.3f}, p = {p_tv:.2e})",
+    )
+    ax.set_xlabel("Total Variation of density profile [HU]")
+    ax.set_ylabel(gpr_label)
+    ax.set_title("(a) Total Variation vs GPR")
+    ax.legend(fontsize=9)
+    ax.grid(linestyle="--", linewidth=0.5)
+
+    # (b) CV vs GPR
+    ax = axes[1]
+    ax.scatter(cv_arr, gpr_arr, s=20, alpha=0.7, edgecolors="k", linewidths=0.3)
+    z = np.polyfit(cv_arr, gpr_arr, 1)
+    x_fit = np.linspace(cv_arr.min(), cv_arr.max(), 100)
+    ax.plot(
+        x_fit,
+        np.polyval(z, x_fit),
+        "r--",
+        linewidth=1.0,
+        label=f"fit (r = {r_cv:.3f}, p = {p_cv:.2e})",
+    )
+    ax.set_xlabel("Coefficient of Variation of density profile")
+    ax.set_ylabel(gpr_label)
+    ax.set_title("(b) Coefficient of Variation vs GPR")
+    ax.legend(fontsize=9)
+    ax.grid(linestyle="--", linewidth=0.5)
+
+    fig.tight_layout()
+    fig.savefig(
+        output_dir / "density_variability_vs_gpr.png",
+        dpi=300,
+        bbox_inches="tight",
+    )
+    plt.close(fig)
+    logger.info(
+        f"Density variability vs GPR figure saved to "
+        f"{output_dir / 'density_variability_vs_gpr.png'}"
+    )
+
+
+def advanced_metrics_and_figures(
+    results: list,
+    output_dir: Path,
+    config: EvaluationConfig,
+) -> dict:
+    """Calculate IDD-based advanced metrics and generate depth-profile figures.
+
+    For every sample the function computes:
+    - Integrated Depth Dose (IDD) for ground truth and prediction,
+    - Average CT density per depth slice,
+    - Slice-wise IDD difference (predicted − ground truth),
+    - Pearson correlation between the average CT density profile
+      and the IDD difference profile.
+
+    A per-sample figure and an aggregate summary figure are saved
+    to ``output_dir``.
+
+    Args:
+        results: List of EvaluationResult objects (with cached tensors).
+        output_dir: Directory where figures will be stored.
+        config: EvaluationConfig (used for de-normalisation scale).
+
+    Returns:
+        Dictionary mapping sample_id → Pearson-r value.
+    """
+    scale = config.scale
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    correlations: dict[str, float] = {}
+
+    # Per-sample aggregates for the summary figure
+    summary_gpr: list[float] = []
+    summary_r: list[float] = []
+    summary_tv: list[float] = []
+    summary_bp_grad: list[float] = []  # density gradient near BP
+    summary_bp_idd_rel_err: list[float] = []  # mean |rel IDD error| near BP
+
+    BP_HALF_WINDOW = 5  # slices each side of Bragg peak
+
+    for result in results:
+        if (
+            result.input_data is None
+            or result.ground_truth is None
+            or result.prediction is None
+        ):
+            logger.warning(
+                f"Skipping {result.sample_id} – cached tensors not available"
+            )
+            continue
+
+        # --- de-normalise to physical units ---------------------------------
+        ct_norm = result.input_data[0].numpy()  # (D, H, W), normalised
+        ct_hu = inverse_minmax(ct_norm, scale["min_ct"], scale["max_ct"])  # HU values
+
+        gt = inverse_minmax(
+            result.ground_truth.numpy(),
+            scale["min_ds"],
+            scale["max_ds"],
+        )  # dose grid – keep original shape
+        pred = inverse_minmax(
+            result.prediction.numpy(),
+            scale["min_ds"],
+            scale["max_ds"],
+        )  # prediction – keep original shape
+
+        # Squeeze to 3-D (D, H, W) regardless of leading singleton dims
+        gt = gt.squeeze()
+        pred = pred.squeeze()
+
+        typer.echo(f"Calculating advanced metrics for sample {result.sample_id}...")
+        typer.echo(
+            "Shapes: CT: {}, GT dose: {}, Pred dose: {}".format(
+                ct_hu.shape, gt.shape, pred.shape
+            )
+        )
+        # --- IDD: sum over lateral dimensions per depth slice ---------------
+        idd_gt = gt.sum(axis=(1, 2))  # (D,)
+        idd_pred = pred.sum(axis=(1, 2))  # (D,)
+
+        # --- average CT density per depth slice -----------------------------
+        avg_density = ct_hu.mean(axis=(1, 2))  # (D,)
+
+        # --- IDD difference (pred − gt) -------------------------------------
+        idd_diff = idd_pred - idd_gt  # (D,)
+
+        # --- Pearson correlation: avg density  vs  IDD difference -----------
+        if np.std(avg_density) > 0 and np.std(idd_diff) > 0:
+            r, p = pearsonr(avg_density, idd_diff)
+        else:
+            r, p = 0.0, 1.0
+
+        correlations[result.sample_id] = r
+        logger.info(
+            f"Sample {result.sample_id}: "
+            f"Pearson r(avg_density, IDD_diff) = {r:.4f} (p = {p:.4e})"
+        )
+
+        # --- normalise for plotting -----------------------------------------
+        idd_gt_max = np.max(np.abs(idd_gt)) if np.max(np.abs(idd_gt)) > 0 else 1.0
+        idd_gt_norm = idd_gt / idd_gt_max
+        idd_pred_norm = idd_pred / idd_gt_max  # same reference for comparability
+
+        density_max = (
+            np.max(np.abs(avg_density)) if np.max(np.abs(avg_density)) > 0 else 1.0
+        )
+        density_norm = avg_density / density_max
+
+        bp_idx = int(np.argmax(idd_gt))
+
+        # --- per-sample metrics for summary figure --------------------------
+        n_slices = len(avg_density)
+        lo = max(0, bp_idx - BP_HALF_WINDOW)
+        hi = min(n_slices, bp_idx + BP_HALF_WINDOW + 1)
+
+        # Total Variation of full density profile
+        tv = float(np.sum(np.abs(np.diff(avg_density))))
+
+        # Density gradient magnitude in BP neighbourhood
+        bp_density = avg_density[lo:hi]
+        bp_grad = (
+            float(np.sum(np.abs(np.diff(bp_density)))) if len(bp_density) > 1 else 0.0
+        )
+
+        # Mean |relative IDD error| in BP neighbourhood
+        idd_gt_bp = idd_gt[lo:hi]
+        idd_diff_bp = idd_diff[lo:hi]
+        # avoid division by zero: only where GT IDD is appreciable
+        bp_mask = np.abs(idd_gt_bp) > 1e-6 * np.max(np.abs(idd_gt))
+        if np.any(bp_mask):
+            bp_idd_rel_err = float(
+                np.mean(np.abs(idd_diff_bp[bp_mask] / idd_gt_bp[bp_mask]))
+            )
+        else:
+            bp_idd_rel_err = 0.0
+
+        summary_gpr.append(result.gpr)
+        summary_r.append(r)
+        summary_tv.append(tv)
+        summary_bp_grad.append(bp_grad)
+        summary_bp_idd_rel_err.append(bp_idd_rel_err)
+
+        # --- per-sample figure ----------------------------------------------
+        fig, axes = plt.subplots(2, 1, figsize=(10, 8), dpi=300, sharex=True)
+
+        # top: depth profiles
+        ax = axes[0]
+        ax.plot(density_norm, label="CT (GT), normalized", color="tab:blue")
+        ax.plot(idd_gt_norm, label="Dose (GT), normalized", color="tab:orange")
+        ax.plot(idd_pred_norm, label="Dose (Pred), normalized", color="tab:green")
+        ax.axvline(
+            x=bp_idx,
+            color="red",
+            linestyle="--",
+            label=f"BP (slice {bp_idx})",
+        )
+        ax.set_ylabel("Normalized value")
+        ax.set_title(
+            f"Depth profiles – {result.sample_id}\n"
+            f"E = {result.energy_mev:.1f} MeV, "
+            f"GPR = {result.gpr:.1f}%"
+        )
+        ax.legend(fontsize=9)
+        ax.grid(linestyle="--", linewidth=0.5)
+
+        # bottom: IDD difference vs average density
+        ax = axes[1]
+        ax.plot(
+            idd_diff / idd_gt_max,
+            label="IDD diff (Pred − GT), normalized",
+            color="tab:red",
+        )
+        ax.plot(
+            density_norm,
+            label="Avg CT density, normalized",
+            color="tab:blue",
+            alpha=0.6,
+        )
+        ax.set_xlabel("Depth [voxels]")
+        ax.set_ylabel("Normalized value")
+        ax.set_title(f"Pearson r = {r:.4f}")
+        ax.legend(fontsize=9)
+        ax.grid(linestyle="--", linewidth=0.5)
+
+        fig.tight_layout()
+        fig.savefig(
+            output_dir / f"depth_profile_{result.sample_id}.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+        plt.close(fig)
+
+    # --- aggregate summary figure (2×2) ------------------------------------
+    if len(summary_gpr) >= 3:
+        gpr_arr = np.array(summary_gpr)
+        r_arr = np.array(summary_r)
+        tv_arr = np.array(summary_tv)
+        bp_grad_arr = np.array(summary_bp_grad)
+        bp_rel_err_arr = np.array(summary_bp_idd_rel_err)
+
+        fig, axes = plt.subplots(2, 2, figsize=(14, 11), dpi=300)
+        fig.suptitle(
+            f"Tissue heterogeneity vs model performance  "
+            f"(N = {len(gpr_arr)},  "
+            f"γ: {config.gamma_params['dose_percent_threshold']}%/"
+            f"{config.gamma_params['distance_mm_threshold']}mm)",
+            fontsize=13,
+            fontweight="bold",
+            y=0.98,
+        )
+
+        gpr_label = (
+            f"GPR ({config.gamma_params['dose_percent_threshold']}%, "
+            f"{config.gamma_params['distance_mm_threshold']}mm, "
+            f"{config.gamma_params['lower_percent_dose_cutoff']}%) [%]"
+        )
+
+        # ---- (a) Histogram of Pearson r(density, IDD error) ----------------
+        ax = axes[0, 0]
+        ax.hist(
+            r_arr, bins=30, color="steelblue", edgecolor="k", linewidth=0.4, alpha=0.85
+        )
+        ax.axvline(x=0, color="k", linewidth=0.8, linestyle="-")
+        ax.axvline(
+            x=np.mean(r_arr),
+            color="red",
+            linewidth=1.2,
+            linestyle="--",
+            label=f"mean = {np.mean(r_arr):.3f}",
+        )
+        ax.axvline(
+            x=np.median(r_arr),
+            color="orange",
+            linewidth=1.2,
+            linestyle="-.",
+            label=f"median = {np.median(r_arr):.3f}",
+        )
+        ax.set_xlabel("Pearson r  (avg CT density vs IDD error)")
+        ax.set_ylabel("Count")
+        ax.set_title("(a) Distribution of density–error correlation")
+        ax.legend(fontsize=9)
+        ax.grid(axis="y", linestyle="--", linewidth=0.5)
+
+        # ---- (b) GPR vs Total Variation of density profile -----------------
+        ax = axes[0, 1]
+        r_tv, p_tv = pearsonr(tv_arr, gpr_arr)
+        ax.scatter(tv_arr, gpr_arr, s=18, alpha=0.6, edgecolors="k", linewidths=0.3)
+        z = np.polyfit(tv_arr, gpr_arr, 1)
+        x_fit = np.linspace(tv_arr.min(), tv_arr.max(), 100)
+        ax.plot(
+            x_fit,
+            np.polyval(z, x_fit),
+            "r--",
+            linewidth=1.0,
+            label=f"fit  (r = {r_tv:.3f}, p = {p_tv:.2e})",
+        )
+        ax.set_xlabel("Total Variation of density profile [HU]")
+        ax.set_ylabel(gpr_label)
+        ax.set_title("(b) Full-path heterogeneity vs GPR")
+        ax.legend(fontsize=9)
+        ax.grid(linestyle="--", linewidth=0.5)
+
+        # ---- (c) GPR vs local density gradient at Bragg peak ---------------
+        ax = axes[1, 0]
+        r_bg, p_bg = pearsonr(bp_grad_arr, gpr_arr)
+        ax.scatter(
+            bp_grad_arr, gpr_arr, s=18, alpha=0.6, edgecolors="k", linewidths=0.3
+        )
+        z = np.polyfit(bp_grad_arr, gpr_arr, 1)
+        x_fit = np.linspace(bp_grad_arr.min(), bp_grad_arr.max(), 100)
+        ax.plot(
+            x_fit,
+            np.polyval(z, x_fit),
+            "r--",
+            linewidth=1.0,
+            label=f"fit  (r = {r_bg:.3f}, p = {p_bg:.2e})",
+        )
+        ax.set_xlabel(
+            f"Density gradient near Bragg peak "
+            f"(TV in ±{BP_HALF_WINDOW} slices) [HU]"
+        )
+        ax.set_ylabel(gpr_label)
+        ax.set_title("(c) Bragg-peak-local heterogeneity vs GPR")
+        ax.legend(fontsize=9)
+        ax.grid(linestyle="--", linewidth=0.5)
+
+        # ---- (d) GPR vs mean |rel IDD error| near BP, coloured by grad ----
+        ax = axes[1, 1]
+        r_be, p_be = pearsonr(bp_rel_err_arr, gpr_arr)
+        sc = ax.scatter(
+            bp_rel_err_arr * 100,
+            gpr_arr,
+            c=bp_grad_arr,
+            cmap="plasma",
+            s=20,
+            alpha=0.7,
+            edgecolors="k",
+            linewidths=0.3,
+        )
+        z = np.polyfit(bp_rel_err_arr * 100, gpr_arr, 1)
+        x_fit = np.linspace(bp_rel_err_arr.min() * 100, bp_rel_err_arr.max() * 100, 100)
+        ax.plot(
+            x_fit,
+            np.polyval(z, x_fit),
+            "r--",
+            linewidth=1.0,
+            label=f"fit  (r = {r_be:.3f}, p = {p_be:.2e})",
+        )
+        cbar = fig.colorbar(sc, ax=ax, pad=0.02)
+        cbar.set_label(
+            f"BP-local density gradient [HU]",
+            fontsize=9,
+        )
+        ax.set_xlabel(
+            f"Mean |relative IDD error| near BP " f"(±{BP_HALF_WINDOW} slices) [%]"
+        )
+        ax.set_ylabel(gpr_label)
+        ax.set_title("(d) Bragg-peak IDD accuracy vs GPR")
+        ax.legend(fontsize=9)
+        ax.grid(linestyle="--", linewidth=0.5)
+
+        fig.tight_layout(rect=[0, 0, 1, 0.96])
+        fig.savefig(
+            output_dir / "density_heterogeneity_vs_performance_summary.png",
+            dpi=300,
+            bbox_inches="tight",
+        )
+        plt.close(fig)
+
+        logger.info(
+            f"Summary figure saved. "
+            f"Pearson r(density, IDD_err): mean={np.mean(r_arr):.4f}, "
+            f"median={np.median(r_arr):.4f}. "
+            f"TV vs GPR: r={r_tv:.4f}. "
+            f"BP-grad vs GPR: r={r_bg:.4f}. "
+            f"BP-IDD-err vs GPR: r={r_be:.4f}."
+        )
+    else:
+        logger.info("Skipping summary figure – fewer than 3 samples with data")
+
+    return correlations
 
 
 def generate_publication_figures(
@@ -538,25 +1023,6 @@ def print_summary(results: list, total_time: float) -> None:
         f"Beamlet angles: ({best.beamlet_angles[0]:.2f}, {best.beamlet_angles[1]:.2f}) degrees, "
         f"GPR: {best.gpr:.2f}%"
     )
-
-
-def validate_inputs(test_data: Path, model_path: Path, hyperparams_path: Path) -> None:
-    """Validate that required input files exist.
-
-    Args:
-        test_data: Path to test data directory.
-        model_path: Path to model weights.
-        hyperparams_path: Path to hyperparameters file.
-
-    Raises:
-        typer.BadParameter: If any required file is missing.
-    """
-    if not test_data.exists():
-        raise typer.BadParameter(f"Test data directory not found: {test_data}")
-    if not model_path.exists():
-        raise typer.BadParameter(f"Model file not found: {model_path}")
-    if not hyperparams_path.exists():
-        raise typer.BadParameter(f"Hyperparams file not found: {hyperparams_path}")
 
 
 def load_yaml_config(config_path: Path) -> dict:
@@ -790,6 +1256,19 @@ def main(
         output_dir=figures_dir,
         config=config,
         device=device,
+    )
+
+    advanced_metrics_and_figures(
+        results=results,
+        output_dir=figures_dir / "depth_profiles",
+        config=config,
+    )
+
+    density_variability_vs_gpr(
+        results=results,
+        output_dir=figures_dir,
+        config=config,
+        gamma_params=config.gamma_params,
     )
 
     logger.info("")

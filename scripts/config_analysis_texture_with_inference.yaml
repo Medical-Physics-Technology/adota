@@ -1,0 +1,105 @@
+# CT Texture + Model Inference Analysis Configuration
+# =====================================================
+# This YAML file configures the analysis_texture_with_inference.py script.
+# It combines DoTA model evaluation with CT heterogeneity / texture metrics
+# and computes Pearson correlations between model performance and CT complexity.
+#
+# Usage:
+#   uv run python scripts/analysis_texture_with_inference.py --config scripts/config_analysis_texture_with_inference.yaml
+#
+# A copy of this file is saved in the run directory for reproducibility.
+
+# --- Model Settings ---
+
+# Name of the model directory (located in models/)
+model_name: DoTA_v3_grid_search_v11
+
+# Path to the directory with input data to evaluate
+test_data: /scratch/mstryja/DoTA_dataset_v2/testset_multiple_energies_same_image_full
+
+# Downsampling method: 'interpolation' or 'avg_pooling'
+downsampling_method: interpolation
+
+# Model filename within the model directory
+model_fname: best_model.pth
+
+# CUDA device index (-1 for CPU)
+device_index: 1
+
+# --- Gamma Parameters ---
+gamma:
+  dose_percent_threshold: 3.0
+  distance_mm_threshold: 3.0
+  interp_fraction: 10
+  max_gamma: 2
+  lower_percent_dose_cutoff: 10
+  random_subset: null
+  local_gamma: false
+  quiet: true
+
+# --- Scaling Parameters ---
+# Used for normalizing / denormalizing model inputs and outputs.
+scale:
+  min_ds: 0.0
+  max_ds: 25277028.0
+  min_ct: -1024
+  max_ct: 3071
+  min_energy: 70.0
+  max_energy: 270.0
+
+# --- Heterogeneity Metrics ---
+# Parameters for beam-aligned CT heterogeneity analysis.
+heterogeneity:
+  # Voxel spacing (z, y, x) in mm for the *original* CT grid.
+  # This is used to compute the spacing-aware gradient magnitude.
+  spacing_zyx: [2.0, 2.0, 2.0]
+
+  # Which array axis is the beam (depth) direction. 0 = D in (D, H, W).
+  beam_axis: 0
+
+  # Optional HU threshold mask: voxels with HU > mask_threshold are included.
+  # Set to null to disable masking.
+  mask_threshold: -900
+
+# --- GLCM Homogeneity Settings ---
+glcm:
+  levels: 64
+  variant: idm
+  distances: [1]
+  angles_deg: [0, 45, 90, 135]
+  symmetric: true
+  value_range: null
+  n_sample_slices: 10
+
+# --- Global Intensity Heterogeneity Settings ---
+# Parameters for global (non-spatial) intensity distribution metrics.
+intensity:
+  # Fixed HU range for histogram binning.  Using a fixed range is
+  # recommended for cross-case comparability.  Set to null to use the
+  # robust 1st–99th percentile range of each volume.
+  hu_range: null
+
+  # Histogram bin width in HU.  Fixed width is preferred over a fixed
+  # number of bins for consistent entropy / uniformity comparisons.
+  bin_width_hu: 25.0
+
+# --- Metrics Toggle ---
+# Enable or disable individual metric families.
+# Each flag defaults to true when omitted.  CLI flags
+# (--enable-heterogeneity / --enable-glcm / --enable-intensity)
+# take precedence over these values.
+metrics:
+  heterogeneity: true
+  glcm: true
+  intensity: true
+
+# --- Output Settings ---
+
+# Base directory where timestamped run results are stored.
+runs_dir: runs
+
+# Disable progress bar
+no_progress: false
+
+# Enable debug-level logging (true / false)
+verbose: false

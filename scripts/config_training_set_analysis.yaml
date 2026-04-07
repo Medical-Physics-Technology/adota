@@ -1,0 +1,49 @@
+# ============================================================
+# Training Set Analysis – Tissue-Interface Beamlet Prevalence
+# (training_set_analysis.py)
+# ============================================================
+#
+# Usage:
+#   uv run python scripts/training_set_analysis.py --config scripts/config_training_set_analysis.yaml
+#
+# CLI arguments take precedence over values defined here.
+# A copy of this file is automatically saved to the run
+# directory for reproducibility.
+# ============================================================
+
+# ── Required ────────────────────────────────────────────────
+model_name: DoTA_v3_grid_search_v11
+h5_path: /scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5
+
+# ── Optional ────────────────────────────────────────────────
+model_fname: best_model.pth
+excluded_indexes_file: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
+device_index: 1
+
+# ── Analysis parameters ────────────────────────────────────
+# σ_HU threshold [HU] to classify "interface" vs "homogeneous"
+sigma_hu_threshold: 200.0
+# Radius of the spherical neighbourhood around the Bragg peak [mm].
+# This sphere is used to compute three heterogeneity metrics:
+#   • σ_HU – standard deviation of HU (classification criterion)
+#   • TV   – Total Variation of HU: Σ|v_{i+1} − v_i|
+#   • CV   – Coefficient of Variation: σ(v) / |μ(v)|
+bp_radius_mm: 5.0
+# Maximum initial energy [MeV] – beamlets above this are skipped
+max_energy_mev: 250.0
+
+# ── Sampling ────────────────────────────────────────────────
+# Limit evaluation to the first N samples (omit or ~ for all)
+n_samples: ~
+
+# ── Publication figures ─────────────────────────────────────
+# Generate figures for the N worst samples per group (by RDE).
+# When set, best and closest-to-mean figures are NOT generated.
+# Omit or set to ~ for the default best/worst/mean mode.
+n_worst_figures: 10
+
+# ── Flags ───────────────────────────────────────────────────
+no_progress: false
+verbose: false
+# Skip gamma pass rate calculation for faster experiments
+no_gpr: false
