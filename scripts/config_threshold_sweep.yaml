@@ -1,0 +1,48 @@
+# ============================================================
+# Threshold Sensitivity Sweep – σ_HU Threshold vs GPR Gap
+# (threshold_sweep.py)
+# ============================================================
+#
+# Usage:
+#   uv run python scripts/threshold_sweep.py --config scripts/config_threshold_sweep.yaml
+#
+# CLI arguments take precedence over values defined here.
+# A copy of this file is automatically saved to the run
+# directory for reproducibility.
+# ============================================================
+
+# ── Input ───────────────────────────────────────────────────
+# Path to a results.csv produced by training_set_analysis.py.
+# When provided, the sweep re-classifies each beamlet at every
+# threshold value without re-running inference (fast, <1 min).
+results_csv: /home/mstryja/projects/adota/runs/20260401_234204/results.csv
+
+# ── Alternatively, run inference from scratch ───────────────
+# If results_csv is omitted or set to ~, the script will load
+# the model and dataset and compute metrics on the fly.
+# model_name: DoTA_v3_grid_search_v11
+# h5_path: /scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5
+# model_fname: best_model.pth
+# excluded_indexes_file: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
+# device_index: 1
+# max_energy_mev: 250.0
+# n_samples: ~
+
+# ── Sweep parameters ───────────────────────────────────────
+# Sweep τ over [tau_min, tau_max] in steps of tau_step [HU].
+tau_min: 50.0
+tau_max: 400.0
+tau_step: 10.0
+
+# ── Sphere radius for labelling (only used when computing
+#    from scratch; ignored when reading from CSV since σ_HU
+#    is already computed) ────────────────────────────────────
+bp_radius_mm: 10.0
+
+# ── Additional metrics to plot alongside GPR gap ───────────
+# When true, the script also produces RDE-gap, MAPE-gap, and
+# RMSE-gap curves.
+plot_all_metrics: true
+
+# ── Flags ───────────────────────────────────────────────────
+verbose: false
