@@ -15,7 +15,7 @@
 # Path to a results.csv produced by training_set_analysis.py.
 # When provided, the sweep re-classifies each beamlet at every
 # threshold value without re-running inference (fast, <1 min).
-results_csv: /home/mstryja/projects/adota/runs/20260401_234204/results.csv
+results_csv: /home/mstryja/projects/adota/runs/20260407_120930/results.csv
 
 # ── Alternatively, run inference from scratch ───────────────
 # If results_csv is omitted or set to ~, the script will load

@@ -1,6 +1,6 @@
 % ═══════════════════════════════════════════════════════════════
 %  Weekly Meeting — 10 April 2026
-%  Tissue-Interface Beamlet Analysis for ADoTA
+%  Tissue Interface Beamlet Analysis for ADoTA
 %  Author: Mikołaj Stryja
 % ═══════════════════════════════════════════════════════════════
 \documentclass[aspectratio=169, 10pt]{beamer}
@@ -39,8 +39,8 @@
 \graphicspath{{figures/}}
 
 % ── Meta ────────────────────────────────────────────────────
-\title[ADoTA Tissue-Interface Analysis]{Tissue-Interface Beamlet Analysis\\[4pt]
-{\small Effect of Bragg-Peak Neighbourhood Heterogeneity\\on ADoTA Dose-Prediction Accuracy}}
+\title[ADoTA Tissue Interface Analysis]{Tissue Interface Beamlet Analysis\\[4pt]
+{\small Effect of Bragg Peak Neighbourhood Heterogeneity\\on ADoTA Dose Calculation Accuracy}}
 \author[M.~Stryja]{Mikołaj Stryja}
 \institute{Department of Radiation Science \& Technology}
 \date{10 April 2026}
@@ -64,8 +64,8 @@
 
 \begin{frame}{Motivation}
   \begin{itemize}
-    \item ADoTA (DoTA3D\_v3) predicts single-beamlet proton dose distributions
-          from CT\,+\,beam flux input using a 3-D U-Net architecture.
+    \item ADoTA predicts single beamlet proton dose distributions
+          from CT\,+\,fast beamlet shape projection $ + \epsilon$.
     \item Aggregate metrics (mean GPR $\approx$ \SI{98.8}{\percent}) suggest
           high overall accuracy, but \textbf{performance varies across the
           dataset}.
@@ -78,8 +78,8 @@
 
   \vspace{6pt}
   \begin{block}{Research question}
-    Does CT-density heterogeneity around the Bragg peak correlate with
-    degraded dose-prediction accuracy?
+    Does CT density heterogeneity around the Bragg peak correlate with
+    degraded dose prediction accuracy?
   \end{block}
 \end{frame}
 
@@ -90,10 +90,10 @@
 \begin{frame}{Classification Pipeline}
   \begin{columns}[T]
     \begin{column}{0.55\textwidth}
-      \textbf{Per-beamlet analysis (6 steps):}
+      \textbf{Per beamlet analysis (6 steps):}
       \begin{enumerate}
-        \item \textbf{Bragg-peak localisation} — find the voxel of
-              maximum dose deposition in the MC ground truth.
+        \item \textbf{Bragg peak localisation} — two step estimate
+              from the MC dose grid (see next slide).
         \item \textbf{Spherical neighbourhood} — extract all CT voxels
               within a sphere of radius~$r$ centred at the Bragg peak.
         \item \textbf{Heterogeneity metrics} — compute $\sigma_{\text{HU}}$,
@@ -130,6 +130,37 @@
       \end{center}
     \end{column}
   \end{columns}
+\end{frame}
+
+% ── Bragg peak localisation detail ──────────────────────────
+\begin{frame}{Bragg Peak Localisation}
+  Let $D \in \mathbb{R}^{N_z \times N_y \times N_x}$ be the MC ground truth
+  dose grid for a single beamlet.
+
+  \vspace{4pt}
+  \textbf{Step 1 — Depth of maximum integrated dose:}
+  \vspace{-2pt}
+  \begin{equation*}
+    z^{*} \;=\; \underset{z}{\arg\max} \;\sum_{y=1}^{N_y}\sum_{x=1}^{N_x} D_{z,y,x}
+  \end{equation*}
+  \vspace{-6pt}
+
+  \vspace{4pt}
+  \textbf{Step 2 — Lateral position within the Bragg peak slice:}
+  \vspace{-2pt}
+  \begin{equation*}
+    (y^{*},\, x^{*}) \;=\; \underset{(y,\,x)}{\arg\max}\; D_{z^{*},y,x}
+  \end{equation*}
+  \vspace{-6pt}
+  {\small At depth $z^{*}$, locate the single voxel with the highest dose
+   to pinpoint the lateral beam centre.}
+
+  \vspace{4pt}
+  \begin{block}{Result}
+    The estimated Bragg peak voxel is
+    $\mathbf{p}_{\text{BP}} = (z^{*},\, y^{*},\, x^{*})$.
+    The spherical CT neighbourhood of radius~$r$ is centred on this voxel.
+  \end{block}
 \end{frame}
 
 \begin{frame}{Heterogeneity Metrics}
@@ -170,7 +201,7 @@
 \end{frame}
 
 \begin{frame}{Performance Metrics}
-  Four dose-prediction quality metrics are evaluated per beamlet:
+  Four dose prediction quality metrics are evaluated per beamlet:
 
   \vspace{6pt}
   \begin{columns}[T]
@@ -179,29 +210,29 @@
       \begin{itemize}
         \item $\gamma(2\%/\SI{2}{mm})$, lower dose cutoff \SI{10}{\percent}
         \item Global gamma; values in \SI{}{\percent}
-        \item Industry-standard composite metric
+        \item Industry standard composite metric
       \end{itemize}
 
       \vspace{8pt}
       \textbf{Relative Dose Error (RDE)}
       \begin{itemize}
-        \item $\displaystyle \text{RDE} = \frac{|D_{\max}^{\text{pred}} - D_{\max}^{\text{ref}}|}{D_{\max}^{\text{ref}}} \times 100\%$
-        \item Clinically relevant: captures peak-dose mismatch
+        \item $\displaystyle \text{RDE} = \frac{1}{N}\,\frac{\sum_{i=1}^{N}\lvert d_i^{\text{pred}} - d_i^{\text{ref}}\rvert}{\max(\mathbf{d}^{\text{ref}})} \times 100\%$
+        \item Mean absolute voxelwise error normalised by the maximum reference dose
       \end{itemize}
     \end{column}
 
     \begin{column}{0.48\textwidth}
       \textbf{Root Mean Square Error (RMSE)}
       \begin{itemize}
-        \item Computed over the full 3-D dose grid in Gy
-        \item Absolute measure of voxel-wise deviation
+        \item Computed over the full 3D dose grid in Gy
+        \item Absolute measure of voxelwise deviation
       \end{itemize}
 
       \vspace{8pt}
       \textbf{Mean Absolute Percentage Error (MAPE)}
       \begin{itemize}
         \item Applied to voxels with dose $> 10\%$ of the maximum
-        \item Relative accuracy in the high-dose region
+        \item Relative accuracy in the high dose region
       \end{itemize}
     \end{column}
   \end{columns}
@@ -216,8 +247,8 @@
     \begin{column}{0.48\textwidth}
       \textbf{Common parameters:}
       \begin{itemize}
-        \item \textbf{Model}: DoTA3D\_v3 (grid search v11)
-        \item \textbf{Dataset}: pelvis single-Gaussian,\\
+        \item \textbf{Model}: ADoTA3D\_v3 (grid search v11)
+        \item \textbf{Dataset}: pelvis single Gaussian,\\
               69\,295 beamlets after exclusions\\
               (\SI{70}{MeV}--\SI{250}{MeV})
         \item \textbf{Grid}: $160 \times 30 \times 30$ voxels\\
@@ -238,7 +269,6 @@
           & \textbf{Exp.~1} & \textbf{Exp.~2} \\
           \midrule
           Radius $r$    & \SI{10}{mm} & \SI{5}{mm}  \\
-          Run date      & 1 Apr       & 7 Apr       \\
           Runtime       & $\sim$23\,h & $\sim$23\,h \\
           \bottomrule
         \end{tabular}
@@ -290,18 +320,18 @@
 \begin{frame}{Performance: Interface vs.\ Homogeneous}
   \begin{table}
     \centering\small
-    \begin{tabular}{llcccc}
+    \begin{tabular}{llccc}
       \toprule
       \textbf{Exp.} & \textbf{Group} & \textbf{GPR [\%]} & \textbf{MAPE [\%]}
-        & \textbf{RDE [\%]} & \textbf{RMSE [Gy]} \\
+        & \textbf{RDE [\%]} \\
       \midrule
       \multirow{2}{*}{$r{=}\SI{10}{mm}$}
-        & Homogeneous & $99.11 \pm 1.23$ & $5.11 \pm 1.63$ & $0.146 \pm 0.081$ & $(8.9 \pm 3.8) \times 10^{-6}$ \\
-        & Interface   & $98.41 \pm 1.68$ & $6.12 \pm 2.09$ & $0.192 \pm 0.078$ & $(10.7 \pm 5.2) \times 10^{-6}$ \\
+        & Homogeneous & $99.11 \pm 1.23$ & $5.11 \pm 1.63$ & $0.146 \pm 0.081$  \\
+        & Interface   & $98.41 \pm 1.68$ & $6.12 \pm 2.09$ & $0.192 \pm 0.078$  \\
       \midrule
       \multirow{2}{*}{$r{=}\SI{5}{mm}$}
-        & Homogeneous & $98.99 \pm 1.30$ & $5.28 \pm 1.71$ & $0.154 \pm 0.082$ & $(9.1 \pm 3.9) \times 10^{-6}$ \\
-        & Interface   & $98.33 \pm 1.82$ & $6.22 \pm 2.22$ & $0.196 \pm 0.079$ & $(11.0 \pm 5.6) \times 10^{-6}$ \\
+        & Homogeneous & $98.99 \pm 1.30$ & $5.28 \pm 1.71$ & $0.154 \pm 0.082$ \\
+        & Interface   & $98.33 \pm 1.82$ & $6.22 \pm 2.22$ & $0.196 \pm 0.079$  \\
       \bottomrule
     \end{tabular}
   \end{table}
@@ -332,7 +362,7 @@
 \end{frame}
 
 % ── Violin plots ────────────────────────────────────────────
-\begin{frame}{Metric Distributions — $r = \SI{10}{mm}$}
+\begin{frame}{Metric Distributions: $r = \SI{10}{mm}$}
   \begin{center}
     \includegraphics[width=0.92\textwidth]{run1_r10mm/interface_vs_homogeneous_violin.png}
   \end{center}
@@ -342,7 +372,7 @@
    towards worse performance.}
 \end{frame}
 
-\begin{frame}{Metric Distributions — $r = \SI{5}{mm}$}
+\begin{frame}{Metric Distributions: $r = \SI{5}{mm}$}
   \begin{center}
     \includegraphics[width=0.92\textwidth]{run2_r5mm/interface_vs_homogeneous_violin.png}
   \end{center}
@@ -442,7 +472,7 @@
 % ════════════════════════════════════════════════════════════
 
 % ── Problem statement ───────────────────────────────────────
-\begin{frame}{Threshold Sweep — Problem Statement}
+\begin{frame}{Threshold Sweep: Problem Statement}
   \textbf{Motivation:} the previous experiments used a fixed threshold
   $\tau = \SI{200}{HU}$.  A natural question arises:
 
@@ -467,14 +497,15 @@
 
   \vspace{6pt}
   \textbf{Experiment:} sweep $\tau$ over $[\SI{50}{HU},\;\SI{400}{HU}]$
-  in steps of \SI{10}{HU} (36~values) using the $r = \SI{10}{mm}$ data
-  (69\,295~beamlets, pre-computed).
+  in steps of \SI{10}{HU} (36~values) using the precomputed data from
+  \textbf{both} $r = \SI{10}{mm}$ and $r = \SI{5}{mm}$
+  (69\,295~beamlets each).
 \end{frame}
 
 % ── Mathematical formulation ────────────────────────────────
 \begin{frame}{Threshold Sweep — Formulation}
   Given the full set of beamlets $\mathcal{B} = \{b_1, \ldots, b_N\}$, each
-  with a pre-computed $\sigma_{\text{HU}}^{(i)}$ and GPR${}^{(i)}$:
+  with a precomputed $\sigma_{\text{HU}}^{(i)}$ and GPR${}^{(i)}$:
 
   \vspace{6pt}
   For each threshold $\tau \in \{50, 60, \ldots, 400\}$\;HU, define:
@@ -501,10 +532,6 @@
   convention: $\Delta = \text{intf} - \text{homo}$, so a positive value
   means interface is worse).
 
-  \vspace{6pt}
-  {\small \textbf{Note}: no model re-inference is needed — the sweep
-   re-classifies the same 69\,295 pre-computed beamlets at each $\tau$,
-   completing in $< 4$\;seconds.}
 \end{frame}
 
 % ── How to read the plots ───────────────────────────────────
@@ -533,7 +560,7 @@
     \end{itemize}
 
     \vspace{4pt}
-    \item \textbf{All-Metric Gaps} (2$\times$2 panel):
+    \item \textbf{All Metric Gaps} (2$\times$2 panel):
     \begin{itemize}
       \item Extends the analysis to GPR, RDE, MAPE, and RMSE.
       \item Each panel has the same structure: metric gap on the left axis,
@@ -543,77 +570,108 @@
 \end{frame}
 
 % ── Result: GPR gap vs tau ──────────────────────────────────
-\begin{frame}[shrink=5]{GPR Gap vs.\ $\tau$ ($r = \SI{10}{mm}$)}
-  \begin{center}
-    \includegraphics[width=0.68\textwidth]{sweep/gpr_gap_vs_tau.png}
-  \end{center}
-  \vspace{-4pt}
-  {\small The GPR gap peaks at $\approx\SI{0.74}{pp}$ near
-   $\tau = \SI{70}{HU}$ and decreases gradually to
-   $\approx\SI{0.42}{pp}$ at $\tau = \SI{380}{HU}$.
-   Crucially, the gap \textbf{never drops to zero} — it remains
-   positive across the entire sweep range.}
+\begin{frame}[shrink=5]{GPR Gap vs.\ $\tau$}
+  \begin{columns}
+    \begin{column}{0.48\textwidth}
+      \centering
+      \textbf{$r = \SI{10}{mm}$}\\[4pt]
+      \includegraphics[width=\textwidth]{sweep_r10mm/gpr_gap_vs_tau.png}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \centering
+      \textbf{$r = \SI{5}{mm}$}\\[4pt]
+      \includegraphics[width=\textwidth]{sweep_r5mm/gpr_gap_vs_tau.png}
+    \end{column}
+  \end{columns}
+  \vspace{-2pt}
+  {\small The GPR gap is positive across the entire sweep range for both
+   radii.  At $r = \SI{10}{mm}$ it peaks at $\approx\SI{0.74}{pp}$
+   ($\tau = \SI{70}{HU}$); at $r = \SI{5}{mm}$ the gap is slightly
+   smaller ($\approx\SI{0.66}{pp}$ around $\tau = 180$--$\SI{220}{HU}$)
+   but equally persistent.}
 \end{frame}
 
 % ── Result: group means ─────────────────────────────────────
-\begin{frame}[shrink=5]{Group GPR vs.\ $\tau$ ($r = \SI{10}{mm}$)}
-  \begin{center}
-    \includegraphics[width=0.68\textwidth]{sweep/group_gpr_vs_tau.png}
-  \end{center}
-  \vspace{-4pt}
-  {\small Both curves decline slightly as $\tau$ increases (homogeneous
-   group absorbs borderline cases), but the interface curve always sits
-   \emph{below} the homogeneous curve.  The shaded gap is persistent.}
+\begin{frame}[shrink=5]{Group GPR vs.\ $\tau$}
+  \begin{columns}
+    \begin{column}{0.48\textwidth}
+      \centering
+      \textbf{$r = \SI{10}{mm}$}\\[4pt]
+      \includegraphics[width=\textwidth]{sweep_r10mm/group_gpr_vs_tau.png}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \centering
+      \textbf{$r = \SI{5}{mm}$}\\[4pt]
+      \includegraphics[width=\textwidth]{sweep_r5mm/group_gpr_vs_tau.png}
+    \end{column}
+  \end{columns}
+  \vspace{-2pt}
+  {\small In both experiments the interface curve always sits \emph{below}
+   the homogeneous curve.  The shaded gap is persistent regardless of
+   $\tau$ and neighbourhood radius.}
 \end{frame}
 
 % ── Result: all metrics ─────────────────────────────────────
-\begin{frame}[shrink=10]{All-Metric Gaps vs.\ $\tau$ ($r = \SI{10}{mm}$)}
-  \begin{center}
-    \includegraphics[width=0.62\textwidth]{sweep/all_metric_gaps_vs_tau.png}
-  \end{center}
-  \vspace{-4pt}
-  {\small All four metrics confirm the same pattern: the interface group
-   performs worse at \emph{every} threshold.  The RDE and MAPE gaps are
-   remarkably flat, while the GPR and RMSE gaps show a gentle decline
-   at extreme thresholds where the interface class becomes very small.}
+\begin{frame}[shrink=10]{All Metric Gaps vs.\ $\tau$}
+  \begin{columns}
+    \begin{column}{0.48\textwidth}
+      \centering
+      \textbf{$r = \SI{10}{mm}$}\\[4pt]
+      \includegraphics[width=\textwidth]{sweep_r10mm/all_metric_gaps_vs_tau.png}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \centering
+      \textbf{$r = \SI{5}{mm}$}\\[4pt]
+      \includegraphics[width=\textwidth]{sweep_r5mm/all_metric_gaps_vs_tau.png}
+    \end{column}
+  \end{columns}
+  \vspace{-2pt}
+  {\small All four metrics confirm the same pattern at both radii: the
+   interface group performs worse at \emph{every} threshold.  The RDE
+   and MAPE gaps are remarkably flat; the GPR and RMSE gaps show a
+   gentle decline at extreme thresholds where the interface class
+   becomes very small.}
 \end{frame}
 
 % ── Sweep discussion ────────────────────────────────────────
 \begin{frame}[shrink=5]{Threshold Sweep — Key Findings}
   \begin{columns}[T]
-    \begin{column}{0.48\textwidth}
-      \textbf{Quantitative highlights:}
+    \begin{column}{0.52\textwidth}
+      \textbf{GPR gap at selected thresholds:}
       \begin{table}
         \centering\small
-        \begin{tabular}{lcc}
+        \begin{tabular}{lcclcc}
           \toprule
-          $\tau$ [HU] & $\Delta_{\text{GPR}}$ [pp] & Intf.\ [\%] \\
+          & \multicolumn{2}{c}{$r = \SI{10}{mm}$}
+          & & \multicolumn{2}{c}{$r = \SI{5}{mm}$} \\
+          \cmidrule(lr){2-3}\cmidrule(lr){5-6}
+          $\tau$ [HU] & $\Delta$ [pp] & Intf.\ [\%]
+            & & $\Delta$ [pp] & Intf.\ [\%] \\
           \midrule
-           70 & 0.74 & 65.0 \\
-          100 & 0.72 & 57.8 \\
-          150 & 0.71 & 48.1 \\
-          200 & 0.70 & 40.0 \\
-          250 & 0.66 & 33.4 \\
-          300 & 0.59 & 27.0 \\
-          380 & 0.42 & 13.0 \\
+           70 & 0.74 & 65.0 & & 0.60 & 46.5 \\
+          100 & 0.72 & 57.8 & & 0.61 & 40.1 \\
+          150 & 0.71 & 48.1 & & 0.65 & 31.3 \\
+          200 & 0.70 & 40.0 & & 0.66 & 24.5 \\
+          250 & 0.66 & 33.4 & & 0.64 & 18.9 \\
+          300 & 0.59 & 27.0 & & 0.57 & 13.3 \\
+          380 & 0.42 & 13.0 & & 0.53 & 4.1 \\
           \bottomrule
         \end{tabular}
       \end{table}
     \end{column}
-    \begin{column}{0.48\textwidth}
+    \begin{column}{0.45\textwidth}
       \textbf{Interpretation:}
       \begin{itemize}\setlength{\itemsep}{3pt}
         \item The GPR gap is \textbf{not an artefact} of the threshold
-              choice — it persists from $\tau = 50$ to \SI{400}{HU}.
-        \item At low $\tau$, a large fraction is labelled
-              interface, diluting the group with near-threshold cases,
-              yet the gap remains $>$\SI{0.7}{pp}.
-        \item At high $\tau$, only the most heterogeneous beamlets
-              survive, but the interface group is too small for the gap
-              to grow further.
-        \item The \textbf{sweet spot} around $\tau \approx 70$–\SI{150}{HU}
-              maximises the gap while keeping a large, statistically
-              meaningful interface class.
+              choice, but it persists from $\tau = 50$ to \SI{400}{HU}
+              at \textbf{both} radii.
+        \item At $r = \SI{10}{mm}$ the gap peaks at low $\tau$
+              ($\sim$\SI{0.74}{pp}); at $r = \SI{5}{mm}$ it is
+              flatter, peaking around $\tau \approx 200$\,HU
+              ($\sim$\SI{0.66}{pp}).
+        \item The consistency across radii and thresholds
+              confirms a \textbf{genuine physical effect}, not a
+              classification artefact.
       \end{itemize}
     \end{column}
   \end{columns}
@@ -631,28 +689,31 @@
     \item Across \emph{all} four quality metrics, interface beamlets
           produce \textbf{systematically worse} predictions.
     \item The performance gap is \textbf{robust} to the choice of
-          neighbourhood radius — it persists at both $r = 5$ and
-          \SI{10}{mm}.
+          neighbourhood radius. It persists at both $r = 5$ and
+          \SI{10}{mm}. More experiments at additional radii are required.
     \item Multiple heterogeneity features ($\sigma_{\text{HU}}$, TV)
           correlate with prediction error, suggesting the effect is
           physical rather than an artefact of the metric definition.
     \item The threshold sweep confirms that the gap is
           \textbf{not sensitive to $\tau$}: it remains positive over the
-          entire $[50, 400]$\,HU range, peaking at $\approx$\SI{0.74}{pp}
-          (GPR) near $\tau = \SI{70}{HU}$.
+          entire $[50, 400]$\,HU range at \textbf{both} radii, peaking
+          at $\approx$\SI{0.74}{pp} ($r{=}\SI{10}{mm}$) and
+          $\approx$\SI{0.66}{pp} ($r{=}\SI{5}{mm}$).
   \end{enumerate}
 
   \vspace{4pt}
-  \textbf{Implications for model improvement:}
+  \textbf{Implications for active learning and fine tuning:}
   \begin{itemize}\setlength{\itemsep}{2pt}
-    \item \textbf{Data augmentation} — oversample interface cases during
-          training to reduce the performance gap.
-    \item \textbf{Architecture} — investigate attention mechanisms that
-          can better handle density discontinuities.
-    \item \textbf{Uncertainty quantification} — flag interface beamlets
-          for downstream QA review.
-    \item \textbf{Stratified evaluation} — always report metrics
-          separately for interface vs.\ homogeneous subsets.
+    \item \textbf{Acquisition function design}: $\sigma_{\text{HU}}$
+          and TV provide cheap, physics based proxies for prediction
+          difficulty that can guide which unlabelled beamlets to
+          simulate next.
+    \item \textbf{Targeted fine tuning}: selectively retraining on
+          interface heavy batches may close the performance gap more
+          efficiently than uniform sampling.
+    \item \textbf{Stratified evaluation}: always report metrics
+          separately for interface vs.\ homogeneous subsets to track
+          whether active learning iterations reduce the gap.
   \end{itemize}
 \end{frame}
 
@@ -662,33 +723,18 @@
 
 \begin{frame}{Next Steps}
   \begin{enumerate}
-    \item \textbf{Additional anatomical sites} — repeat the analysis on
-          the lung dataset, where tissue interfaces (lung--mediastinum)
-          are even more prominent.
-    \item \textbf{Multi-feature classification} — replace the binary
-          $\sigma_{\text{HU}}$ threshold with a multi-feature classifier
-          (e.g.\ $\sigma_{\text{HU}}$ + TV + CV) and examine ROC for
-          predicting ``hard'' beamlets (GPR $<$ \SI{95}{\percent}).
-    \item \textbf{Exclude worst offenders} — systematically remove the
-          worst-predicted interface beamlets from training and measure
-          whether retraining improves global metrics.
-    \item \textbf{Energy-stratified analysis} — investigate whether the
+    \item \textbf{Sobel operator} — use the Sobel edge detector to
+          identify strong density gradients in the CT and define
+          interface beamlets based on edge presence within the
+          neighbourhood.
+    \item \textbf{Energy stratified analysis}: investigate whether the
           interface effect is stronger at specific energies (shallow
           vs.\ deep Bragg peaks).
-    \item \textbf{Threshold sweep on $r = \SI{5}{mm}$ data} — verify
-          that the gap-vs-$\tau$ curve retains the same shape with the
-          smaller neighbourhood.
+    \item \textbf{Multi radius heterogeneity analysis}: compute
+          $\sigma_{\text{HU}}$ and TV at radii $r \in \{5, 10, 15, 20,
+          \SI{30}{mm}\}$ per beamlet to study how the performance gap
+          evolves with neighbourhood size.
   \end{enumerate}
-\end{frame}
-
-% ── Closing ─────────────────────────────────────────────────
-\begin{frame}[plain]
-  \begin{center}
-    \vspace{2cm}
-    {\Huge\color{tudelft} Thank you}\\[12pt]
-    {\large Questions \& discussion}\\[20pt]
-    {\small Mikołaj Stryja \textbar{} \texttt{m.j.stryja@tudelft.nl}}
-  \end{center}
 \end{frame}
 
 \end{document}

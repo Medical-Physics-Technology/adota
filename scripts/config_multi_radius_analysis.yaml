@@ -1,0 +1,41 @@
+# ============================================================
+# Multi-Radius Heterogeneity Analysis
+# (multi_radius_analysis.py)
+# ============================================================
+#
+# For each beamlet in an existing results.csv, loads the CT grid
+# from HDF5, reuses the Bragg peak location, and computes σ_HU
+# and TV at several sphere radii.
+#
+# Usage:
+#   uv run python scripts/multi_radius_analysis.py \
+#       --config scripts/config_multi_radius_analysis.yaml
+#
+# CLI arguments take precedence over YAML values.
+# A copy of this file is saved to the run directory.
+# ============================================================
+
+# ── Input ───────────────────────────────────────────────────
+# Path to a results.csv produced by training_set_analysis.py.
+# The Bragg peak location (bp_depth, bp_y, bp_x) and all
+# original metric columns are preserved in the output.
+results_csv: /home/mstryja/projects/adota/runs/20260407_120930/results.csv
+
+# ── HDF5 dataset ───────────────────────────────────────────
+h5_path: /scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5
+
+# ── Sphere radii [mm] ─────────────────────────────────────
+# σ_HU and TV will be computed for each radius listed here.
+radii:
+  - 5
+  - 10
+  - 15
+  - 20
+  - 30
+
+# ── Grid resolution [mm] ──────────────────────────────────
+resolution: [2.0, 2.0, 2.0]
+
+# ── Flags ─────────────────────────────────────────────────
+no_progress: false
+verbose: false
