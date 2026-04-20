@@ -1,0 +1,63 @@
+# ============================================================
+# Bragg Peak Estimation – Multi-Method Comparison
+# (bragg_peak_estimation.py)
+# ============================================================
+#
+# Usage:
+#   uv run python scripts/bragg_peak_estimation.py \
+#       --config scripts/config_bp_estimation.yaml
+#
+# CLI arguments take precedence over values defined here.
+# A copy of this file is automatically saved to the run
+# directory for reproducibility.
+# ============================================================
+
+# ── Required ────────────────────────────────────────────────
+h5_path: /scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5
+
+# ── Optional ────────────────────────────────────────────────
+excluded_indexes_file: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
+
+# Maximum initial energy [MeV] – beamlets above this are skipped
+max_energy_mev: 250.0
+
+# Voxel resolution [mm] – (depth, height, width), isotropic
+resolution: [2.0, 2.0, 2.0]
+
+# ── Methods to run ──────────────────────────────────────────
+# Each entry is a dict with 'name' and optional method-specific params.
+# Available methods: gt_idd, csda_water, csda_density_corrected,
+#                    ct_density_gradient
+methods:
+  - name: gt_idd
+    proximal_fraction: 0.50
+    fall_fraction: 0.10
+
+  - name: csda_water
+
+  - name: csda_density_corrected
+    schneider_calibration: data/proton_tables/schneider_default.yaml
+
+  - name: ct_density_gradient
+    gradient_percentile: 95.0
+    min_depth_fraction: 0.3
+
+  - name: r80_density_corrected
+
+# ── PSTAR table ─────────────────────────────────────────────
+pstar_table: data/proton_tables/pstar_water.csv
+
+# ── Energy-stratified analysis ──────────────────────────────
+energy_bins: [70, 100, 130, 160, 190, 220, 250]
+
+# ── Diagnostic figures ──────────────────────────────────────
+# Number of per-sample diagnostic figures (CT + dose + IDD)
+n_diagnostic_figures: 5
+
+# ── Sampling ────────────────────────────────────────────────
+# Omit or set to ~ for all samples.
+n_samples: 4000
+
+# ── Flags ───────────────────────────────────────────────────
+no_progress: false
+verbose: false

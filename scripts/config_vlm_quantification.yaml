@@ -1,0 +1,105 @@
+# ============================================================
+# VLM-based Difficulty Quantification
+# (training_set_vlm_based_quantification.py)
+# ============================================================
+#
+# Usage:
+#   uv run python scripts/training_set_vlm_based_quantification.py \
+#       --config scripts/config_vlm_quantification.yaml
+#
+# Uses HuggingFace Transformers to run VLM locally on GPU.
+# Model is auto-downloaded on first run.
+#
+# CLI arguments take precedence over YAML values.
+# ============================================================
+
+# ── Required ────────────────────────────────────────────────
+model_name: DoTA_v3_grid_search_v11
+h5_path: /scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5
+
+# ── Optional ────────────────────────────────────────────────
+model_fname: best_model.pth
+excluded_indexes_file: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
+device_index: 1
+
+# ── Analysis parameters ────────────────────────────────────
+max_energy_mev: 250.0
+resolution: [2.0, 2.0, 2.0]
+
+# ── Smoothing ──────────────────────────────────────────────
+smoothing_method: gaussian
+smoothing_sigma: 1.0
+
+# ── Bragg-peak range estimation (surrogate: GT-based) ──────
+# NOTE: Uses ground-truth dose for BP range. To be replaced
+# with a CT-only or energy-lookup method in the future.
+proximal_fraction: 0.50
+fall_fraction: 0.10
+
+# ── Flux weighting ─────────────────────────────────────────
+flux_threshold_frac: 0.10
+
+# ── Gamma pass rate (evaluation label) ─────────────────────
+gamma_params:
+  dose_percent_threshold: 2
+  distance_mm_threshold: 2
+  interp_fraction: 10
+  max_gamma: 2
+  lower_percent_dose_cutoff: 10
+  local_gamma: false
+
+# ── VLM settings ───────────────────────────────────────────
+# HuggingFace model ID (will be downloaded on first run)
+vlm_model: llava-hf/llava-1.5-7b-hf
+# GPU index for VLM inference (can differ from ADoTA device)
+vlm_device_index: 2
+# Temperature: 0 for deterministic; >0 for diversity across votes
+vlm_temperature: 0.0
+# Number of independent VLM queries per beamlet (median vote)
+vlm_n_votes: 3
+# Max new tokens for VLM generation
+vlm_max_new_tokens: 256
+# Save rendered review panels to disk
+save_panels: true
+
+# ── VLM Prompt ─────────────────────────────────────────────
+# The prompt is a Python format string. Available placeholders:
+#   {energy_mev}, {bp_min_mm}, {bp_max_mm},
+#   {n_density_regions}, {voxel_spacing}
+#
+# Override this field to experiment with different prompts.
+vlm_prompt: |
+  You are an expert in proton therapy physics.  You are shown a
+  multi-panel image of a single proton beamlet passing through a CT volume.
+
+  The panels show (from top to bottom):
+  - Row 1: Raw CT (Hounsfield Units), axial and sagittal views
+  - Row 2: Gaussian-smoothed CT
+  - Row 3: 7-class tissue segmentation (Air, Lung, Fat, Soft tissue,
+    Contrast/blood, Cancellous bone, Cortical bone)
+  - Row 4: Sobel gradient magnitude on raw CT (edge map)
+  - Row 5: Sobel gradient magnitude on smoothed CT
+
+  Beam metadata:
+  - Initial energy: {energy_mev:.1f} MeV
+  - BP depth range: [{bp_min_mm:.1f}, {bp_max_mm:.1f}] mm
+  - Number of density regions in BP zone: {n_density_regions}
+  - Voxel spacing: {voxel_spacing:.1f} mm (isotropic)
+
+  Rate how DIFFICULT it would be for a deep-learning dose prediction
+  model to accurately predict the dose distribution for this beamlet.
+
+  Difficulty drivers include: tissue heterogeneity along the beam path,
+  bone-tissue or air-tissue interfaces near the Bragg peak, complex
+  anatomy, and lateral density variations.
+
+  Respond ONLY with valid JSON:
+  {{"difficulty": <int 1-10>, "confidence": <float 0-1>, "reason": "<brief explanation>"}}
+
+# ── Energy-stratified analysis ─────────────────────────────
+energy_bins: [70, 100, 130, 160, 190, 220, 250]
+
+# ── Sampling ────────────────────────────────────────────────
+# Start with a small subset for prompt iteration.
+# Set to ~ for all samples.
+n_samples: 10

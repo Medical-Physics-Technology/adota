@@ -34,7 +34,7 @@ max_energy_mev: 250.0
 
 # ── Sampling ────────────────────────────────────────────────
 # Limit evaluation to the first N samples (omit or ~ for all)
-n_samples: ~
+n_samples: 10
 
 # ── Publication figures ─────────────────────────────────────
 # Generate figures for the N worst samples per group (by RDE).

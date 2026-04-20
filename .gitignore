@@ -219,3 +219,5 @@ runs/
 
 # Ignore run_logs directory
 run_logs/
+
+publications/*

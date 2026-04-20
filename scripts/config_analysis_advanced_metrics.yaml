@@ -1,0 +1,85 @@
+# ============================================================
+# Training Set Analysis – Advanced Metrics
+# (training_set_analysis_advanced_metrics.py)
+# ============================================================
+#
+# Usage:
+#   uv run python scripts/training_set_analysis_advanced_metrics.py \
+#       --config scripts/config_analysis_advanced_metrics.yaml
+#
+# CLI arguments take precedence over values defined here.
+# A copy of this file is automatically saved to the run
+# directory for reproducibility.
+# ============================================================
+
+# ── Required ────────────────────────────────────────────────
+model_name: DoTA_v3_grid_search_v11
+h5_path: /scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5
+
+# ── Optional ────────────────────────────────────────────────
+model_fname: best_model.pth
+excluded_indexes_file: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
+device_index: 1
+
+# ── Analysis parameters ────────────────────────────────────
+# Maximum initial energy [MeV] – beamlets above this are skipped
+max_energy_mev: 250.0
+
+# Voxel resolution [mm] – (depth, height, width), isotropic
+resolution: [2.0, 2.0, 2.0]
+
+# ── Smoothing ──────────────────────────────────────────────
+# Method: "gaussian" or "median"
+smoothing_method: gaussian
+# Sigma [voxels] applied before segmentation and Sobel edge
+# detection.  1 voxel = 2 mm at current resolution.
+# Lower values preserve finer detail; higher values suppress noise.
+smoothing_sigma: 1.0
+
+# ── Bragg-peak range estimation ────────────────────────────
+# Proximal boundary: fraction of IDD_max when walking backward
+# from the peak (e.g. 0.50 ≈ proximal R50).
+proximal_fraction: 0.50
+# Distal boundary: fraction of IDD_max for the distal fall-off.
+fall_fraction: 0.10
+
+# ── Flux weighting ─────────────────────────────────────────
+# Fraction of per-slice flux maximum below which voxels are
+# ignored in density-region, advanced-metric, and Sobel analyses.
+flux_threshold_frac: 0.10
+
+# ── Sobel edge metrics ─────────────────────────────────────
+# Percentile of gradient magnitude among flux-weighted voxels.
+sobel_percentile: 95.0
+# Whether to compute Sobel on raw CT (true) or smoothed CT (false).
+sobel_use_raw: true
+
+# ── Spatial region method ──────────────────────────────────
+# "bp_range": use z_min–z_max along beam axis (original approach)
+# "sphere": use spherical neighbourhood around the Bragg peak
+region_method: sphere
+# Sphere radius [mm] – only used when region_method = sphere
+sphere_radius_mm: 15.0
+
+# ── Gamma pass rate ────────────────────────────────────────
+gamma_params:
+  dose_percent_threshold: 2
+  distance_mm_threshold: 2
+  interp_fraction: 10
+  max_gamma: 2
+  lower_percent_dose_cutoff: 10
+  local_gamma: false
+
+# ── Energy-stratified analysis ─────────────────────────────
+# Bin edges [MeV] for energy-stratified correlation analysis.
+energy_bins: [70, 100, 130, 160, 190, 220, 250]
+
+# ── Sampling ────────────────────────────────────────────────
+# Limit extraction to the first N samples.
+# Only the first n_samples records (after exclusion) are processed.
+# Omit or set to ~ for all samples.
+n_samples: ~
+
+# ── Flags ───────────────────────────────────────────────────
+no_progress: false
+verbose: false
