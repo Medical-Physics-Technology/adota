@@ -19,7 +19,7 @@ h5_path: /scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_do
 # ── Optional ────────────────────────────────────────────────
 model_fname: best_model.pth
 excluded_indexes_file: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
-device_index: 1
+device_index: 2
 
 # ── Analysis parameters ────────────────────────────────────
 # Maximum initial energy [MeV] – beamlets above this are skipped
@@ -59,7 +59,7 @@ sobel_use_raw: true
 # "sphere": use spherical neighbourhood around the Bragg peak
 region_method: sphere
 # Sphere radius [mm] – only used when region_method = sphere
-sphere_radius_mm: 15.0
+sphere_radius_mm: 5.0
 
 # ── Gamma pass rate ────────────────────────────────────────
 gamma_params:

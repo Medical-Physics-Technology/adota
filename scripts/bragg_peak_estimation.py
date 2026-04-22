@@ -14,7 +14,6 @@ import csv
 import logging
 import shutil
 import sys
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
@@ -36,6 +35,7 @@ from tqdm import tqdm
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.adota.config import DEFAULT_SCALE
 from src.figures.ct_visualizations import plot_bp_estimation_diagnostic
 from src.loaders.generator import H5PYGenerator
 from src.processing.rsp import (
@@ -50,30 +50,8 @@ logger = logging.getLogger(__name__)
 
 app = typer.Typer(help="Bragg-peak estimation – multi-method comparison")
 
-# ── Default scaling ─────────────────────────────────────────────────────────
 
-DEFAULT_SCALE = {
-    "min_ds": 0.0,
-    "max_ds": 25277028.0,
-    "min_ct": -1024,
-    "max_ct": 3071,
-    "min_energy": 70.0,
-    "max_energy": 270.0,
-}
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  Data classes
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-@dataclass
-class BPRecord:
-    """One row per beamlet: BP depth [mm] from each method."""
-
-    sample_id: str
-    energy_mev: float
-
+from src.schemas.results import BPRecord
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Estimator protocol & registry

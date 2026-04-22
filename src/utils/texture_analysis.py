@@ -56,10 +56,9 @@ def setup_run_directory(runs_dir: Path) -> Path:
     Returns:
         Path to the created run directory.
     """
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = runs_dir / f"texture_{timestamp}"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    return run_dir
+    from src.adota.config import setup_run_directory as _setup_run_directory
+
+    return _setup_run_directory(runs_dir, prefix="texture_", subdirs=())
 
 
 def setup_logging(run_dir: Path, verbose: bool = False) -> Path:
@@ -72,29 +71,9 @@ def setup_logging(run_dir: Path, verbose: bool = False) -> Path:
     Returns:
         Path to the log file.
     """
-    log_file = run_dir / "texture_analysis.log"
-    log_level = logging.DEBUG if verbose else logging.INFO
+    from src.adota.config import setup_logging as _setup_logging
 
-    root_logger = logging.getLogger()
-    root_logger.handlers.clear()
-
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setLevel(log_level)
-    file_handler.setFormatter(formatter)
-
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(log_level)
-    console_handler.setFormatter(formatter)
-
-    root_logger.setLevel(log_level)
-    root_logger.addHandler(file_handler)
-    root_logger.addHandler(console_handler)
-
-    return log_file
+    return _setup_logging(run_dir, verbose=verbose, log_filename="texture_analysis.log")
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import logging
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+
+logger = logging.getLogger(__name__)
 
 
 class Conv3D(nn.Conv3d):
@@ -399,7 +403,7 @@ class PositionalEmbedding(nn.Module):
         self.token_size = token_size
 
         self.verbose = kwargs.get("verbose", False)
-        print(f"Number of tokens: {self.num_tokens}") if self.verbose else None
+        logger.debug("Number of tokens: %s", self.num_tokens)
 
         self.embedding = nn.Embedding(num_tokens, token_size)
 

@@ -20,7 +20,6 @@ import csv
 import logging
 import shutil
 import sys
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
@@ -35,102 +34,20 @@ import yaml
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.adota.config import (
+    load_yaml_config,
+    setup_logging,
+    setup_run_directory,
+)
+
 logger = logging.getLogger(__name__)
 
 app = typer.Typer(help="σ_HU threshold sensitivity sweep")
 
 
-# ── Data container ──────────────────────────────────────────────────────────
-
-
-@dataclass
-class BeamletRecord:
-    """Lightweight container for a single beamlet read from CSV."""
-
-    sample_id: str
-    energy_mev: float
-    sigma_hu: float
-    tv: float
-    cv: float
-    gpr: float  # GPR [%]
-    rmse: float  # RMSE [Gy]
-    mape: float  # MAPE [%]
-    rde: float  # RDE [%]
-
-
-@dataclass
-class SweepPoint:
-    """Metrics at a single threshold value."""
-
-    tau: float
-    n_homo: int
-    n_intf: int
-    pct_intf: float
-    gpr_homo: float
-    gpr_intf: float
-    gpr_gap: float  # homo − intf (positive = interface is worse)
-    rde_homo: float
-    rde_intf: float
-    rde_gap: float
-    mape_homo: float
-    mape_intf: float
-    mape_gap: float
-    rmse_homo: float
-    rmse_intf: float
-    rmse_gap: float
-
+from src.schemas.analysis import BeamletRecord, SweepPoint
 
 # ── YAML helper ─────────────────────────────────────────────────────────────
-
-
-def load_yaml_config(config_path: Path) -> dict:
-    """Load configuration from a YAML file."""
-    if not config_path.exists():
-        raise typer.BadParameter(f"Config file not found: {config_path}")
-    try:
-        with open(config_path, "r") as f:
-            config = yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        raise typer.BadParameter(f"Failed to parse YAML config: {e}")
-    return config if config is not None else {}
-
-
-# ── Run directory & logging ─────────────────────────────────────────────────
-
-
-def setup_run_directory(runs_dir: Path) -> Path:
-    """Create a timestamped run directory."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = runs_dir / timestamp
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "figures").mkdir(exist_ok=True)
-    return run_dir
-
-
-def setup_logging(run_dir: Path, verbose: bool = False) -> Path:
-    """Configure logging to both console and file."""
-    log_file = run_dir / "threshold_sweep.log"
-    log_level = logging.DEBUG if verbose else logging.INFO
-
-    root_logger = logging.getLogger()
-    root_logger.handlers.clear()
-    root_logger.setLevel(log_level)
-
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(log_level)
-    console_format = logging.Formatter(
-        "%(asctime)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-    console_handler.setFormatter(console_format)
-    root_logger.addHandler(console_handler)
-
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setLevel(log_level)
-    file_handler.setFormatter(console_format)
-    root_logger.addHandler(file_handler)
-
-    return log_file
 
 
 # ── CSV loading ─────────────────────────────────────────────────────────────

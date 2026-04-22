@@ -10,11 +10,11 @@ from pprint import pprint
 import pydicom
 import typer
 
-# Add the src directory to the path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+# Add the project root to the path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from dcm.load_data import list_all_files
-from loaders.plan_parser import parse_plan
+from src.dcm.load_data import list_all_files
+from src.loaders.plan_parser import parse_plan
 
 app = typer.Typer(
     help="Run HPTC model with CT images, treatment plan, and configuration."
@@ -233,8 +233,6 @@ def run(
                     )
 
                     sim_res_dicts.append(_field)
-
-    
 
     pprint(sim_res_dicts[0])
     pprint(sim_res_dicts[-1])

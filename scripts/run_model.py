@@ -4,18 +4,14 @@ DoTA Model Evaluation Script
 A command-line tool for running DoTA model inference on dose prediction tasks.
 """
 
-import json
 import logging
 import os
 import shutil
 import sys
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Annotated, Optional
-
-import yaml
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -28,8 +24,17 @@ from tqdm import tqdm
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.adota.config import (
+    DEFAULT_GAMMA_PARAMS,
+    DEFAULT_SCALE,
+    denormalize_energy,
+    get_device,
+    load_yaml_config,
+    setup_logging,
+    setup_run_directory,
+)
 from src.adota.models import DoTA3D_v3
-from src.adota.utils import count_parameters_per_block, count_total_parameters
+from src.adota.utils import count_parameters_per_block, count_total_parameters, load_model
 from src.figures.single_beam import publication_figure
 from src.loaders.dir_based import get_single_record, save_prediction
 from src.loaders.utils import validate_inputs
@@ -45,165 +50,10 @@ from src.utils.unit_conversions import to_gy
 
 logger = logging.getLogger(__name__)
 
+from src.schemas.configs import EvaluationConfig
+from src.schemas.results import EvaluationResult
+
 app = typer.Typer(help="DoTA Model Evaluation Tool")
-
-
-def setup_run_directory(runs_dir: Path) -> Path:
-    """Create a timestamped run directory.
-
-    Args:
-        runs_dir: Base directory for all runs.
-
-    Returns:
-        Path to the created run directory.
-    """
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = runs_dir / timestamp
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "figures").mkdir(exist_ok=True)
-    return run_dir
-
-
-def setup_logging(run_dir: Path, verbose: bool = False) -> Path:
-    """Configure logging to both console and file.
-
-    Args:
-        run_dir: Directory where log file will be stored.
-        verbose: Whether to enable debug level logging.
-
-    Returns:
-        Path to the log file.
-    """
-    log_file = run_dir / "evaluation.log"
-    log_level = logging.DEBUG if verbose else logging.INFO
-
-    # Clear any existing handlers
-    root_logger = logging.getLogger()
-    root_logger.handlers.clear()
-    root_logger.setLevel(log_level)
-
-    # Console handler
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(log_level)
-    console_format = logging.Formatter(
-        "%(asctime)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-    console_handler.setFormatter(console_format)
-    root_logger.addHandler(console_handler)
-
-    # File handler
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setLevel(log_level)
-    file_format = logging.Formatter(
-        "%(asctime)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-    file_handler.setFormatter(file_format)
-    root_logger.addHandler(file_handler)
-
-    return log_file
-
-
-# Default scaling parameters
-DEFAULT_SCALE = {
-    "min_ds": 0.0,
-    "max_ds": 25277028.0,
-    "min_ct": -1024,
-    "max_ct": 3071,
-    "min_energy": 70.0,
-    "max_energy": 270.0,
-}
-
-# Default gamma parameters
-DEFAULT_GAMMA_PARAMS = {
-    "dose_percent_threshold": 2,
-    "distance_mm_threshold": 2,
-    "interp_fraction": 10,
-    "max_gamma": 2,
-    "lower_percent_dose_cutoff": 10,
-    "random_subset": None,
-    "local_gamma": False,
-    "quiet": True,
-}
-
-
-@dataclass
-class EvaluationResult:
-    """Container for a single sample's evaluation results."""
-
-    sample_id: str
-    energy_mev: float
-    beamlet_angles: tuple
-    gpr: float
-    rmse: float
-    mape: float
-    rde: float
-    calc_time: float
-    prediction: Optional[torch.Tensor] = field(default=None, repr=False)
-    ground_truth: Optional[torch.Tensor] = field(default=None, repr=False)
-    input_data: Optional[torch.Tensor] = field(default=None, repr=False)
-
-
-@dataclass
-class EvaluationConfig:
-    """Configuration for model evaluation."""
-
-    scale: dict = field(default_factory=lambda: DEFAULT_SCALE.copy())
-    gamma_params: dict = field(default_factory=lambda: DEFAULT_GAMMA_PARAMS.copy())
-    normalize_flux: bool = True
-    resolution: tuple = (2.0, 2.0, 2.0)
-
-
-def denormalize_energy(energy_normalized: float, scale: dict) -> float:
-    """Convert normalized energy back to MeV."""
-    return (
-        energy_normalized * (scale["max_energy"] - scale["min_energy"])
-        + scale["min_energy"]
-    )
-
-
-def get_device(device_index: int) -> torch.device:
-    """Get the appropriate torch device."""
-    if torch.cuda.is_available() and device_index >= 0:
-        return torch.device(f"cuda:{device_index}")
-    return torch.device("cpu")
-
-
-def load_model(
-    model_path: Path,
-    hyperparams_path: Path,
-    device: torch.device,
-) -> DoTA3D_v3:
-    """Load and configure the DoTA model.
-
-    Args:
-        model_path: Path to the model weights file.
-        hyperparams_path: Path to the hyperparameters JSON file.
-        device: Target device for the model.
-
-    Returns:
-        Configured DoTA3D_v3 model in eval mode.
-
-    Raises:
-        FileNotFoundError: If model or hyperparams files don't exist.
-    """
-    if not model_path.exists():
-        raise FileNotFoundError(f"Model file not found: {model_path}")
-    if not hyperparams_path.exists():
-        raise FileNotFoundError(f"Hyperparams file not found: {hyperparams_path}")
-
-    with open(hyperparams_path, "r") as f:
-        hyperparams = json.load(f)
-
-    model = DoTA3D_v3(**hyperparams)
-    checkpoint = torch.load(model_path, map_location="cpu")
-    model.load_state_dict(checkpoint)
-    model.eval()
-    model.to(device)
-
-    logger.info(f"Model loaded from {model_path}")
-    return model
 
 
 def evaluate_single_sample(
@@ -598,8 +448,8 @@ def advanced_metrics_and_figures(
         gt = gt.squeeze()
         pred = pred.squeeze()
 
-        typer.echo(f"Calculating advanced metrics for sample {result.sample_id}...")
-        typer.echo(
+        logger.debug(f"Calculating advanced metrics for sample {result.sample_id}...")
+        logger.debug(
             "Shapes: CT: {}, GT dose: {}, Pred dose: {}".format(
                 ct_hu.shape, gt.shape, pred.shape
             )
@@ -1023,33 +873,6 @@ def print_summary(results: list, total_time: float) -> None:
         f"Beamlet angles: ({best.beamlet_angles[0]:.2f}, {best.beamlet_angles[1]:.2f}) degrees, "
         f"GPR: {best.gpr:.2f}%"
     )
-
-
-def load_yaml_config(config_path: Path) -> dict:
-    """Load configuration from a YAML file.
-
-    Args:
-        config_path: Path to the YAML configuration file.
-
-    Returns:
-        Dictionary with configuration values.
-
-    Raises:
-        typer.BadParameter: If the YAML file cannot be read or parsed.
-    """
-    if not config_path.exists():
-        raise typer.BadParameter(f"Config file not found: {config_path}")
-
-    try:
-        with open(config_path, "r") as f:
-            config = yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        raise typer.BadParameter(f"Failed to parse YAML config: {e}")
-
-    if config is None:
-        return {}
-
-    return config
 
 
 @app.command()

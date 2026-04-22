@@ -25,7 +25,6 @@ import logging
 import os
 import shutil
 import sys
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
@@ -46,6 +45,15 @@ from tqdm import tqdm
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.adota.config import (
+    DEFAULT_GAMMA_PARAMS,
+    DEFAULT_SCALE,
+    denormalize_energy,
+    get_device,
+    load_yaml_config,
+    setup_logging,
+    setup_run_directory,
+)
 from src.adota.models import DoTA3D_v3
 from src.adota.utils import count_parameters_per_block, count_total_parameters
 from src.image_processing.heterogeneity import (
@@ -79,149 +87,13 @@ app = typer.Typer(
 )
 
 
-# ---------------------------------------------------------------------------
-# Configuration dataclasses
-# ---------------------------------------------------------------------------
-
-# Default scaling parameters
-DEFAULT_SCALE = {
-    "min_ds": 0.0,
-    "max_ds": 25277028.0,
-    "min_ct": -1024,
-    "max_ct": 3071,
-    "min_energy": 70.0,
-    "max_energy": 270.0,
-}
-
-DEFAULT_GAMMA_PARAMS = {
-    "dose_percent_threshold": 2,
-    "distance_mm_threshold": 2,
-    "interp_fraction": 10,
-    "max_gamma": 2,
-    "lower_percent_dose_cutoff": 10,
-    "random_subset": None,
-    "local_gamma": False,
-    "quiet": True,
-}
-
-
-@dataclass
-class EvaluationConfig:
-    """Configuration for model evaluation."""
-
-    scale: dict = field(default_factory=lambda: DEFAULT_SCALE.copy())
-    gamma_params: dict = field(default_factory=lambda: DEFAULT_GAMMA_PARAMS.copy())
-    normalize_flux: bool = True
-    resolution: tuple = (2.0, 2.0, 2.0)
-
-
-@dataclass
-class MetricsConfig:
-    """Toggle flags for the three texture-metric families.
-
-    Each flag can be set via CLI (``--enable-heterogeneity`` etc.) or in the
-    YAML config under the ``metrics`` key.
-    """
-
-    heterogeneity: bool = True
-    glcm: bool = True
-    intensity: bool = True
-
-
-@dataclass
-class SampleResult:
-    """Container for one sample's combined inference + texture results."""
-
-    sample_id: str
-    energy_mev: float
-    beamlet_angles: tuple
-
-    # Model performance metrics
-    gpr: float
-    rmse: float
-    mape: float
-    rde: float
-    calc_time: float
-
-    # Beam-aligned heterogeneity metrics (optional)
-    g_phi: Optional[float] = None
-    r_roughness: Optional[float] = None
-    h_phi: Optional[float] = None
-
-    # GLCM homogeneity — volume-level mean (optional)
-    glcm_homogeneity_mean: Optional[float] = None
-    glcm_homogeneity_std: Optional[float] = None
-
-    # Global intensity heterogeneity (optional)
-    intensity_mean: Optional[float] = None
-    intensity_std: Optional[float] = None
-    intensity_iqr: Optional[float] = None
-    intensity_mad: Optional[float] = None
-    intensity_entropy: Optional[float] = None
-    intensity_uniformity: Optional[float] = None
-    intensity_skewness: Optional[float] = None
-    intensity_kurtosis: Optional[float] = None
-
-    # Cached tensors for publication figures
-    prediction: Optional[torch.Tensor] = field(default=None, repr=False)
-    ground_truth: Optional[torch.Tensor] = field(default=None, repr=False)
-    input_data: Optional[torch.Tensor] = field(default=None, repr=False)
+from src.schemas.configs import EvaluationConfig, MetricsConfig
+from src.schemas.results import SampleResult
 
 
 # ---------------------------------------------------------------------------
-# Helpers (same as in run_model.py)
+# Model loading
 # ---------------------------------------------------------------------------
-
-
-def setup_run_directory(runs_dir: Path) -> Path:
-    """Create a timestamped run directory."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = runs_dir / f"analysis_{timestamp}"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "figures").mkdir(exist_ok=True)
-    return run_dir
-
-
-def setup_logging(run_dir: Path, verbose: bool = False) -> Path:
-    """Configure logging to both console and file."""
-    log_file = run_dir / "analysis.log"
-    log_level = logging.DEBUG if verbose else logging.INFO
-
-    root_logger = logging.getLogger()
-    root_logger.handlers.clear()
-    root_logger.setLevel(log_level)
-
-    fmt = logging.Formatter(
-        "%(asctime)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(log_level)
-    console_handler.setFormatter(fmt)
-    root_logger.addHandler(console_handler)
-
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setLevel(log_level)
-    file_handler.setFormatter(fmt)
-    root_logger.addHandler(file_handler)
-
-    return log_file
-
-
-def denormalize_energy(energy_normalized: float, scale: dict) -> float:
-    """Convert normalized energy back to MeV."""
-    return (
-        energy_normalized * (scale["max_energy"] - scale["min_energy"])
-        + scale["min_energy"]
-    )
-
-
-def get_device(device_index: int) -> torch.device:
-    """Get the appropriate torch device."""
-    if torch.cuda.is_available() and device_index >= 0:
-        return torch.device(f"cuda:{device_index}")
-    return torch.device("cpu")
 
 
 def load_model(
@@ -246,18 +118,6 @@ def load_model(
 
     logger.info("Model loaded from %s", model_path)
     return model
-
-
-def load_yaml_config(config_path: Path) -> dict:
-    """Load YAML configuration file."""
-    if not config_path.exists():
-        raise typer.BadParameter(f"Config file not found: {config_path}")
-    try:
-        with open(config_path, "r") as f:
-            cfg = yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        raise typer.BadParameter(f"Failed to parse YAML config: {e}")
-    return cfg if cfg is not None else {}
 
 
 # ---------------------------------------------------------------------------

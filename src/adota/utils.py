@@ -21,12 +21,12 @@ def count_parameters_per_block(model: torch.nn.Module):
             )
 
     for block, count in block_params.items():
-        print(f"{block}: {count:,} parameters")
+        logger.info("%s: %s parameters", block, f"{count:,}")
 
 
 def count_total_parameters(model: torch.nn.Module):
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"Total number of trainable parameters: {total_params:,}")
+    logger.info("Total number of trainable parameters: %s", f"{total_params:,}")
     return total_params
 
 

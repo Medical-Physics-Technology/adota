@@ -1,8 +1,12 @@
+import logging
+
 import torch
 import numpy as np
 import torch.nn as nn
 
 from src.adota.layers import *
+
+logger = logging.getLogger(__name__)
 
 class DoTA3D_v3(nn.Module):
     """_summary_
@@ -171,9 +175,9 @@ class DoTA3D_v3(nn.Module):
             0,
             0,
         )
-        print("New input shape: ", self.input_shape)
-        print("New output shape: ", self.output_shape)
-        print("Pad size: ", self.pad_size)
+        logger.debug("New input shape: %s", self.input_shape)
+        logger.debug("New output shape: %s", self.output_shape)
+        logger.debug("Pad size: %s", self.pad_size)
 
     def _calculate_token_size(self):
         self.latent_space_dimension = (
@@ -182,7 +186,7 @@ class DoTA3D_v3(nn.Module):
             self.enc_features,
         )  # After permutation layer.
         self.token_size = np.prod(self.latent_space_dimension)
-        print("Token size: ", self.token_size)
+        logger.debug("Token size: %s", self.token_size)
 
     def generate_subsequent_mask(self, sequence_length):
         mask = (

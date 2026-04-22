@@ -20,7 +20,6 @@ import logging
 import shutil
 import statistics
 import sys
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
@@ -42,6 +41,15 @@ from tqdm import tqdm
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.adota.config import (
+    DEFAULT_GAMMA_PARAMS,
+    DEFAULT_SCALE,
+    denormalize_energy,
+    get_device,
+    load_yaml_config,
+    setup_logging,
+    setup_run_directory,
+)
 from src.adota.models import DoTA3D_v3
 from src.adota.utils import load_model
 from src.figures.ct_visualizations import (
@@ -60,26 +68,6 @@ app = typer.Typer(help="VLM-based difficulty quantification of training set beam
 
 
 # ── Defaults ────────────────────────────────────────────────────────────────
-
-DEFAULT_SCALE = {
-    "min_ds": 0.0,
-    "max_ds": 25277028.0,
-    "min_ct": -1024,
-    "max_ct": 3071,
-    "min_energy": 70.0,
-    "max_energy": 270.0,
-}
-
-DEFAULT_GAMMA_PARAMS = {
-    "dose_percent_threshold": 2,
-    "distance_mm_threshold": 2,
-    "interp_fraction": 10,
-    "max_gamma": 2,
-    "lower_percent_dose_cutoff": 10,
-    "random_subset": None,
-    "local_gamma": False,
-    "quiet": True,
-}
 
 DEFAULT_VLM_PROMPT = """\
 You are an expert in proton therapy physics.  You are shown a \
@@ -111,70 +99,10 @@ Respond ONLY with valid JSON:
 """
 
 
-# ── Dataclasses ─────────────────────────────────────────────────────────────
-
-
-@dataclass
-class VLMConfig:
-    """Configuration for the VLM-based analysis."""
-
-    # Data / model
-    scale: dict = field(default_factory=lambda: DEFAULT_SCALE.copy())
-    gamma_params: dict = field(default_factory=lambda: DEFAULT_GAMMA_PARAMS.copy())
-    resolution: tuple = (2.0, 2.0, 2.0)
-    max_energy_mev: float = 250.0
-    smoothing_sigma: float = 1.0
-    smoothing_method: str = "gaussian"
-
-    # BP estimation (using GT for now)
-    proximal_fraction: float = 0.50
-    fall_fraction: float = 0.10
-    flux_threshold_frac: float = 0.10
-
-    # VLM settings
-    vlm_model: str = "llava-hf/llava-1.5-7b-hf"
-    vlm_device_index: int = 0  # GPU index for VLM (can differ from ADoTA)
-    vlm_temperature: float = 0.0
-    vlm_n_votes: int = 3
-    vlm_prompt: str = DEFAULT_VLM_PROMPT
-    vlm_max_new_tokens: int = 256
-
-    # Output
-    save_panels: bool = True
-
-    # Energy bins for stratified analysis
-    energy_bins: list = field(
-        default_factory=lambda: [70, 100, 130, 160, 190, 220, 250]
-    )
-
-
-@dataclass
-class VLMResult:
-    """Per-beamlet result."""
-
-    sample_id: str
-    energy_mev: float
-    bp_range_min_mm: float
-    bp_range_max_mm: float
-    n_density_regions: int
-    vlm_difficulty: float  # median of K votes
-    vlm_confidence: float  # median of K votes
-    vlm_reason: str  # from the median vote
-    vlm_votes: str  # JSON list of all votes
-    gpr: float
-    panel_path: str
-    query_time_s: float
-
+from src.schemas.configs import VLMConfig
+from src.schemas.results import VLMResult
 
 # ── Helpers (shared with advanced metrics script) ───────────────────────────
-
-
-def denormalize_energy(energy_normalized: float, scale: dict) -> float:
-    """Convert normalised energy back to MeV."""
-    return (
-        energy_normalized * (scale["max_energy"] - scale["min_energy"])
-        + scale["min_energy"]
-    )
 
 
 def estimate_bp_range(
@@ -243,63 +171,6 @@ def analyse_density_regions(
         if classes[j] != classes[j - 1]:
             n_regions += 1
     return n_regions
-
-
-# ── Run directory & logging ─────────────────────────────────────────────────
-
-
-def setup_run_directory(runs_dir: Path) -> Path:
-    """Create a timestamped run directory."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = runs_dir / timestamp
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "figures").mkdir(exist_ok=True)
-    (run_dir / "panels").mkdir(exist_ok=True)
-    return run_dir
-
-
-def setup_logging(run_dir: Path, verbose: bool = False) -> Path:
-    """Configure logging to console and file."""
-    log_file = run_dir / "vlm_evaluation.log"
-    log_level = logging.DEBUG if verbose else logging.INFO
-
-    root_logger = logging.getLogger()
-    root_logger.handlers.clear()
-    root_logger.setLevel(log_level)
-
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(log_level)
-    fmt = logging.Formatter(
-        "%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-    )
-    console_handler.setFormatter(fmt)
-    root_logger.addHandler(console_handler)
-
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setLevel(log_level)
-    file_handler.setFormatter(fmt)
-    root_logger.addHandler(file_handler)
-
-    return log_file
-
-
-def get_device(device_index: int) -> torch.device:
-    """Get the appropriate torch device."""
-    if torch.cuda.is_available() and device_index >= 0:
-        return torch.device(f"cuda:{device_index}")
-    return torch.device("cpu")
-
-
-def load_yaml_config(config_path: Path) -> dict:
-    """Load YAML configuration file."""
-    if not config_path.exists():
-        raise typer.BadParameter(f"Config file not found: {config_path}")
-    try:
-        with open(config_path, "r") as f:
-            config = yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        raise typer.BadParameter(f"Failed to parse YAML config: {e}")
-    return config or {}
 
 
 # ── Panel rendering ─────────────────────────────────────────────────────────
@@ -1010,8 +881,10 @@ def main(
 
     # ── Run directory ───────────────────────────────────────────────
     runs_dir = PROJECT_ROOT / "runs"
-    run_dir = setup_run_directory(runs_dir)
-    log_file = setup_logging(run_dir, verbose=verbose)
+    run_dir = setup_run_directory(runs_dir, subdirs=("figures", "panels"))
+    log_file = setup_logging(
+        run_dir, verbose=verbose, log_filename="vlm_evaluation.log"
+    )
 
     if config_path is not None:
         shutil.copy2(config_path, run_dir / config_path.name)

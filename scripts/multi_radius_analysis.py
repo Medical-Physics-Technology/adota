@@ -19,7 +19,6 @@ import csv
 import logging
 import shutil
 import sys
-from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Annotated, Optional
@@ -27,7 +26,6 @@ from typing import Annotated, Optional
 import h5py
 import numpy as np
 import typer
-import yaml
 from tqdm import tqdm
 
 # ── Project root ────────────────────────────────────────────────────────────
@@ -36,10 +34,15 @@ PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from scripts.training_set_analysis import (
-    DEFAULT_SCALE,
     _extract_sphere_voxels,
     compute_bp_sigma_hu,
     compute_bp_tv,
+)
+from src.adota.config import (
+    DEFAULT_SCALE,
+    load_yaml_config,
+    setup_logging,
+    setup_run_directory,
 )
 from src.augmentation.geo_augmenations import cropp_around_index
 from src.utils.scallers import inverse_minmax
@@ -47,55 +50,6 @@ from src.utils.scallers import inverse_minmax
 logger = logging.getLogger(__name__)
 
 app = typer.Typer(help="Multi-radius σ_HU / TV analysis")
-
-
-# ── Helpers (same patterns as other scripts) ────────────────────────────────
-
-
-def load_yaml_config(config_path: Path) -> dict:
-    """Load configuration from a YAML file."""
-    if not config_path.exists():
-        raise typer.BadParameter(f"Config file not found: {config_path}")
-    try:
-        with open(config_path, "r") as f:
-            config = yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        raise typer.BadParameter(f"Failed to parse YAML config: {e}")
-    return config if config is not None else {}
-
-
-def setup_run_directory(runs_dir: Path) -> Path:
-    """Create a timestamped run directory."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = runs_dir / timestamp
-    run_dir.mkdir(parents=True, exist_ok=True)
-    return run_dir
-
-
-def setup_logging(run_dir: Path, verbose: bool = False) -> Path:
-    """Configure logging to both console and file."""
-    log_file = run_dir / "multi_radius_analysis.log"
-    log_level = logging.DEBUG if verbose else logging.INFO
-
-    root_logger = logging.getLogger()
-    root_logger.handlers.clear()
-    root_logger.setLevel(log_level)
-
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(log_level)
-    fmt = logging.Formatter(
-        "%(asctime)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
-    console_handler.setFormatter(fmt)
-    root_logger.addHandler(console_handler)
-
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setLevel(log_level)
-    file_handler.setFormatter(fmt)
-    root_logger.addHandler(file_handler)
-
-    return log_file
 
 
 # ── CSV I/O ─────────────────────────────────────────────────────────────────
@@ -354,8 +308,10 @@ def main(
 
     # ── Setup run directory & logging ───────────────────────────────────
     runs_dir = PROJECT_ROOT / "runs"
-    run_dir = setup_run_directory(runs_dir)
-    log_file = setup_logging(run_dir, verbose=verbose)
+    run_dir = setup_run_directory(runs_dir, subdirs=())
+    log_file = setup_logging(
+        run_dir, verbose=verbose, log_filename="multi_radius_analysis.log"
+    )
 
     if config_path is not None:
         shutil.copy2(config_path, run_dir / config_path.name)
