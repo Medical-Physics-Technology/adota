@@ -444,30 +444,66 @@
 \section{Sphere Radius Sensitivity}
 % ════════════════════════════════════════════════════════════
 
-\begin{frame}{Sphere Radius: \SI{15}{mm} vs \SI{5}{mm}}
-  \textbf{Hypothesis}: a tighter sphere ($r = \SI{5}{mm}$) isolates
-  the peak more precisely; a larger sphere ($r = \SI{15}{mm}$) captures
-  more of the distal fall-off anatomy.
+\begin{frame}[shrink=5]{Sphere Radius: \SI{15}{mm} vs \SI{5}{mm} ($n = 69\,295$)}
+  \begin{columns}[T]
+    \begin{column}{0.54\textwidth}
+      \vspace{-2pt}
+      {\small
+      \begin{tabular}{lrrr}
+        \toprule
+        \textbf{Metric} & $\rho_s^{15\text{mm}}$ & $\rho_s^{5\text{mm}}$ & $\Delta|\rho|$ \\
+        \midrule
+        \textbf{sum\_sobel\_bp}     & $\mathbf{-0.385}$ & $-0.295$ & $\mathbf{+0.090}$ \\
+        \textbf{p95\_sobel\_bp}     & $\mathbf{-0.322}$ & $-0.292$ & $\mathbf{+0.030}$ \\
+        mean\_sobel\_axial          & $-0.209$ & $-0.202$ & $+0.007$ \\
+        \midrule
+        hu\_change\_per\_region     & $-0.339$ & $-0.339$ & $0.000$ \\
+        $\sigma_{\text{HU}}$ at BP  & $-0.310$ & $-0.310$ & $0.000$ \\
+        lateral\_hu\_var\_bp        & $-0.310$ & $-0.310$ & $0.000$ \\
+        hu\_change\_per\_mm         & $-0.297$ & $-0.297$ & $0.000$ \\
+        max\_hu\_jump               & $-0.291$ & $-0.291$ & $0.000$ \\
+        max\_hu\_gradient           & $-0.291$ & $-0.291$ & $0.000$ \\
+        total\_hu\_change           & $-0.285$ & $-0.285$ & $0.000$ \\
+        $n_{\text{regions}}$        & $-0.268$ & $-0.268$ & $0.000$ \\
+        hetero\_fraction            & $-0.268$ & $-0.268$ & $0.000$ \\
+        pflugfelder\_hi             & $-0.242$ & $-0.242$ & $0.000$ \\
+        wepl\_std                   & $-0.231$ & $-0.231$ & $0.000$ \\
+        interface\_bp\_dist.        & $+0.141$ & $+0.141$ & $0.000$ \\
+        \bottomrule
+      \end{tabular}
+      }
+    \end{column}
+    \begin{column}{0.44\textwidth}
+      \textbf{Key observation}: \emph{only the Sobel metrics depend
+      on sphere radius}.  All HU and WEPL/Pflugfelder metrics are
+      radius-invariant.
 
-  \vspace{8pt}
-  \begin{block}{\large Results pending}
-    Run \texttt{20260421\_222950} (radius $= \SI{5}{mm}$) is currently
-    processing on \texttt{cuda:2}.  Expected completion:
-    \textbf{Thursday 23 April}.
+      \vspace{4pt}
+      \textbf{Why?} The HU metrics
+      (\texttt{hu\_change\_per\_region}, $\sigma_{\text{HU,BP}}$,
+      $\Delta H_{\max}$, …) are computed on the
+      \emph{flux-weighted axial HU profile} over $[z_{\min}, z_{\max}]$
+      and on the \emph{lateral BP slice}.  WEPL is computed over the
+      full lateral footprint up to $k^*$.  Only the
+      Sobel-family aggregation is bounded by the sphere $\Omega_r$.
 
-    \vspace{4pt}
-    This slide will be updated with:
-    \begin{itemize}
-      \item Side-by-side correlation table: $r = 5$ mm vs.\ $r = 15$ mm.
-      \item Energy-stratified comparison.
-      \item Recommendation for the default radius in future analyses.
-    \end{itemize}
-  \end{block}
+      \vspace{4pt}
+      \textbf{Effect on Sobel metrics}:
+      \begin{itemize}\setlength{\itemsep}{0pt}
+        \item $\Sigma S_{\text{BP}}$: $|\rho_s|$ drops from
+              $0.385 \to 0.295$ ($-23\%$ relative)
+        \item $S_{95,\text{BP}}$: $0.322 \to 0.292$ ($-9\%$)
+        \item $\bar{S}_{\text{axial}}$: essentially unchanged
+      \end{itemize}
 
-  \vspace{6pt}
-  {\small Both radii use the same model (DoTA\_v3\_grid\_search\_v11),
-  same dataset ($n = 70\,145$), and identical metric definitions —
-  only the spatial footprint changes.}
+      \vspace{4pt}
+      \textbf{Recommendation}: adopt \textbf{$r = \SI{15}{mm}$} as
+      the default — strictly dominates $r = \SI{5}{mm}$ on
+      Sobel-family metrics, identical for everything else.
+      Energy-stratified and partial-correlation patterns
+      reproduce the 15 mm results (not shown for brevity).
+    \end{column}
+  \end{columns}
 \end{frame}
 
 % ════════════════════════════════════════════════════════════
@@ -502,7 +538,12 @@
           WEPL std ($\rho = -0.231$) is similar.
 
     \vspace{4pt}
-    \item \textbf{Radius sensitivity}: pending (run2 at $r = \SI{5}{mm}$).
+    \item \textbf{Radius sensitivity}: only Sobel metrics depend on
+          the sphere radius. $\Sigma S_{\text{BP}}$ drops from
+          $\rho_s = -0.385$ at $r = \SI{15}{mm}$ to $-0.295$ at
+          $r = \SI{5}{mm}$ (a $23\%$ relative loss); HU and
+          WEPL/Pflugfelder metrics are unchanged.
+          \textbf{Recommendation}: use $r = \SI{15}{mm}$.
   \end{enumerate}
 \end{frame}
 
@@ -512,9 +553,11 @@
 
 \begin{frame}{Next Steps}
   \begin{enumerate}
-    \item \textbf{Sphere-radius comparison} (this week): compare
-          $r = \SI{5}{mm}$ vs.\ $r = \SI{15}{mm}$ once run2 finishes.
-          Determine optimal radius for downstream use.
+    \item \textbf{Interface Severity Index (ISI)} (in development):
+          per-class interface-pair severity matrix
+          ($W_{ab} = (\Delta\mathrm{RSP})^2$) using the Schneider
+          24-class decomposition, aggregated within the $r = \SI{15}{mm}$
+          BP sphere. First correlations expected next week.
 
     \vspace{6pt}
     \item \textbf{Composite difficulty score}: combine top metrics

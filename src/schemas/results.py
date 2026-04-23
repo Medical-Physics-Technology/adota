@@ -132,6 +132,10 @@ class SampleRecord:
     pflugfelder_hi: float = 0.0
     wepl_mean: float = 0.0
     wepl_std: float = 0.0
+    isi_sum: float = 0.0
+    isi_max: float = 0.0
+    isi_mean: float = 0.0
+    isi_axial_sum: float = 0.0
     gpr: float = 0.0
     rde: float = 0.0
     extract_time: float = 0.0

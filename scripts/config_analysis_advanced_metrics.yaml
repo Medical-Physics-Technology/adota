@@ -59,7 +59,17 @@ sobel_use_raw: true
 # "sphere": use spherical neighbourhood around the Bragg peak
 region_method: sphere
 # Sphere radius [mm] – only used when region_method = sphere
+# Also used as the Interface Severity Index (ISI) region radius.
 sphere_radius_mm: 5.0
+
+# ── Interface Severity Index (ISI) ─────────────────────────
+# Class-pair severity weighting for tissue-interface counting.
+# "rsp_sq"     : W_ab = (RSP_a - RSP_b)^2   (MCS-motivated; default)
+# "rsp_abs"    : W_ab = |RSP_a - RSP_b|     (linear)
+# "density_sq" : W_ab = (rho_a - rho_b)^2   (classical)
+# Uses the Schneider 24-class decomposition
+# (src/processing/tissue_decomposition.py).
+isi_severity_mode: rsp_sq
 
 # ── Gamma pass rate ────────────────────────────────────────
 gamma_params:

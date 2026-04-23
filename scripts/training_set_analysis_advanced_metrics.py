@@ -65,6 +65,7 @@ from src.metrics.classic import (
     calculate_rmse,
 )
 from src.metrics.gamma_pass_rate import gamma_index_torch
+from src.processing.interface_severity import interface_severity
 from src.processing.pflugfelder_hi import pflugfelder_hi
 from src.utils.scallers import inverse_minmax
 from src.utils.unit_conversions import to_gy
@@ -759,6 +760,21 @@ def extract_all_samples(
         record.wepl_mean = hi_result["wepl_mean"]
         record.wepl_std = hi_result["wepl_std"]
 
+        # ── Interface Severity Index (Schneider 24-class) ───────────
+        isi_result = interface_severity(
+            ct_hu,
+            flux,
+            gt_dose,
+            resolution_mm=config.resolution,
+            severity_mode=config.isi_severity_mode,
+            sphere_radius_mm=config.sphere_radius_mm,
+            flux_threshold_frac=config.flux_threshold_frac,
+        )
+        record.isi_sum = isi_result["isi_sum"]
+        record.isi_max = isi_result["isi_max"]
+        record.isi_mean = isi_result["isi_mean"]
+        record.isi_axial_sum = isi_result["isi_axial_sum"]
+
         # ── Model inference ──────────────────────────────────────
         x_tensor, energy_tensor, y_tensor = dataset[i]
         x_tensor = x_tensor.to(device)
@@ -861,6 +877,10 @@ def save_results_csv(results: list[SampleRecord], output_path: Path) -> None:
         "pflugfelder_hi",
         "wepl_mean_mm",
         "wepl_std_mm",
+        "isi_sum",
+        "isi_max",
+        "isi_mean",
+        "isi_axial_sum",
         "gpr_pct",
         "rde_pct",
         "extract_time_s",
@@ -898,6 +918,10 @@ def save_results_csv(results: list[SampleRecord], output_path: Path) -> None:
                     "pflugfelder_hi": f"{r.pflugfelder_hi:.6f}",
                     "wepl_mean_mm": f"{r.wepl_mean:.2f}",
                     "wepl_std_mm": f"{r.wepl_std:.2f}",
+                    "isi_sum": f"{r.isi_sum:.4f}",
+                    "isi_max": f"{r.isi_max:.4f}",
+                    "isi_mean": f"{r.isi_mean:.4f}",
+                    "isi_axial_sum": f"{r.isi_axial_sum:.4f}",
                     "gpr_pct": f"{r.gpr:.2f}",
                     "rde_pct": f"{r.rde:.4f}",
                     "extract_time_s": f"{r.extract_time:.4f}",
@@ -1303,6 +1327,30 @@ def generate_scatter_plots(
             "wepl_std",
             "#BCBD22",
         ),
+        (
+            "isi_sum",
+            r"ISI sum $(\Delta\mathrm{RSP})^2$ — BP sphere",
+            "isi_sum",
+            "#E377C2",
+        ),
+        (
+            "isi_max",
+            r"ISI max $(\Delta\mathrm{RSP})^2$ — BP sphere",
+            "isi_max",
+            "#7F7F7F",
+        ),
+        (
+            "isi_mean",
+            r"ISI mean $(\Delta\mathrm{RSP})^2$ — BP sphere",
+            "isi_mean",
+            "#1F77B4",
+        ),
+        (
+            "isi_axial_sum",
+            r"ISI axial sum $(\Delta\mathrm{RSP})^2$ — BP sphere",
+            "isi_axial_sum",
+            "#FF7F0E",
+        ),
     ]
 
     # ── Also include derived ratios ─────────────────────────────────────
@@ -1518,6 +1566,13 @@ def generate_energy_stratified_analysis(
         "mean_sobel_axial",
         "p95_sobel_bp",
         "sum_sobel_bp",
+        "pflugfelder_hi",
+        "wepl_mean",
+        "wepl_std",
+        "isi_sum",
+        "isi_max",
+        "isi_mean",
+        "isi_axial_sum",
         "hu_change_per_region",
         "hu_change_per_mm",
         "bp_range_mm",
@@ -1819,6 +1874,7 @@ def main(
     logger.info(f"Region method: {yaml_config.get('region_method', 'bp_range')}")
     logger.info(f"Sphere radius: {yaml_config.get('sphere_radius_mm', 10.0)} mm")
     logger.info(f"Sobel on raw CT: {yaml_config.get('sobel_use_raw', False)}")
+    logger.info(f"ISI severity mode: {yaml_config.get('isi_severity_mode', 'rsp_sq')}")
     logger.info("=" * 60)
 
     # ── Setup analysis configuration ────────────────────────────────────
@@ -1832,6 +1888,7 @@ def main(
     region_method = yaml_config.get("region_method", "bp_range")
     sphere_radius_mm = yaml_config.get("sphere_radius_mm", 10.0)
     sobel_use_raw = yaml_config.get("sobel_use_raw", False)
+    isi_severity_mode = yaml_config.get("isi_severity_mode", "rsp_sq")
     resolution = tuple(yaml_config.get("resolution", [2.0, 2.0, 2.0]))
 
     # Override gamma params from YAML if provided
@@ -1851,6 +1908,7 @@ def main(
         region_method=region_method,
         sphere_radius_mm=sphere_radius_mm,
         sobel_use_raw=sobel_use_raw,
+        isi_severity_mode=isi_severity_mode,
         resolution=resolution,
         gamma_params=gamma_params,
     )

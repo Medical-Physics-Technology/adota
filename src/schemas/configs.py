@@ -87,6 +87,9 @@ class AdvancedAnalysisConfig:
     sphere_radius_mm: float = 10.0
     # Whether to compute Sobel on raw CT (True) or smoothed CT (False)
     sobel_use_raw: bool = False
+    # Interface Severity Index — severity weighting mode
+    # ("rsp_sq", "rsp_abs", or "density_sq")
+    isi_severity_mode: str = "rsp_sq"
 
 
 # ── VLM-based analysis ──────────────────────────────────────────────────────
