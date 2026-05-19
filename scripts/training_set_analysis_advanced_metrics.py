@@ -28,7 +28,6 @@ import seaborn as sns
 import torch
 import typer
 import yaml
-from scipy.ndimage import sobel as ndimage_sobel
 from scipy.stats import pearsonr, spearmanr
 from tqdm import tqdm
 
@@ -51,22 +50,23 @@ from src.adota.utils import (
     count_total_parameters,
     load_model,
 )
-from src.figures.ct_visualizations import (
-    plot_ct_with_segmentation,
-    segment_hu,
-    smooth_ct,
+from src.figures.advanced_metrics import (
+    generate_beam_angle_figures,
+    generate_figures_for_selection,
 )
-from src.figures.single_beam import publication_figure
+from src.figures.ct_visualizations import segment_hu, smooth_ct
 from src.loaders.generator import H5PYGenerator
 from src.loaders.utils import validate_inputs
-from src.metrics.classic import (
-    calculate_pure_mape,
-    calculate_relative_dose_error,
-    calculate_rmse,
-)
+from src.metrics.classic import calculate_relative_dose_error
 from src.metrics.gamma_pass_rate import gamma_index_torch
+from src.metrics.sobel import (
+    compute_sobel_metrics,
+    compute_sobel_metrics_sphere,
+    compute_structure_tensor_metrics_sphere,
+)
 from src.processing.interface_severity import interface_severity
 from src.processing.pflugfelder_hi import pflugfelder_hi
+from src.utils.dose_grid_utils import estimate_bp_range
 from src.utils.scallers import inverse_minmax
 from src.utils.unit_conversions import to_gy
 
@@ -177,79 +177,6 @@ def extract_single_sample(
         extract_time=extract_time,
     )
     return record, ct_hu, flux_np, energy_mev, gt_dose
-
-
-# ── Bragg-peak range estimation ─────────────────────────────────────────────
-
-
-def estimate_bp_range(
-    ct_grid: np.ndarray,
-    dose_grid: np.ndarray,
-    proximal_fraction: float = 0.50,
-    fall_fraction: float = 0.10,
-) -> Tuple[float, float]:
-    """Estimate the depth range of the Bragg peak from a dose grid.
-
-    The algorithm works on the Integrated Depth Dose (IDD) -- the dose
-    summed over the lateral dimensions at each depth slice::
-
-        IDD[k] = dose_grid[k, :, :].sum()
-
-    **Proximal boundary (z_min)** -- walk backward from the Bragg-peak
-    maximum towards the entrance and find the first depth slice where
-    the IDD drops below ``proximal_fraction * IDD_max``.  This mirrors
-    the clinical definition of the proximal range (e.g. proximal R80
-    or R50) and is inherently robust against plateau noise because it
-    is anchored to the peak rather than the entrance.
-
-    **Distal boundary (z_max)** -- starting from the Bragg-peak
-    maximum, walk towards deeper depths until the IDD drops below
-    ``fall_fraction * IDD_max``.  This marks the distal fall-off.
-
-    Both boundaries are returned as **depth-slice indices** (float).
-    Multiply by the voxel spacing to convert to physical units.
-
-    Args:
-        ct_grid: 3-D CT volume ``(D, H, W)`` in HU (reserved for
-            future density-aware refinements; currently unused).
-        dose_grid: 3-D ground-truth dose grid ``(D, H, W)``.
-        proximal_fraction: Fraction of peak IDD used as the proximal
-            threshold when walking backward from the BP (default 50 %).
-        fall_fraction: Fraction of peak IDD used as the distal
-            threshold (default 10 %).
-
-    Returns:
-        ``(z_min, z_max)`` -- proximal and distal depth-slice indices
-        bounding the Bragg peak.  If the dose is effectively zero
-        everywhere, ``(0.0, 0.0)`` is returned.
-    """
-    # -- Integrated Depth Dose ------------------------------------------------
-    idd = dose_grid.sum(axis=(1, 2))  # (D,)
-
-    idd_max = idd.max()
-    if idd_max < 1e-9:
-        return 0.0, 0.0
-
-    bp_idx = int(np.argmax(idd))
-
-    # -- Proximal boundary: walk backward from BP -----------------------------
-    proximal_threshold = proximal_fraction * idd_max
-    z_min = 0.0  # fallback: entrance
-    for k in range(bp_idx, -1, -1):
-        if idd[k] < proximal_threshold:
-            z_min = float(k)
-            break
-
-    # -- Distal boundary: walk from BP towards exit ---------------------------
-    n_slices = len(idd)
-    fall_threshold = fall_fraction * idd_max
-    z_max = float(n_slices - 1)
-    for k in range(bp_idx, n_slices):
-        if idd[k] < fall_threshold:
-            z_max = float(k)
-            break
-
-    return z_min, z_max
 
 
 # ── Density region analysis ─────────────────────────────────────────────────
@@ -475,149 +402,6 @@ def compute_advanced_metrics(
     )
 
 
-def compute_sobel_metrics(
-    ct_hu: np.ndarray,
-    flux: np.ndarray,
-    z_min: float,
-    z_max: float,
-    flux_threshold_frac: float = 0.10,
-    sobel_percentile: float = 95.0,
-) -> dict:
-    """Compute 3-D Sobel-based edge metrics in the Bragg-peak zone.
-
-    The CT volume is filtered with 3-D Sobel operators along each axis.
-    Gradient magnitudes are aggregated using the flux as a spatial
-    weight mask so that only edges traversed by the beam contribute.
-
-    Returns a dict with keys:
-        mean_sobel_axial  -- flux-weighted mean of |G_z| in BP zone.
-        p95_sobel_bp      -- 95th percentile of the total gradient
-                             magnitude among flux-weighted voxels.
-    """
-    k_start = int(np.ceil(z_min))
-    k_end = int(np.floor(z_max))
-
-    defaults = dict(mean_sobel_axial=0.0, p95_sobel_bp=0.0, sum_sobel_bp=0.0)
-    if k_end <= k_start:
-        return defaults
-
-    # -- 3-D Sobel on the full CT volume (cheap: ~ms for 160x30x30) -------
-    g_z = ndimage_sobel(ct_hu, axis=0)  # axial
-    g_y = ndimage_sobel(ct_hu, axis=1)
-    g_x = ndimage_sobel(ct_hu, axis=2)
-    grad_mag = np.sqrt(g_z**2 + g_y**2 + g_x**2)
-
-    # -- Restrict to BP zone ----------------------------------------------
-    g_z_bp = np.abs(g_z[k_start : k_end + 1])  # (N, H, W)
-    grad_mag_bp = grad_mag[k_start : k_end + 1]  # (N, H, W)
-    flux_bp = np.abs(flux[k_start : k_end + 1])  # (N, H, W)
-
-    # -- Build flux weight mask (per-slice 10% threshold) -----------------
-    weights = np.zeros_like(flux_bp)
-    for i in range(flux_bp.shape[0]):
-        f_max = flux_bp[i].max()
-        if f_max < 1e-12:
-            continue
-        mask = flux_bp[i] >= flux_threshold_frac * f_max
-        weights[i][mask] = flux_bp[i][mask]
-
-    w_sum = weights.sum()
-    if w_sum < 1e-12:
-        return defaults
-
-    # -- mean_sobel_axial: flux-weighted mean of |G_z| --------------------
-    mean_sobel_axial = float(np.sum(weights * g_z_bp) / w_sum)
-
-    # -- p95_sobel_bp: 95th percentile of grad magnitude (weighted) -------
-    #    Collect gradient magnitudes at voxels with non-zero weight.
-    active = weights > 0
-    if active.sum() == 0:
-        return defaults
-    active_grads = grad_mag_bp[active]
-    p95_sobel_bp = float(np.percentile(active_grads, sobel_percentile))
-    sum_sobel_bp = float(np.sum(active_grads))
-
-    return dict(
-        mean_sobel_axial=mean_sobel_axial,
-        p95_sobel_bp=p95_sobel_bp,
-        sum_sobel_bp=sum_sobel_bp,
-    )
-
-
-def compute_sobel_metrics_sphere(
-    ct_hu: np.ndarray,
-    gt_dose: np.ndarray,
-    radius_mm: float,
-    resolution: tuple,
-    flux: np.ndarray,
-    flux_threshold_frac: float = 0.10,
-    sobel_percentile: float = 95.0,
-) -> dict:
-    """Compute 3-D Sobel metrics inside a sphere around the Bragg peak.
-
-    The Bragg peak is located from the ground-truth dose grid.  A
-    spherical neighbourhood of the given radius (in mm) is extracted
-    and the 3-D Sobel gradient magnitude is computed on the raw CT.
-
-    Returns a dict with keys:
-        mean_sobel_axial  -- mean of |G_z| inside the sphere.
-        p95_sobel_bp      -- percentile of gradient magnitude inside sphere.
-        sum_sobel_bp      -- sum of gradient magnitudes inside sphere.
-    """
-    D, H, W = ct_hu.shape
-    dz, dy, dx = resolution
-
-    # Locate Bragg peak from dose
-    idd = gt_dose.sum(axis=(1, 2))
-    bp_k = int(np.argmax(idd))
-    # Lateral BP position from dose at BP depth
-    dose_bp_slice = gt_dose[bp_k]
-    if dose_bp_slice.max() > 1e-9:
-        bp_y = int(np.argmax(dose_bp_slice.max(axis=1)))
-        bp_x = int(np.argmax(dose_bp_slice.max(axis=0)))
-    else:
-        bp_y, bp_x = H // 2, W // 2
-
-    # Build sphere mask
-    rz = int(np.ceil(radius_mm / dz))
-    ry = int(np.ceil(radius_mm / dy))
-    rx = int(np.ceil(radius_mm / dx))
-
-    z_lo, z_hi = max(0, bp_k - rz), min(D, bp_k + rz + 1)
-    y_lo, y_hi = max(0, bp_y - ry), min(H, bp_y + ry + 1)
-    x_lo, x_hi = max(0, bp_x - rx), min(W, bp_x + rx + 1)
-
-    zz, yy, xx = np.mgrid[z_lo:z_hi, y_lo:y_hi, x_lo:x_hi]
-    dist_sq = (
-        ((zz - bp_k) * dz) ** 2 + ((yy - bp_y) * dy) ** 2 + ((xx - bp_x) * dx) ** 2
-    )
-    sphere_mask = dist_sq <= radius_mm**2
-
-    defaults = dict(mean_sobel_axial=0.0, p95_sobel_bp=0.0, sum_sobel_bp=0.0)
-    if sphere_mask.sum() == 0:
-        return defaults
-
-    # 3-D Sobel on raw CT
-    g_z = ndimage_sobel(ct_hu, axis=0)
-    g_y = ndimage_sobel(ct_hu, axis=1)
-    g_x = ndimage_sobel(ct_hu, axis=2)
-    grad_mag = np.sqrt(g_z**2 + g_y**2 + g_x**2)
-
-    # Extract values inside sphere
-    g_z_sphere = np.abs(g_z[z_lo:z_hi, y_lo:y_hi, x_lo:x_hi])[sphere_mask]
-    grad_sphere = grad_mag[z_lo:z_hi, y_lo:y_hi, x_lo:x_hi][sphere_mask]
-
-    mean_sobel_axial = float(np.mean(g_z_sphere))
-    p95_sobel_bp = float(np.percentile(grad_sphere, sobel_percentile))
-    sum_sobel_bp = float(np.sum(grad_sphere))
-
-    return dict(
-        mean_sobel_axial=mean_sobel_axial,
-        p95_sobel_bp=p95_sobel_bp,
-        sum_sobel_bp=sum_sobel_bp,
-    )
-
-
 def extract_all_samples(
     model: DoTA3D_v3,
     record_ids: list,
@@ -748,6 +532,22 @@ def extract_all_samples(
         record.p95_sobel_bp = sobel["p95_sobel_bp"]
         record.sum_sobel_bp = sobel["sum_sobel_bp"]
 
+        # ── Structure-tensor Sobel metrics (DW and TH) ──────────────────
+        st = compute_structure_tensor_metrics_sphere(
+            ct_for_sobel,
+            gt_dose,
+            radius_mm=config.sphere_radius_mm,
+            resolution=config.resolution,
+        )
+        record.sobel_dw_mean = st["sobel_dw_mean"]
+        record.sobel_dw_anisotropy = st["sobel_dw_anisotropy"]
+        record.sobel_dw_beam_angle = st["sobel_dw_beam_angle"]
+        record.sobel_dw_edge_energy = st["sobel_dw_edge_energy"]
+        record.sobel_th_mean = st["sobel_th_mean"]
+        record.sobel_th_anisotropy = st["sobel_th_anisotropy"]
+        record.sobel_th_beam_angle = st["sobel_th_beam_angle"]
+        record.sobel_th_edge_energy = st["sobel_th_edge_energy"]
+
         # ── Pflugfelder (2007) heterogeneity index ──────────────────
         hi_result = pflugfelder_hi(
             ct_hu,
@@ -874,6 +674,14 @@ def save_results_csv(results: list[SampleRecord], output_path: Path) -> None:
         "mean_sobel_axial",
         "p95_sobel_bp",
         "sum_sobel_bp",
+        "sobel_dw_mean",
+        "sobel_dw_anisotropy",
+        "sobel_dw_beam_angle",
+        "sobel_dw_edge_energy",
+        "sobel_th_mean",
+        "sobel_th_anisotropy",
+        "sobel_th_beam_angle",
+        "sobel_th_edge_energy",
         "pflugfelder_hi",
         "wepl_mean_mm",
         "wepl_std_mm",
@@ -915,6 +723,14 @@ def save_results_csv(results: list[SampleRecord], output_path: Path) -> None:
                     "mean_sobel_axial": f"{r.mean_sobel_axial:.2f}",
                     "p95_sobel_bp": f"{r.p95_sobel_bp:.2f}",
                     "sum_sobel_bp": f"{r.sum_sobel_bp:.2f}",
+                    "sobel_dw_mean": f"{r.sobel_dw_mean:.4f}",
+                    "sobel_dw_anisotropy": f"{r.sobel_dw_anisotropy:.4f}",
+                    "sobel_dw_beam_angle": f"{r.sobel_dw_beam_angle:.2f}",
+                    "sobel_dw_edge_energy": f"{r.sobel_dw_edge_energy:.4e}",
+                    "sobel_th_mean": f"{r.sobel_th_mean:.4f}",
+                    "sobel_th_anisotropy": f"{r.sobel_th_anisotropy:.4f}",
+                    "sobel_th_beam_angle": f"{r.sobel_th_beam_angle:.2f}",
+                    "sobel_th_edge_energy": f"{r.sobel_th_edge_energy:.4e}",
                     "pflugfelder_hi": f"{r.pflugfelder_hi:.6f}",
                     "wepl_mean_mm": f"{r.wepl_mean:.2f}",
                     "wepl_std_mm": f"{r.wepl_std:.2f}",
@@ -929,230 +745,6 @@ def save_results_csv(results: list[SampleRecord], output_path: Path) -> None:
             )
 
     logger.info(f"Results CSV saved to {output_path}")
-
-
-# ── Figure generation for selected samples ──────────────────────────────────
-
-
-def _generate_figures_for_records(
-    model: DoTA3D_v3,
-    records: list[SampleRecord],
-    record_ids: list,
-    dataset: H5PYGenerator,
-    config: AnalysisConfig,
-    device: torch.device,
-    output_dir: Path,
-    category_label: str,
-) -> None:
-    """Generate CT segmentation and publication figures for a list of records.
-
-    Both figure types are saved into *output_dir*.
-
-    Args:
-        model: The loaded DoTA model.
-        records: SampleRecord objects to plot.
-        record_ids: Ordered list of record IDs matching the dataset.
-        dataset: The H5PYGenerator dataset.
-        config: Analysis configuration.
-        device: Target device for computation.
-        output_dir: Directory where figures are stored.
-        category_label: Human-readable label for logging (e.g. "worst_gpr").
-    """
-    output_dir.mkdir(parents=True, exist_ok=True)
-    id_to_idx: dict[str, int] = {rid: i for i, rid in enumerate(record_ids)}
-    scale = config.scale
-
-    for record in tqdm(records, desc=f"Figures ({category_label})"):
-        sample_idx = id_to_idx.get(record.sample_id)
-        if sample_idx is None:
-            logger.warning(
-                f"Sample {record.sample_id} not found in dataset -- skipping"
-            )
-            continue
-
-        # Reload data
-        x, energy, y = dataset[sample_idx]
-        x = x.to(device)
-        energy = energy.to(device)
-        y = y.to(device)
-
-        # De-normalise CT and dose
-        ct_norm = x[0].cpu().numpy()
-        ct_hu = inverse_minmax(ct_norm, scale["min_ct"], scale["max_ct"])
-        flux_np = x[1].cpu().numpy()
-
-        gt_dose_norm = y.cpu().numpy()
-        gt_dose = inverse_minmax(
-            gt_dose_norm if gt_dose_norm.ndim == 4 else gt_dose_norm[np.newaxis],
-            scale["min_ds"],
-            scale["max_ds"],
-        ).squeeze()
-
-        # Re-estimate BP range for figure annotation
-        z_min, z_max = estimate_bp_range(
-            ct_hu,
-            gt_dose,
-            proximal_fraction=config.proximal_fraction,
-            fall_fraction=config.fall_fraction,
-        )
-        voxel_spacing_mm = config.resolution[0]
-
-        # ── CT segmentation figure ──────────────────────────────────
-        ct_hu_smooth = smooth_ct(
-            ct_hu, method=config.smoothing_method, sigma=config.smoothing_sigma
-        )
-
-        g_z_raw = ndimage_sobel(ct_hu, axis=0)
-        g_y_raw = ndimage_sobel(ct_hu, axis=1)
-        g_x_raw = ndimage_sobel(ct_hu, axis=2)
-        sobel_mag_raw = np.sqrt(g_z_raw**2 + g_y_raw**2 + g_x_raw**2)
-
-        g_z = ndimage_sobel(ct_hu_smooth, axis=0)
-        g_y = ndimage_sobel(ct_hu_smooth, axis=1)
-        g_x = ndimage_sobel(ct_hu_smooth, axis=2)
-        sobel_mag = np.sqrt(g_z**2 + g_y**2 + g_x**2)
-
-        fig_path = output_dir / f"{record.sample_id}_ct_seg.png"
-        plot_ct_with_segmentation(
-            ct_hu_smooth,
-            record.sample_id,
-            fig_path,
-            ct_hu_unsmoothed=ct_hu,
-            gt_dose=gt_dose,
-            bp_range_slices=(z_min, z_max),
-            voxel_spacing_mm=voxel_spacing_mm,
-            sobel_magnitude=sobel_mag,
-            sobel_magnitude_raw=sobel_mag_raw,
-        )
-
-        # ── Publication figure (GT vs prediction) ───────────────────
-        with torch.no_grad():
-            y_pred = model(x.unsqueeze(0), energy.unsqueeze(0))[0]
-
-        y_np = inverse_minmax(
-            y.unsqueeze(0).detach().cpu().numpy(),
-            scale["min_ds"],
-            scale["max_ds"],
-        )
-        y_pred_np = inverse_minmax(
-            y_pred.detach().cpu().numpy(),
-            scale["min_ds"],
-            scale["max_ds"],
-        )
-
-        gt_sq = y_np.squeeze()
-        pred_sq = y_pred_np.squeeze()
-        rmse = calculate_rmse(to_gy(pred_sq), to_gy(gt_sq))
-        mask = gt_sq > 0.1 * np.max(gt_sq)
-        mape = calculate_pure_mape(gt_sq[mask], pred_sq[mask])
-
-        x_input = x.squeeze().cpu().numpy()  # (2, D, H, W)
-        pub_path = output_dir / f"{record.sample_id}_E{record.energy_mev:.2f}MeV.svg"
-
-        publication_figure(
-            x_input,
-            record.energy_mev,
-            gt_sq,
-            pred_sq,
-            str(pub_path),
-            rmse,
-            mape,
-            record.gpr,
-            gamma_params=config.gamma_params,
-            beamlet_shape=True,
-        )
-
-        logger.info(
-            f"[{category_label}] Figures saved for {record.sample_id}: "
-            f"GPR={record.gpr:.2f}%, pflugfelder_hi={record.pflugfelder_hi:.4f}, "
-            f"sum_sobel_bp={record.sum_sobel_bp:.2f}"
-        )
-
-
-def generate_figures_for_selection(
-    model: DoTA3D_v3,
-    results: list[SampleRecord],
-    record_ids: list,
-    dataset: H5PYGenerator,
-    config: AnalysisConfig,
-    device: torch.device,
-    figures_dir: Path,
-    n_samples_requested: Optional[int],
-) -> None:
-    """Generate CT segmentation and publication figures for selected samples.
-
-    Generates figures for four categories of interest:
-    - 3 worst performing cases (lowest GPR)
-    - 3 best performing cases (highest GPR)
-    - 3 cases with the highest Pflugfelder heterogeneity index
-    - 3 cases with the highest sum_sobel_bp
-
-    Each category gets its own subdirectory under ``publications/``.
-
-    Args:
-        model: The loaded DoTA model.
-        results: List of SampleRecord objects (with metrics populated).
-        record_ids: Ordered list of record IDs matching the dataset.
-        dataset: The H5PYGenerator dataset.
-        config: Analysis configuration.
-        device: Target device for computation.
-        figures_dir: Output directory for figures.
-        n_samples_requested: The n_samples value from the config/CLI.
-    """
-    publications_dir = figures_dir / "publications"
-    publications_dir.mkdir(parents=True, exist_ok=True)
-
-    # ── 3 worst GPR (lowest) ────────────────────────────────────────────
-    sorted_by_gpr_asc = sorted(results, key=lambda r: r.gpr)
-    worst_gpr = sorted_by_gpr_asc[:3]
-    logger.info("3 worst GPR cases:")
-    for rank, r in enumerate(worst_gpr):
-        logger.info(f"  #{rank+1}: {r.sample_id}  GPR={r.gpr:.2f}%")
-
-    # ── 3 best GPR (highest) ────────────────────────────────────────────
-    best_gpr = sorted_by_gpr_asc[-3:][::-1]
-    logger.info("3 best GPR cases:")
-    for rank, r in enumerate(best_gpr):
-        logger.info(f"  #{rank+1}: {r.sample_id}  GPR={r.gpr:.2f}%")
-
-    # ── 3 highest Pflugfelder HI ────────────────────────────────────────
-    sorted_by_phi = sorted(results, key=lambda r: r.pflugfelder_hi, reverse=True)
-    top_phi = sorted_by_phi[:3]
-    logger.info("3 highest pflugfelder_hi cases:")
-    for rank, r in enumerate(top_phi):
-        logger.info(
-            f"  #{rank+1}: {r.sample_id}  pflugfelder_hi={r.pflugfelder_hi:.4f}"
-        )
-
-    # ── 3 highest sum_sobel_bp ──────────────────────────────────────────
-    sorted_by_sobel = sorted(results, key=lambda r: r.sum_sobel_bp, reverse=True)
-    top_sobel = sorted_by_sobel[:3]
-    logger.info("3 highest sum_sobel_bp cases:")
-    for rank, r in enumerate(top_sobel):
-        logger.info(f"  #{rank+1}: {r.sample_id}  sum_sobel_bp={r.sum_sobel_bp:.2f}")
-
-    # ── Generate figures for each category ──────────────────────────────
-    categories = [
-        ("worst_gpr", worst_gpr),
-        ("best_gpr", best_gpr),
-        ("highest_pflugfelder_hi", top_phi),
-        ("highest_sum_sobel", top_sobel),
-    ]
-
-    for category_name, selected in categories:
-        cat_dir = publications_dir / category_name
-        _generate_figures_for_records(
-            model=model,
-            records=selected,
-            record_ids=record_ids,
-            dataset=dataset,
-            config=config,
-            device=device,
-            output_dir=cat_dir,
-            category_label=category_name,
-        )
-
-    logger.info("Figure generation complete")
 
 
 # ── Summary ─────────────────────────────────────────────────────────────────
@@ -1350,6 +942,56 @@ def generate_scatter_plots(
             r"ISI axial sum $(\Delta\mathrm{RSP})^2$ — BP sphere",
             "isi_axial_sum",
             "#FF7F0E",
+        ),
+        # ── Structure-tensor metrics (Method DW) ──────────────────────────
+        (
+            "sobel_dw_mean",
+            r"DW mean Sobel $|\mathbf{g}|$ [HU/vox]",
+            "sobel_dw_mean",
+            "#1F77B4",
+        ),
+        (
+            "sobel_dw_anisotropy",
+            r"DW edge anisotropy $A$",
+            "sobel_dw_anisotropy",
+            "#FF7F0E",
+        ),
+        (
+            "sobel_dw_beam_angle",
+            r"DW beam-edge angle $\theta$ [$^\circ$]",
+            "sobel_dw_beam_angle",
+            "#2CA02C",
+        ),
+        (
+            "sobel_dw_edge_energy",
+            r"DW edge energy tr$(J_{dw})$",
+            "sobel_dw_edge_energy",
+            "#D62728",
+        ),
+        # ── Structure-tensor metrics (Method TH) ──────────────────────────
+        (
+            "sobel_th_mean",
+            r"TH mean Sobel $|\mathbf{g}|$ [HU/vox]",
+            "sobel_th_mean",
+            "#9467BD",
+        ),
+        (
+            "sobel_th_anisotropy",
+            r"TH edge anisotropy $A$",
+            "sobel_th_anisotropy",
+            "#8C564B",
+        ),
+        (
+            "sobel_th_beam_angle",
+            r"TH beam-edge angle $\theta$ [$^\circ$]",
+            "sobel_th_beam_angle",
+            "#E377C2",
+        ),
+        (
+            "sobel_th_edge_energy",
+            r"TH edge energy tr$(J_{th})$",
+            "sobel_th_edge_energy",
+            "#7F7F7F",
         ),
     ]
 
@@ -1573,6 +1215,14 @@ def generate_energy_stratified_analysis(
         "isi_max",
         "isi_mean",
         "isi_axial_sum",
+        "sobel_dw_mean",
+        "sobel_dw_anisotropy",
+        "sobel_dw_beam_angle",
+        "sobel_dw_edge_energy",
+        "sobel_th_mean",
+        "sobel_th_anisotropy",
+        "sobel_th_beam_angle",
+        "sobel_th_edge_energy",
         "hu_change_per_region",
         "hu_change_per_mm",
         "bp_range_mm",
@@ -2014,6 +1664,17 @@ def main(
         device=device,
         figures_dir=figures_dir,
         n_samples_requested=n_samples,
+    )
+
+    # ── Generate figures for extreme beam-angle cases ──────────────
+    generate_beam_angle_figures(
+        model=model,
+        results=results,
+        record_ids=record_ids,
+        dataset=dataset,
+        config=analysis_config,
+        device=device,
+        figures_dir=figures_dir,
     )
 
     # ── Generate scatter plots ──────────────────────────────────────

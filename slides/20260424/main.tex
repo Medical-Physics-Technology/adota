@@ -40,9 +40,9 @@
 \graphicspath{{figures/}}
 
 % ── Meta ────────────────────────────────────────────────────
-\title[ADoTA Heterogeneity Analysis]{Full-Database Heterogeneity Validation\\[4pt]
-{\small Sphere Region Method, Pflugfelder HI \& WEPL
-($n = 69\,295$, $r = \SI{15}{mm}$)}}
+\title[ADoTA Heterogeneity Analysis]{Weekly Update: Full-Database Heterogeneity Validation\\[4pt]
+{\small Sphere region method, Pflugfelder HI \& WEPL
+($n = 69\,295$, default $r = \SI{15}{mm}$)}}
 \author[M.~Stryja]{Mikołaj Stryja}
 \institute{Department of Radiation Science \& Technology}
 \date{24 April 2026}
@@ -58,33 +58,42 @@
 % ── Outline ─────────────────────────────────────────────────
 \begin{frame}{Outline}
   \tableofcontents
+
+  \vspace{6pt}
+  {\small
+  \textbf{Main message}: the full-database run confirms last week's signal,
+  the sphere method is stable, and \textbf{$r = \SI{15}{mm}$} is the current
+  working choice.}
 \end{frame}
 
 % ════════════════════════════════════════════════════════════
 \section{Recap \& New Approach}
 % ════════════════════════════════════════════════════════════
 
-\begin{frame}{Recap \& New Approach}
+\begin{frame}{Recap \& This Week's Goal}
   \textbf{Last week} ($n = 3\,950$):
-  Spherical neighbourhood around BP $\rightarrow$
-  six advanced HU metrics + 3-D Sobel edge metrics,
-  correlated against GPR.
+  local heterogeneity around the Bragg peak correlated meaningfully with GPR.
   Best predictor: $S_{95,\text{BP}}$
   (Spearman $\rho = {-0.391}$).
 
   \vspace{6pt}
-  \textbf{This week: three major developments}
+  \textbf{This week: three developments}
   \begin{enumerate}
     \item \textbf{Full-database scale-up}: run on the complete ADoTA
           training set ($n = 69\,295$ beamlets, $18\times$ larger).
     \item \textbf{Sphere region method}: replace the variable-length
           BP-range extraction with a \emph{fixed} sphere of radius
           $r$ centred on the Bragg-peak voxel.
-          Two radii tested: $r = \SI{15}{mm}$ (complete) and
-          $r = \SI{5}{mm}$ (in progress).
+          Two radii tested: $r = \SI{15}{mm}$ and
+          $r = \SI{5}{mm}$ (both completed).
     \item \textbf{New metrics}: Pflugfelder heterogeneity index (HI)
           and Water-Equivalent Path Length (WEPL) mean \& std.
   \end{enumerate}
+
+  \vspace{4pt}
+  \textbf{Goal of today's update}: show whether the signal survives
+  scale-up, whether energy is a confounder, and which sphere radius
+  should become the default.
 
   \vspace{4pt}
   {\small Dataset: $n = 69\,295$ beamlets from the ADoTA training set,
@@ -95,34 +104,36 @@
 \section{Sphere Region Method}
 % ════════════════════════════════════════════════════════════
 
-\begin{frame}[shrink=8]{Methodology Change: Sphere Region}
+\begin{frame}{Methodology Change: Sphere Region}
   \begin{columns}[T]
     \begin{column}{0.50\textwidth}
+      {\footnotesize
       \textbf{Previous (BP-range method):}
-      \begin{itemize}
-        \item Proximal boundary $z_{\min}$: walk backward from BP
-              to where $\text{IDD} < 0.50\,\text{IDD}_{\max}$.
-        \item Distal boundary $z_{\max}$: walk forward to
+      \begin{itemize}\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}
+        \item Proximal $z_{\min}$: walk back from BP until
+              $\text{IDD} < 0.50\,\text{IDD}_{\max}$.
+        \item Distal $z_{\max}$: walk forward until
               $\text{IDD} < 0.10\,\text{IDD}_{\max}$.
         \item Region spans all slices in $[z_{\min}, z_{\max}]$.
-        \item \textit{Variable length}: shallow beams $\approx\SI{10}{mm}$,
-              deep beams $\approx\SI{50}{mm}$.
+        \item \textit{Variable length}: shallow $\approx\SI{10}{mm}$,
+              deep $\approx\SI{50}{mm}$.
       \end{itemize}
 
-      \vspace{3pt}
       \textbf{New (sphere method):}
-      \begin{itemize}
+      \begin{itemize}\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}
         \item Locate BP voxel $(k^*, y^*, x^*)$ from
               $\arg\max_k \text{IDD}[k]$ and lateral dose peak.
         \item Include all voxels within distance $r$ of BP:
               \begin{equation*}
-                \Omega_r = \bigl\{(k,y,x) \;\big|\;
-                \|\mathbf{p} - \mathbf{p}^*\|_{\mathrm{mm}} \leq r\bigr\}
+                \Omega_r = \bigl\{(k,y,x) : \|\mathbf{p} - \mathbf{p}^*\|_{\mathrm{mm}} \leq r\bigr\}
               \end{equation*}
-              where $\mathbf{p} = (k\Delta z, y\Delta y, x\Delta x)$.
-        \item \textit{Fixed geometry}: radius $r$ is a single
+              with $\mathbf{p} = (k\Delta z, y\Delta y, x\Delta x)$.
+        \item Compute 3-D Sobel on full CT grid, then mask
+              with $\Omega_r$ for sphere-based aggregation.
+        \item \textit{Fixed geometry}: $r$ is a single
               hyperparameter; independent of beam energy.
       \end{itemize}
+      }
     \end{column}
     \begin{column}{0.46\textwidth}
       \begin{center}
@@ -134,15 +145,15 @@
         scale=0.95
       ]
         \node[box] (bp)   {Locate BP voxel $(k^*,y^*,x^*)$};
-        \node[box, below=4pt of bp] (sph)
-          {Build sphere $\Omega_r$};
-        \node[box, below=4pt of sph] (sob)
-          {3-D Sobel on $\Omega_r$};
-        \node[box, below=4pt of sob] (met)
-          {Metrics: $\bar{S}$, $S_{95}$, $\Sigma S$, HU stats};
-        \draw[arr] (bp) -- (sph);
-        \draw[arr] (sph) -- (sob);
-        \draw[arr] (sob) -- (met);
+        \node[box, below=4pt of bp] (sob)
+          {3-D Sobel on full CT grid};
+        \node[box, below=4pt of sob] (sph)
+          {Mask Sobel field with sphere $\Omega_r$};
+        \node[box, below=4pt of sph] (met)
+          {Aggregate metrics: $\bar{S}$, $S_{95}$, $\Sigma S$, HU stats};
+        \draw[arr] (bp) -- (sob);
+        \draw[arr] (sob) -- (sph);
+        \draw[arr] (sph) -- (met);
       \end{tikzpicture}
       \end{center}
 
@@ -222,11 +233,36 @@
   \end{columns}
 \end{frame}
 
+\begin{frame}{HU $\rightarrow$ Material Composition $\rightarrow$ Density}
+  \vspace{-2pt}
+  {\footnotesize
+  Schneider calibration is applied voxel-wise to map CT numbers to
+  material class and physical density, which then drives the downstream
+  RSP/WEPL calculations. The two examples below illustrate the same
+  conversion pipeline for a high-energy and a low-energy beamlet.}
+
+  \vspace{2pt}
+  \begin{columns}[T]
+    \begin{column}{0.49\textwidth}
+      \begin{center}
+        \includegraphics[width=\textwidth,height=0.55\textheight,keepaspectratio]{sample_6260_E161MeV_hu_material_density.png}\\[2pt]
+        {\scriptsize Example 1: sample 6260}
+      \end{center}
+    \end{column}
+    \begin{column}{0.49\textwidth}
+      \begin{center}
+        \includegraphics[width=\textwidth,height=0.55\textheight,keepaspectratio]{sample_54291_E85MeV_hu_material_density.png}\\[2pt]
+        {\scriptsize Example 2: sample 54291}
+      \end{center}
+    \end{column}
+  \end{columns}
+\end{frame}
+
 % ════════════════════════════════════════════════════════════
 \section{Results: Full Database}
 % ════════════════════════════════════════════════════════════
 
-\begin{frame}{Dataset \& Model Inference ($n = 69\,295$)}
+\begin{frame}{Scale-Up Completed: Dataset \& Model Inference}
   \begin{columns}[T]
     \begin{column}{0.48\textwidth}
       \textbf{Dataset:}
@@ -264,21 +300,24 @@
           \bottomrule
         \end{tabular}
       \end{center}
-      {\small Pattern from last week confirmed at 18$\times$ scale:
-      lower energies show larger GPR variance.}
+      {\small \textbf{Takeaway}: the 18$\times$ larger run preserves the
+      same broad pattern as last week: lower-energy beamlets show larger
+      GPR variance and therefore more room for heterogeneity effects to appear.}
     \end{column}
   \end{columns}
 \end{frame}
 
-\begin{frame}[shrink=5]{Overall Correlation Ranking ($n = 69\,295$, $r = \SI{15}{mm}$)}
+\begin{frame}{Overall Correlation Ranking ($n = 69\,295$, $r = \SI{15}{mm}$)}
   \begin{columns}[T]
     \begin{column}{0.44\textwidth}
       \vspace{-4pt}
       \includegraphics[width=\textwidth]{correlation_ranking.png}
     \end{column}
     \begin{column}{0.54\textwidth}
-      \vspace{-2pt}
-      {\small
+      \vspace{-4pt}
+      {\scriptsize
+      \setlength{\tabcolsep}{4pt}
+      \renewcommand{\arraystretch}{0.95}
       \begin{tabular}{lrr}
         \toprule
         \textbf{Metric} & \textbf{Spearman} & \textbf{Pearson} \\
@@ -301,13 +340,14 @@
       \end{tabular}
       }
 
-      \vspace{4pt}
-      {\small All $p \approx 0$.  \textbf{Bold}: new metric.
-      Spearman $\gg$ Pearson confirms monotonic but non-linear
+      \vspace{2pt}
+      {\scriptsize All $p \approx 0$.  \textbf{Bold}: new metric.
+      Spearman $\gg$ Pearson $\Rightarrow$ monotonic but non-linear
       relationships.\\
-      \textbf{Key shift}: $\Sigma S_{\text{BP}}$ (sum Sobel) now leads
-      instead of $S_{95,\text{BP}}$ — Sobel aggregation changes with
-      sphere geometry.}
+      \textbf{Takeaway}: Sobel-based heterogeneity remains the strongest
+      family of predictors after scale-up. The change from
+      $S_{95,\text{BP}}$ to $\Sigma S_{\text{BP}}$ reflects the new
+      sphere geometry, not a loss of signal.}
     \end{column}
   \end{columns}
 \end{frame}
@@ -320,16 +360,16 @@
   \vspace{-6pt}
   {\small $\Sigma S_{\text{BP}}$ achieves Spearman $\rho = -0.385$
   (Pearson $r = -0.352$, $p \approx 0$, $n = 69\,295$).
-  Compare with last week: $S_{95,\text{BP}}$ led with $\rho = -0.391$
-  (BP-range, $n = 3\,950$).  Results are consistent across methods and
-  at $18\times$ larger scale.}
+  Practical interpretation: beamlets with stronger local edge content near
+  the Bragg peak tend to have worse GPR. The effect size is essentially
+  unchanged relative to last week's smaller experiment.}
 \end{frame}
 
 % ════════════════════════════════════════════════════════════
 \section{Energy-Stratified Analysis}
 % ════════════════════════════════════════════════════════════
 
-\begin{frame}{Motivation for Energy Stratification}
+\begin{frame}{Why Check Energy Stratification?}
   \textbf{Observation} (confirmed at full scale):
   lower-energy bins show greater GPR variance ($\sigma \approx 1.85\%$
   at 70--100\,MeV vs.\ $0.63\%$ at 190--220\,MeV).
@@ -339,7 +379,7 @@
   or are they confounded by beam energy?
 
   \vspace{8pt}
-  \textbf{Three complementary analyses} (same as last week, now at scale):
+  \textbf{Three complementary analyses}:
   \begin{enumerate}
     \item \textbf{Binned correlations}: Spearman $\rho$ within each
           \SI{30}{MeV} energy bin independently.
@@ -358,13 +398,14 @@
 
 \begin{frame}{Spearman Correlation by Energy Bin}
   \begin{center}
-    \includegraphics[height=0.74\textheight]{spearman_heatmap_by_energy.png}
+    \includegraphics[height=0.70\textheight]{spearman_heatmap_by_energy.png}
   \end{center}
-  \vspace{-6pt}
-  {\small Correlations are \textbf{strongest at low energies}.
+  \vspace{-8pt}
+  {\footnotesize \textbf{Takeaway}: correlations are strongest at low energies.
   70--100\,MeV: $|\rho| > 0.60$ for HU-change metrics and $> 0.48$
-  for Sobel metrics.  Above \SI{160}{MeV}, correlations largely vanish;
-  at 190--220\,MeV, $\rho \approx 0$ for most metrics.}
+  for Sobel metrics. Above \SI{160}{MeV}, correlations largely vanish.
+  This suggests the heterogeneity signal matters most in the clinically
+  harder low-energy regime.}
 \end{frame}
 
 \begin{frame}[shrink=3]{Energy-Coloured Scatter: Sum Sobel at BP}
@@ -405,9 +446,8 @@
       \vspace{6pt}
       {\small Raw and partial correlations differ by $|\Delta| < 0.04$:
       the heterogeneity--GPR association is \textbf{not confounded by
-      energy}. For $n_{\text{regions}}$ ($\Delta = {-0.041}$),
-      controlling for energy \emph{strengthens} the correlation,
-      mirroring last week's finding.}
+      energy}. Energy changes the variance structure, but it does not explain
+      away the metric--GPR relationship.}
     \end{column}
   \end{columns}
 \end{frame}
@@ -420,11 +460,23 @@
 \setbeamertemplate{footline}{}
 \begin{frame}[plain]{Worst-GPR Beamlet: \texttt{1f279484},
   \SI{120.67}{MeV}, GPR\,=\,57.22\,\%}
-  \vspace{-6pt}
-  \begin{center}
-    \includegraphics[width=\textwidth,height=0.84\textheight,keepaspectratio]%
-      {1f279484-7da5-4193-9fcb-0ac81c6bf1b6_ct_seg.png}
-  \end{center}
+  \vspace{-4pt}
+  \begin{columns}[T]
+    \begin{column}{0.50\textwidth}
+      \begin{center}
+        \includegraphics[width=\textwidth,height=0.82\textheight,keepaspectratio]%
+          {92669732-f19e-45e3-bf84-844f57e04133_ct_seg.png}\\
+        {\scriptsize CT \& tissue segmentation along the beam}
+      \end{center}
+    \end{column}
+    \begin{column}{0.50\textwidth}
+      \begin{center}
+        \includegraphics[width=\textwidth,height=0.82\textheight,keepaspectratio]%
+          {1f279484_dose.png}\\
+        {\scriptsize Dose: ground truth vs.\ ADoTA prediction}
+      \end{center}
+    \end{column}
+  \end{columns}
 \end{frame}
 }
 
@@ -432,11 +484,23 @@
 \setbeamertemplate{footline}{}
 \begin{frame}[plain]{Best-GPR Beamlet: \texttt{ffa7d740},
   \SI{93.87}{MeV}, GPR\,=\,100.00\,\%}
-  \vspace{-6pt}
-  \begin{center}
-    \includegraphics[width=\textwidth,height=0.84\textheight,keepaspectratio]%
-      {ffa7d740-9119-4f00-ad47-e818e0584544_ct_seg.png}
-  \end{center}
+  \vspace{-4pt}
+  \begin{columns}[T]
+    \begin{column}{0.50\textwidth}
+      \begin{center}
+        \includegraphics[width=\textwidth,height=0.82\textheight,keepaspectratio]%
+          {ffa7d740-9119-4f00-ad47-e818e0584544_ct_seg.png}\\
+        {\scriptsize CT \& tissue segmentation along the beam}
+      \end{center}
+    \end{column}
+    \begin{column}{0.50\textwidth}
+      \begin{center}
+        \includegraphics[width=\textwidth,height=0.82\textheight,keepaspectratio]%
+          {ffa7d740_dose.png}\\
+        {\scriptsize Dose: ground truth vs.\ ADoTA prediction}
+      \end{center}
+    \end{column}
+  \end{columns}
 \end{frame}
 }
 
@@ -444,7 +508,39 @@
 \section{Sphere Radius Sensitivity}
 % ════════════════════════════════════════════════════════════
 
-\begin{frame}[shrink=5]{Sphere Radius: \SI{15}{mm} vs \SI{5}{mm} ($n = 69\,295$)}
+\begin{frame}{$\Sigma S_{\text{BP}}$ vs.\ GPR: $r=\SI{15}{mm}$ vs $r=\SI{5}{mm}$}
+  \vspace{-6pt}
+  \begin{columns}[T]
+    \begin{column}{0.50\textwidth}
+      \begin{center}
+        \includegraphics[width=\textwidth,height=0.56\textheight,keepaspectratio]%
+          {sum_sobel_bp_vs_gpr_r15.png}\\[1pt]
+        {\footnotesize $r = \SI{15}{mm}$ \;
+        Spearman $\rho = -0.385$, Pearson $r = -0.352$}
+      \end{center}
+    \end{column}
+    \begin{column}{0.50\textwidth}
+      \begin{center}
+        \includegraphics[width=\textwidth,height=0.56\textheight,keepaspectratio]%
+          {sum_sobel_bp_vs_gpr_r5.png}\\[1pt]
+        {\footnotesize $r = \SI{5}{mm}$ \;
+        Spearman $\rho = -0.295$, Pearson $r = -0.272$}
+      \end{center}
+    \end{column}
+  \end{columns}
+
+  \vspace{2pt}
+  {\footnotesize \textbf{Why this matters}: at $r = \SI{5}{mm}$ the sphere
+  collapses to only $\sim$65 voxels and the dynamic range of
+  $\Sigma S_{\text{BP}}$ shrinks; the scatter compresses against the
+  left-hand axis $\Rightarrow$ a clear loss of monotonic separation against
+  GPR ($|\rho|$ drops by $23\%$ relative). The wider \SI{15}{mm} sphere
+  captures enough surrounding edge structure for $\Sigma S_{\text{BP}}$
+  to remain the strongest single predictor.
+  \textbf{This motivates $r = \SI{15}{mm}$ as the working default.}}
+\end{frame}
+
+\begin{frame}[shrink=5]{Sphere Radius Comparison: \SI{15}{mm} vs \SI{5}{mm}}
   \begin{columns}[T]
     \begin{column}{0.54\textwidth}
       \vspace{-2pt}
@@ -497,9 +593,12 @@
       \end{itemize}
 
       \vspace{4pt}
+      \textbf{Completed result}: the $r = \SI{5}{mm}$ experiment confirms
+      the same overall ranking, but with weaker Sobel-family performance.\\[4pt]
+
       \textbf{Recommendation}: adopt \textbf{$r = \SI{15}{mm}$} as
-      the default — strictly dominates $r = \SI{5}{mm}$ on
-      Sobel-family metrics, identical for everything else.
+      the default. It strictly dominates $r = \SI{5}{mm}$ on
+      Sobel-family metrics and is identical for everything else.
       Energy-stratified and partial-correlation patterns
       reproduce the 15 mm results (not shown for brevity).
     \end{column}
@@ -543,7 +642,25 @@
           $\rho_s = -0.385$ at $r = \SI{15}{mm}$ to $-0.295$ at
           $r = \SI{5}{mm}$ (a $23\%$ relative loss); HU and
           WEPL/Pflugfelder metrics are unchanged.
-          \textbf{Recommendation}: use $r = \SI{15}{mm}$.
+          \textbf{Recommendation}: use $r = \SI{15}{mm}$ as the default
+          for the next iteration.
+  \end{enumerate}
+\end{frame}
+
+\begin{frame}{Discussion Points for Today}
+  \begin{enumerate}
+    \item \textbf{Method choice}: proceed with the sphere method and
+          standardise on $r = \SI{15}{mm}$?
+
+    \vspace{6pt}
+    \item \textbf{Priority for next week}: should the focus be on
+          a stronger engineered metric (ISI / composite score) or on
+          the VLM proof-of-concept?
+
+    \vspace{6pt}
+    \item \textbf{Validation direction}: is the next most useful step
+          a held-out evaluation, or a clinical interpretation of the
+          worst-performing low-energy beamlets?
   \end{enumerate}
 \end{frame}
 
@@ -553,11 +670,11 @@
 
 \begin{frame}{Next Steps}
   \begin{enumerate}
-    \item \textbf{Interface Severity Index (ISI)} (in development):
+    \item \textbf{Interface Severity Index (ISI)}:
           per-class interface-pair severity matrix
           ($W_{ab} = (\Delta\mathrm{RSP})^2$) using the Schneider
           24-class decomposition, aggregated within the $r = \SI{15}{mm}$
-          BP sphere. First correlations expected next week.
+          BP sphere. This is the most direct next engineered metric.
 
     \vspace{6pt}
     \item \textbf{Composite difficulty score}: combine top metrics

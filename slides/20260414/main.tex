@@ -1,5 +1,5 @@
 % ═══════════════════════════════════════════════════════════════
-%  Research Group Presentation — 14 April 2026
+%  Research Group Presentation — 12 May 2026
 %  ADoTA: Angle-Dependent Dose Transformer Algorithm
 %  Current Results, Limitations, and the Case for Active Learning
 %  Author: Mikołaj Stryja
@@ -41,10 +41,10 @@
 
 % ── Meta ────────────────────────────────────────────────────
 \title[ADoTA]{ADoTA: Angle-Dependent Dose Transformer Algorithm\\[4pt]
-{\small Deep Learning Proton Dose Engine —\\Current Results, Limitations, and the Case for Active Learning}}
+{\small Deep Learning Proton Dose Engine:\\Current Results, Limitations, and the Case for Active Learning}}
 \author[M.~Stryja]{Mikołaj Stryja}
 \institute{Department of Radiation Science \& Technology, TU Delft}
-\date{14 April 2026}
+\date{May 12th, 2026}
 
 % ════════════════════════════════════════════════════════════
 \begin{document}
@@ -62,6 +62,125 @@
 % ════════════════════════════════════════════════════════════════
 \section{The Problem: Proton Dose Calculation}
 % ════════════════════════════════════════════════════════════════
+
+\begin{frame}{Why Proton Therapy?}
+  \begin{columns}[T]
+    \begin{column}{0.52\textwidth}
+      \vspace{-4pt}
+      \begin{center}
+        \includegraphics[width=\linewidth,height=0.62\textheight,keepaspectratio]{figures/Differential-depth-dose-distributions-of-photons-versus-protons-Photon-beams-have-the_W640.jpg}
+
+        \vspace{1pt}
+        {\tiny\color{gray}
+         Source: Deycmar et al., ResearchGate.
+         X-rays deposit maximum dose near the surface and irradiate
+         all tissue along the path; protons deliver a sharp Bragg peak
+         at depth and deposit near-zero dose beyond the target.}
+      \end{center}
+    \end{column}
+    \begin{column}{0.45\textwidth}
+      {\small\textbf{The physical advantage}}
+      \begin{itemize}\setlength{\itemsep}{1pt}\small
+        \item Protons stop abruptly at the \textbf{Bragg peak}, with
+              near-zero dose beyond the tumour.
+        \item Photons deposit their peak dose \emph{before} the target
+              and irradiate all tissue beyond it.
+        \item Result: \textbf{lower dose} to organs-at-risk (OAR),
+              enabling dose escalation or reduced toxicity.
+      \end{itemize}
+
+      \vspace{3pt}
+      {\small\textbf{The cost–sensitivity trade-off}}
+      \begin{itemize}\setlength{\itemsep}{1pt}\small
+        \item The steep Bragg peak makes dose \textbf{acutely sensitive}
+              to range, anatomy, and setup uncertainties.
+        \item Millimetre-level range errors can shift dose from tumour
+              to OAR, which motivates \textbf{fast, accurate} dose engines.
+      \end{itemize}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Treatment Planning Workflow in Proton Therapy}
+  \vspace{-8pt}
+  \begin{columns}[T]
+    \begin{column}{0.52\textwidth}
+      \centering
+      \begin{tikzpicture}[
+        fstep/.style={draw=tudelft, rounded corners=4pt,
+                     minimum width=5.0cm, minimum height=0.55cm,
+                     font=\scriptsize, text=tudelft, fill=tudelft!8,
+                     align=center, inner sep=3pt},
+        hilight/.style={draw=green!50!black, rounded corners=4pt,
+                     minimum width=5.0cm, minimum height=0.55cm,
+                     font=\scriptsize\bfseries, text=green!50!black,
+                     fill=green!6, align=center, inner sep=3pt},
+        adapt/.style={draw=orange!70!black, rounded corners=4pt,
+                     minimum width=5.0cm, minimum height=0.55cm,
+                     font=\scriptsize, text=orange!70!black, fill=orange!5,
+                     align=center, inner sep=3pt},
+        arr/.style={-{Stealth[length=4pt]}, thick, tudelft},
+        adaptarr/.style={-{Stealth[length=4pt]}, thick, orange!70!black}
+      ]
+        \node[fstep] (ct)
+              {\textbf{CT Scanning}};
+        \node[fstep, below=5pt of ct] (delin)
+              {\textbf{Structure Delineation}\\[-1pt]
+               {\tiny GTV $\subset$ CTV $\subset$ PTV;\; OARs contoured by clinician}};
+        \node[fstep, below=5pt of delin] (obj)
+              {\textbf{Clinical Objectives}\\[-1pt]
+               {\tiny patient-specific dose/volume goals for targets and OARs}};
+        \node[hilight, below=5pt of obj] (dij)
+              {\textbf{Spot Placement \& $d_{ij}$ Matrix Calculation}};
+        \node[fstep, below=5pt of dij] (opt)
+              {\textbf{Plan Optimisation}\\[-1pt]
+               {\tiny find $\{w_j\}$ satisfying clinical goals:\; $D_i = \sum_j d_{ij} w_j$}};
+        \node[fstep, below=5pt of opt] (qa)
+              {\textbf{Quality Assurance}};
+        \node[fstep, below=5pt of qa] (del)
+              {\textbf{Treatment Delivery}};
+        \node[adapt, below=8pt of del] (adapt)
+              {\textbf{Online Adaptation} (per fraction, DAPT)\\[-1pt]
+               {\tiny daily CT $\to$ re-segment $\to$ re-optimise $\to$ deliver}};
+        \draw[arr]             (ct)    -- (delin);
+        \draw[arr]             (delin) -- (obj);
+        \draw[arr]             (obj)   -- (dij);
+        \draw[arr]             (dij)   -- (opt);
+        \draw[arr]             (opt)   -- (qa);
+        \draw[arr]             (qa)    -- (del);
+        \draw[adaptarr]        (del)   -- (adapt);
+        \draw[adaptarr, dashed](adapt.east) -- ++(0.5,0) |- (dij.east);
+      \end{tikzpicture}
+    \end{column}
+    \begin{column}{0.45\textwidth}
+      \begin{block}{The dose influence matrix $d_{ij}$}
+        {\tiny
+        $d_{ij}$: dose in voxel $i$ from one unit of fluence of beamlet $j$.
+        The full dose field is $D_i = \sum_j d_{ij} w_j$,
+        where $w_j$ are the optimised beamlet weights.
+
+        \vspace{2pt}
+        Computing $d_{ij}$ for every beamlet, beam angle, and patient anatomy
+        is the \textbf{central computational bottleneck} of treatment planning.
+        For a plan with thousands of beamlets, this dominates total planning time.}
+      \end{block}
+
+      \vspace{2pt}
+      \begin{alertblock}{Online Adaptive Proton Therapy}
+        {\tiny
+        Albertini et al.\ (2024) reported the first clinical daily adaptive
+        proton therapy (DAPT) workflow: an in-room CT acquired each fraction,
+        plan re-optimised in under 7\,min with automated QA.
+        The adapted plan was delivered in 92\,\% of fractions, improving
+        OAR or target dose metrics vs.\ the non-adapted fallback.
+
+        \vspace{2pt}
+        Fast $d_{ij}$ computation is \textbf{the key enabling technology}
+        for making real-time adaptation clinically feasible.}
+      \end{alertblock}
+    \end{column}
+  \end{columns}
+\end{frame}
 
 \begin{frame}{Why Dose Calculation Matters}
   \begin{columns}[T]
@@ -84,11 +203,11 @@
     \begin{column}{0.42\textwidth}
       \begin{block}{Clinical context}
         \begin{itemize}\setlength{\itemsep}{2pt}
-          \item \textbf{Robust planning} — requires many uncertainty
+          \item \textbf{Robust planning}: requires many uncertainty
                 scenarios $\Rightarrow$ many $d_{ij}$ recomputations.
-          \item \textbf{Online adaptive therapy} — dose must be
+          \item \textbf{Online adaptive therapy}: dose must be
                 recalculated in seconds, not hours.
-          \item \textbf{Plan optimisation} — iterative solver calls
+          \item \textbf{Plan optimisation}: iterative solver calls
                 the dose engine thousands of times.
         \end{itemize}
       \end{block}
@@ -103,12 +222,12 @@
       \toprule
       \textbf{Method} & \textbf{Speed} & \textbf{Accuracy} & \textbf{Key limitation} \\
       \midrule
-      Monte Carlo (MC) & \SI{43.6}{s}/beamlet & Gold standard &
-        Computationally prohibitive \\
+      Monte Carlo (MC) (MCsquare) & \SI{43.6}{s}/beamlet & Gold standard &
+        Computationally expensive \\
       Pencil Beam Alg.\ (PBA) & $\sim$\SI{0.7}{s}/beamlet & Moderate &
         Degrades in heterogeneous media \\
       GPU MC & $\sim$seconds & High &
-        Still too slow for online adaptive \\
+        Promising direction \\
       \bottomrule
     \end{tabular}
   \end{table}
@@ -133,7 +252,7 @@
               Transformer + U-Net, multi-energy,\\
               \SI{5}{ms}/beamlet.
         \item \textbf{CC-LSTM} (Neishabouri et al., 2025):\\
-              Convolutional LSTM, 98\% fewer parameters,
+              Convolutional LSTM,
               mono-energetic.
         \item \textbf{MED-LSTM} (Pang et al., 2025):\\
               Multi-energy LSTM, high GPR on limited energy range.
@@ -150,8 +269,8 @@
 
       \vspace{6pt}
       \begin{alertblock}{Preprocessing overhead}
-        Grid reinterpolation $\approx$ \textbf{\SI{1.3}{s}/beamlet}
-        — three orders of magnitude slower than the neural network
+        Grid reinterpolation $\approx$ \textbf{\SI{1.3}{s}/beamlet},
+        three orders of magnitude slower than the neural network
         inference itself ($\sim$\SI{2}{ms}).
       \end{alertblock}
 
@@ -190,18 +309,20 @@
                         mirror, raise=2pt}, semithick, red!60!black}
         ]
           \node[box]  (g1)  {Rotate per gantry angle};
-          \node[slow, below=4pt of g1]  (bev) {Rotate per beamlet angle\\[-1pt]{\tiny(beamlet's eye view)}};
-          \node[box, below=4pt of bev]  (crop1) {Crop volume of interest};
-          \node[box, below=4pt of crop1] (inf1) {Model inference};
-          \node[box, below=4pt of inf1] (place1) {Place back volume};
-          \node[box, below=4pt of place1] (rot1) {Rotate $-$gantry angle\\[-1pt]{\tiny(rotate back)}};
-          \draw[arr]    (g1) -- (bev);
-          \draw[redarr] (bev) -- (crop1);
-          \draw[arr]    (crop1) -- (inf1);
-          \draw[arr]    (inf1) -- (place1);
-          \draw[arr]    (place1) -- (rot1);
+          \node[slow, below=3pt of g1]  (bev1) {Rotate per beamlet angle\\[-1pt]{\tiny(beamlet's eye view)}};
+          \node[box, below=3pt of bev1]  (crop1) {Crop volume of interest};
+          \node[box, below=3pt of crop1] (inf1) {Model inference};
+          \node[box, below=3pt of inf1] (place1) {Place back volume};
+          \node[slow, below=3pt of place1]  (bev2) {Rotate back: beamlet angle\\[-1pt]{\tiny(inverse beamlet's eye view)}};
+          \node[box, below=3pt of bev2] (rot1) {Rotate $-$gantry angle\\[-1pt]{\tiny(rotate back)}};
+          \draw[arr]    (g1)     -- (bev1);
+          \draw[redarr] (bev1)   -- (crop1);
+          \draw[arr]    (crop1)  -- (inf1);
+          \draw[arr]    (inf1)   -- (place1);
+          \draw[redarr] (place1) -- (bev2);
+          \draw[arr]    (bev2)   -- (rot1);
           % brace marking the per-beamlet block
-          \draw[brace] (bev.south west) -- (place1.north west)
+          \draw[brace] (bev1.north west) -- (bev2.south west)
             node[midway, left=7pt, font=\tiny, text=red!60!black,
                  align=center, rotate=90] {repeated per beamlet};
         \end{tikzpicture}
@@ -272,10 +393,10 @@
 \begin{frame}{The Beamlet Shape Projection $\Phi$}
   For a beamlet with deflection angles $\theta_x, \theta_y$ and
   energy-dependent spot sizes $\sigma_x(\epsilon), \sigma_y(\epsilon)$
-  from the Beam Data Library:
+  (nozzle exit) from the Beam Data Library:
 
   \vspace{4pt}
-  \textbf{Step 1 — Transform to beam-aligned coordinates:}
+  \textbf{Step 1: Transform to beam-aligned coordinates:}
   \[
     \mathbf{u}' = R_y(\theta_x)\, R_x(\theta_y)\,
     (\mathbf{u} - \mathbf{u}_0)
@@ -283,7 +404,7 @@
   where $\mathbf{u}_0$ is the beamlet entrance point on the CT grid.
 
   \vspace{4pt}
-  \textbf{Step 2 — Evaluate Gaussian flux at every voxel:}
+  \textbf{Step 2: Evaluate Gaussian flux at every voxel:}
   \[
     \Phi(\mathbf{u}) = \frac{1}{2\pi\,\sigma_x(\epsilon)\,\sigma_y(\epsilon)}
     \exp\!\left(
@@ -296,7 +417,7 @@
   \begin{block}{Why this works}
     $\Phi$ encodes the beam \emph{direction} and \emph{lateral profile}
     explicitly.  The network sees $[\text{CT} \mid \Phi]$ as a
-    two-channel 3D input — no grid realignment per beamlet is needed.
+    two-channel 3D input; no grid realignment per beamlet is needed.
   \end{block}
 \end{frame}
 
@@ -316,8 +437,8 @@
               through 4 stages of convolutions, extracting
               increasingly abstract features.
         \item[\textbullet] \textbf{Transformer bottleneck} captures
-              long-range dependencies along the beam depth —
-              key for modelling the Bragg peak build-up.
+              long-range dependencies along the beam depth,
+              which is key for modelling the Bragg peak build-up.
         \item[\textbullet] \textbf{Decoder} reconstructs the 3D
               dose, guided by skip connections that preserve
               spatial detail from the encoder.
@@ -341,7 +462,7 @@
     % ── LEFT: Step 1 ──────────────────────────────────────
     \begin{column}{0.48\textwidth}
       \begin{center}
-        {\small\textbf{Step 1 — Sample a beamlet direction}}
+        {\small\textbf{Step 1: Sample a beamlet direction}}
 
         \vspace{1pt}
         \includegraphics[width=0.78\linewidth]{figures/FirstSamplingPoint_v2.pdf}
@@ -357,7 +478,7 @@
     % ── RIGHT: Step 2 ─────────────────────────────────────
     \begin{column}{0.48\textwidth}
       \begin{center}
-        {\small\textbf{Step 2 — Translate the virtual source}}
+        {\small\textbf{Step 2: Translate the virtual source}}
 
         \vspace{1pt}
         \includegraphics[width=0.78\linewidth]{figures/SecondSamplingPoint_v2.pdf}
@@ -432,35 +553,48 @@
 % ════════════════════════════════════════════════════════════════
 
 \begin{frame}{Beamlet-Level Accuracy}
+  \vspace{-2pt}
   \begin{table}
-    \centering\small
-    \begin{tabular}{llcccc}
+    \centering
+    \resizebox{\linewidth}{!}{%
+    \begin{tabular}{llccccc}
       \toprule
-      \textbf{Model} & \textbf{Site} & \textbf{Energy} &
-        $\boldsymbol{\Gamma}$\textbf{(2\%/2mm)} &
-        \textbf{RDE [\%]} & \textbf{RMSE [Gy/$10^9$]} \\
+      \textbf{Model} & \textbf{Site} & \textbf{Energy (MeV)} &
+        $\boldsymbol{\Gamma}$\textbf{(1\%,3mm,0.1\%)[\%]} &
+        $\boldsymbol{\Gamma}$\textbf{(1\%,3mm,10\%)[\%]} &
+        $\boldsymbol{\Gamma}$\textbf{(2\%,2mm,10\%)[\%]} &
+        $\boldsymbol{\Gamma}$\textbf{(1\%,2mm,3\%)[\%]} \\
       \midrule
-      \multirow{3}{*}{\textbf{ADoTA}}
-        & Lung       & [70, 150] MeV & $98.33 \pm 1.83$ & $0.074 \pm 0.044$ & $0.013 \pm 0.005$ \\
-        & Abd./Pelv. & [70, 270] MeV & $99.63 \pm 0.60$ & $0.032 \pm 0.043$ & $0.009 \pm 0.003$ \\
-        & Combined   & [70, 270] MeV & $99.11 \pm 1.38$ & $0.044 \pm 0.035$ & $0.010 \pm 0.004$ \\
+      \multirow{2}{*}{\textbf{ADoTA} (this work)}
+        & Thoracic         & {[}70, 150{]} & $99.40 \pm 0.86$ & $98.47 \pm 1.33$ & $98.33 \pm 1.83$ & $97.86 \pm 2.30$ \\
+        & Abdominal/Pelvic & {[}70, 270{]} & $99.87 \pm 0.23$ & $99.46 \pm 0.63$ & $99.63 \pm 0.60$ & $99.46 \pm 0.72$ \\
       \midrule
-      DoTA     & Combined & [70, 220] MeV & $\sim$99.5 & $0.126 \pm 0.109$ & $0.083 \pm 0.041$ \\
-      MED-LSTM & Prostate & [115, 201] MeV & $99.96 \pm 0.07$ & — & — \\
-      CC-LSTM  & Lung     & 103 MeV (mono) & — & — & — \\
+      \multirow{3}{*}{CC-LSTM {\tiny(Neishabouri et al., 2025)}}
+        & Thoracic & 48.1   & $-$ & $-$ & $-$ & $94.28 \pm 1.76$ \\
+        & Thoracic & 79.2   & $-$ & $-$ & $-$ & $97.21 \pm 0.84$ \\
+        & Thoracic & 102.6  & $-$ & $-$ & $-$ & $97.83 \pm 0.91$ \\
+      \midrule
+      \multirow{3}{*}{DoTA {\tiny(Pastor-Serrano \& Perk\'o, 2022)}}
+        & Thoracic & {[}70, 140{]} & $99.46 \pm 0.81$ & $-$ & $-$ & $-$ \\
+        & H\&N     & {[}70, 140{]} & $99.21 \pm 1.23$ & $-$ & $-$ & $-$ \\
+        & Prostate & {[}70, 220{]} & $99.51 \pm 1.46$ & $-$ & $-$ & $-$ \\
+      \midrule
+      \multirow{3}{*}{MED-LSTM {\tiny(Pang et al., 2025)}}
+        & Thoracic    & {[}69,\;114.5{]}   & $-$ & $99.93 \pm 0.06$ & $99.97 \pm 0.03$ & $-$ \\
+        & Nasopharynx & {[}69,\;161.4{]}   & $-$ & $99.81 \pm 0.32$ & $99.92 \pm 0.19$ & $-$ \\
+        & Prostate    & {[}114.5,\;200.8{]}& $-$ & $99.89 \pm 0.12$ & $99.96 \pm 0.07$ & $-$ \\
       \bottomrule
     \end{tabular}
+    }
   \end{table}
 
-  \vspace{4pt}
-  \begin{itemize}
-    \item Test set: \textbf{3\,500 beamlets} from 50 unseen CTs
-          (20 lung + 30 abd./pelvic).
-    \item ADoTA achieves $\sim$3$\times$ lower RDE and $\sim$8$\times$
-          lower RMSE than the original DoTA.
-    \item Lung performance is lower due to higher tissue heterogeneity
-          — a theme we will revisit.
+  \vspace{2pt}
+  {\scriptsize
+  \begin{itemize}\setlength{\itemsep}{1pt}
+    \item Test set: \textbf{3\,500 beamlets} (1\,400 thoracic, 2\,100 abdominal/pelvic) from 50 unseen CTs.
+    \item ADoTA achieves $\geq\!99.4\%$ GPR (1\%, 3mm, 10\%) on abdominal/pelvic; thoracic is harder due to tissue heterogeneity.
   \end{itemize}
+  }
 \end{frame}
 
 \begin{frame}{Visual Results: Lung Test Cases (Axial \& Sagittal)}
@@ -478,7 +612,7 @@
           position well, even in the presence of lung tissue
           heterogeneity.
     \item Largest deviations are visible near \textbf{tissue
-          boundaries} (rib--lung, mediastinum), consistent with
+          boundaries} (rib/lung interface, mediastinum), consistent with
           the lower GPR of $98.33\%$ for lung.
   \end{itemize}
   }
@@ -493,8 +627,8 @@
   \vspace{-2pt}
   {\scriptsize
   \begin{itemize}\setlength{\itemsep}{1pt}
-    \item Same representation for the abdominal/pelvic cohort —
-          axial and sagittal views.
+    \item Same representation for the abdominal/pelvic cohort,
+          with axial and sagittal views.
     \item Dose distributions are visually nearly
           \textbf{indistinguishable} from the Monte Carlo reference,
           matching the high GPR of $99.63\%$.
@@ -513,13 +647,12 @@
   \vspace{-2pt}
   {\scriptsize
   \begin{itemize}\setlength{\itemsep}{1pt}
-    \item Violin plots and histograms of GPR, RDE, and RMSE across
-          the full 3\,500-beamlet test set.
+    \item Violin plots and histograms of GPR (1\%, 3mm, 10\%) and RDE for all 3\,500 test beamlets.
     \item The distributions are \textbf{tightly concentrated} near
-          ideal values — the vast majority of beamlets achieve
-          GPR~$>$~97\% with very low RDE and RMSE.
+          ideal values; the vast majority of beamlets achieve
+          GPR~$>$~97\% with low RDE.
     \item The \textbf{long tails} correspond to challenging cases
-          (tissue interfaces, high-energy deep beamlets) — precisely
+          (tissue interfaces, high-energy deep beamlets), precisely
           the samples that motivate active learning.
   \end{itemize}
   }
@@ -553,8 +686,8 @@
     \item All plans achieve $>$ \SI{97.5}{\percent} GPR.
     \item Prostate mean: \SI{98.93}{\percent}, Lung mean:
           \SI{98.44}{\percent}.
-    \item Errors are \textbf{systematic} (not stochastic like MC noise)
-          — neighbouring beamlets share similar anatomy, so local errors
+    \item Errors are \textbf{systematic} (not stochastic like MC noise):
+          neighbouring beamlets share similar anatomy, so local errors
           accumulate rather than cancel.
   \end{itemize}
 \end{frame}
@@ -599,8 +732,7 @@
 
       \vspace{6pt}
       \begin{block}{Outlook}
-        Porting ray-tracing and $\Phi$ construction to GPU
-        $\rightarrow$ sub-second total for thousands of beamlets.
+        Fast beamlet-shape projection can be parallelised using a GPU programming.
       \end{block}
     \end{column}
   \end{columns}
@@ -618,12 +750,6 @@
         \item Beamlets whose Bragg peak lies at a tissue interface
               (bone to soft tissue, air to tissue) are \textbf{harder to
               predict}.
-        \item GPR gap: $\sim$0.7\,pp between interface and homogeneous
-              beamlets.
-        \item 24 to 40\% of training beamlets are affected (depending
-              on the neighbourhood radius).
-        \item This gap is \textbf{robust} across thresholds
-              $\tau \in [50, 400]$\,HU and radii $r \in \{5, 10\}$\,mm.
       \end{itemize}
     \end{column}
     \begin{column}{0.48\textwidth}
@@ -706,7 +832,7 @@
           \textbf{Group} & \textbf{GPR [\%]} & \textbf{MAPE [\%]} \\
           \midrule
           Homogeneous  & $99.11 \pm 1.23$ & $5.11 \pm 1.63$ \\
-          Interface    & $98.41 \pm 1.68$ & $6.12 \pm 2.09$ \\
+          Heterogeneous & $98.41 \pm 1.68$ & $6.12 \pm 2.09$ \\
           \midrule
           Gap          & 0.70\,pp         & 1.01\,pp \\
           \bottomrule
@@ -727,8 +853,8 @@
       \textbf{Implication:}
 
       \vspace{4pt}
-      The model struggles where it matters most — at tissue
-      boundaries where dose gradients are clinically critical.
+      The model struggles where it matters most, specifically at tissue
+      interfaces.
 
       \vspace{8pt}
       \textbf{Root cause:}
@@ -736,7 +862,7 @@
         \item Density discontinuities create complex scattering
               and range effects.
         \item The training set does not distinguish ``easy''
-              from ``hard'' samples — uniform sampling treats
+              from ``hard'' samples; uniform sampling treats
               all beamlets equally.
       \end{itemize}
 
@@ -816,7 +942,7 @@
       \vspace{6pt}
       \textbf{The performance gap is not uniform:}
       \begin{itemize}\setlength{\itemsep}{4pt}
-        \item The model is already excellent on homogeneous regions
+        \item The model is already working well on homogeneous regions
               (GPR $\approx$ 99.1\%).
         \item The deficit is concentrated at tissue interfaces.
         \item Uniform data collection wastes budget on ``easy''
@@ -827,50 +953,52 @@
       \textbf{Physics-informed acquisition:}
 
       \vspace{4pt}
-      Our tissue interface analysis provides \textbf{cheap,
-      precomputable proxies} for prediction difficulty:
-
-      \vspace{4pt}
-      \begin{itemize}\setlength{\itemsep}{4pt}
-        \item $\sigma_{\text{HU}}$: CT density standard deviation
-              around the Bragg peak.
-        \item TV: total variation of HU values in the neighbourhood.
-        \item These correlate strongly with GPR degradation
-              and can be computed in milliseconds from CT alone
-              — no model inference needed.
-      \end{itemize}
-
-      \vspace{6pt}
-      \begin{block}{Proposed strategy}
-        Use $\sigma_{\text{HU}}$ and TV as \textbf{acquisition
-        functions} to preferentially select interface-heavy beamlets
-        for MC simulation and targeted fine-tuning.
-      \end{block}
+      Under investigation.
     \end{column}
   \end{columns}
 \end{frame}
 
+\begin{frame}{Proposed Active Learning Strategy}
+  \begin{block}{Proposed strategy}
+    Use $\sigma_{\text{HU}}$ and TV as \textbf{acquisition
+    functions} to preferentially select interface-heavy beamlets
+    for MC simulation and targeted fine-tuning.
+  \end{block}
+
+  \vspace{6pt}
+  \begin{itemize}\setlength{\itemsep}{4pt}
+    \item \textbf{Cheap to evaluate}: $\sigma_{\text{HU}}$ and TV
+          require only CT data, with no model inference or MC simulation.
+    \item \textbf{Physics-grounded}: directly tied to the mechanism
+          (density discontinuities) that drives prediction error.
+    \item \textbf{Composable}: can be combined into a single score
+          and ranked across the entire unlabelled pool.
+    \item \textbf{Interpretable}: each selected beamlet has a clear
+          physical reason for being chosen.
+  \end{itemize}
+\end{frame}
+
 \begin{frame}{Expected Benefits}
   \begin{enumerate}\setlength{\itemsep}{6pt}
-    \item \textbf{Reduced MC simulation budget} — focus expensive
+    \item \textbf{Reduced MC simulation budget}: focus expensive
           labels on the beamlets where the model needs them most,
           rather than uniformly sampling the anatomy.
 
-    \item \textbf{Faster gap closure} — targeted fine-tuning on
+    \item \textbf{Faster gap closure}: targeted fine-tuning on
           interface-heavy batches should close the GPR gap more
           efficiently than retraining on the full dataset.
 
-    \item \textbf{Principled extension to new sites} — when deploying
+    \item \textbf{Principled extension to new sites}: when deploying
           ADoTA to a new anatomy (e.g.\ head and neck), active
           learning identifies the hardest regions automatically,
           minimising the amount of new MC data required.
 
-    \item \textbf{Quantitative stopping criterion} — monitor the
+    \item \textbf{Quantitative stopping criterion}: monitor the
           interface vs.\ homogeneous GPR gap across active learning
           iterations; stop when the gap falls below a clinical
           threshold.
 
-    \item \textbf{Better uncertainty quantification} — the acquisition
+    \item \textbf{Better uncertainty quantification}: the acquisition
           function naturally flags beamlets that should be treated with
           caution in clinical QA workflows.
   \end{enumerate}
@@ -887,14 +1015,14 @@
           on an analytical beamlet shape projection $\Phi$.
     \item It achieves \textbf{MC-level accuracy}
           (GPR $> 98\%$ on treatment plans) at
-          \textbf{\SI{1.75}{ms}/beamlet} — 25\,000$\times$ faster
+          \textbf{\SI{1.75}{ms}/beamlet}, 25\,000$\times$ faster
           than MC.
     \item \textbf{Tissue interfaces} remain the dominant source of
           prediction error, with a robust $\sim$0.7\,pp GPR gap
           that persists across all tested radii and thresholds.
     \item This systematic performance gap motivates
           \textbf{active learning}: using physics-informed
-          heterogeneity metrics ($\sigma_{\text{HU}}$, TV) as
+          heterogeneity metrics as
           acquisition functions to guide targeted data collection
           and fine-tuning.
   \end{enumerate}
@@ -902,19 +1030,19 @@
 
 \begin{frame}{Next Steps}
   \begin{enumerate}\setlength{\itemsep}{5pt}
-    \item \textbf{Design acquisition function} — combine
+    \item \textbf{Design acquisition function}: combine
           $\sigma_{\text{HU}}$, TV, and CV into a composite score
           for selecting the most informative beamlets from the
           unlabelled pool.
-    \item \textbf{Active learning loop} — implement the
+    \item \textbf{Active learning loop}: implement the
           select $\rightarrow$ simulate $\rightarrow$ fine-tune
           $\rightarrow$ evaluate cycle and measure gap closure rate.
-    \item \textbf{Multi-radius analysis} — compute heterogeneity
+    \item \textbf{Multi-radius analysis}: compute heterogeneity
           at $r \in \{5, 10, 15, 20, 30\}$\,mm to determine the
           optimal neighbourhood for the acquisition function.
-    \item \textbf{Energy-stratified analysis} — investigate whether
+    \item \textbf{Energy-stratified analysis}: investigate whether
           the interface effect is stronger at specific beam energies.
-    \item \textbf{New anatomical sites} — extend the analysis to
+    \item \textbf{New anatomical sites}: extend the analysis to
           lung data, where tissue interfaces are more prevalent.
   \end{enumerate}
 \end{frame}

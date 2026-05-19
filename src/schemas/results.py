@@ -129,6 +129,16 @@ class SampleRecord:
     mean_sobel_axial: float
     p95_sobel_bp: float
     sum_sobel_bp: float
+    # Method DW: continuous dose-weighted structure-tensor metrics
+    sobel_dw_mean: float = 0.0
+    sobel_dw_anisotropy: float = 0.0
+    sobel_dw_beam_angle: float = 0.0
+    sobel_dw_edge_energy: float = 0.0
+    # Method TH: binary-threshold structure-tensor metrics (5 % global dose)
+    sobel_th_mean: float = 0.0
+    sobel_th_anisotropy: float = 0.0
+    sobel_th_beam_angle: float = 0.0
+    sobel_th_edge_energy: float = 0.0
     pflugfelder_hi: float = 0.0
     wepl_mean: float = 0.0
     wepl_std: float = 0.0
