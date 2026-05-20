@@ -100,6 +100,10 @@ class H5PYGenerator(Dataset):
             "normalize_flux_only", False
         )  # Normalize flux only is a flag which is used for tests.
 
+        self.flux_mode = kwargs.get("flux_mode", "analytical")
+        if self.flux_mode not in {"analytical", "angle_broadcast"}:
+            raise ValueError(f"Unknown flux_mode: {self.flux_mode!r}")
+
         # Random rotation by one of angles (0, 90, 180, 270)
         self.rotk = np.arange(4) if self.square_slice else [0, 2]
 
@@ -216,12 +220,19 @@ class H5PYGenerator(Dataset):
                     self.scale["max_energy"] - self.scale["min_energy"]
                 )
 
+            if self.flux_mode == "angle_broadcast":
+                angles = torch.tensor(
+                    metadata["beamlet_angles"], dtype=torch.float32
+                )
+                mag = float(torch.sqrt((angles ** 2).sum()))
+                flux_grid = torch.full(flux_grid.shape, mag)
+
             # Apply channel dimension
             ct_grid = ct_grid.unsqueeze(0)
             dose_grid = dose_grid.unsqueeze(0)
             flux_grid = flux_grid.unsqueeze(0)
 
-            if self.normalize_flux_only:
+            if self.normalize_flux_only and self.flux_mode == "analytical":
                 flux_grid = (flux_grid - flux_grid.min()) / (
                     flux_grid.max() - flux_grid.min()
                 )
