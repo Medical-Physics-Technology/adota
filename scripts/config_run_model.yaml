@@ -14,8 +14,12 @@
 # Name of the model directory (located in models/)
 model_name: DoTA_v3_grid_search_v11
 
-# Path to the directory with input data to evaluate
-test_data: /scratch/mstryja/DoTA_dataset_v2/testset_Lung-PET-CT-Dx_v2 # pelvis_abdominal_testset_paper #/scratch/mstryja/DoTA_dataset_v2/fixed_theta_y_StageII-Colorectal-CT_v0 # /scratch/mstryja/DoTA_dataset_v2/fixed_theta_y_Lung-PET-CT-Dx_v0 #
+# Path(s) to the directory/directories with input data to evaluate
+test_data:
+  - label: thoracic CT
+    path: /scratch/mstryja/DoTA_dataset_v2/testset_Lung-PET-CT-Dx_v3
+  - label: pelvic / abdominal
+    path: /scratch/mstryja/DoTA_dataset_v2/pelvis_abdominal_testset_paper
 
 # --- Optional Settings ---
 
@@ -36,6 +40,9 @@ distance_threshold: 2.0
 
 # Disable progress bar
 no_progress: false
+
+# Generate optional depth-profile figures
+depth_profiles: false
 
 # Enable verbose/debug output
 verbose: false

@@ -16,6 +16,7 @@ class EvaluationResult:
     """Container for a single sample's evaluation results.
 
     Used by ``run_model.py`` and ``analysis_texture_with_inference.py``.
+    ``mape`` is the backward-compatible MAPE value at the 10% GT-dose threshold.
     """
 
     sample_id: str
@@ -23,6 +24,10 @@ class EvaluationResult:
     beamlet_angles: tuple
     gpr: float
     rmse: float
+    mape_0_1_pct: float
+    mape_1_pct: float
+    mape_5_pct: float
+    mape_10_pct: float
     mape: float
     rde: float
     calc_time: float

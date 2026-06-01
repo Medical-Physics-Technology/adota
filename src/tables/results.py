@@ -1,5 +1,6 @@
 import logging
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional
+
 import numpy as np
 
 
@@ -7,14 +8,16 @@ def print_results_table(
     energies: List[float],
     gprs_calc: List[float],
     rmses: List[float],
-    mapes: List[float],
+    mapes_0_1_pct: List[float],
+    mapes_1_pct: List[float],
+    mapes_5_pct: List[float],
+    mapes_10_pct: List[float],
     rdes: List[float],
     gamma_params: Dict[str, float],
     beamlet_angles: List[List[float]] = None,
     logger: Optional[logging.Logger] = None,
 ):
-    """
-    Display a neatly aligned results table for energies and related metrics in the terminal.
+    """Display an aligned evaluation table in the terminal and log.
 
     Parameters
     ----------
@@ -23,25 +26,25 @@ def print_results_table(
     gprs_calc : list[float]
         Gamma passing rates corresponding to each energy.
     rmses : list[float]
-        Root mean square errors [eV/g / proton].
-    mapes : list[float]
-        Mean absolute percentage errors [%].
+        Root mean square errors [Gy].
+    mapes_0_1_pct, mapes_1_pct, mapes_5_pct, mapes_10_pct : list[float]
+        Thresholded MAPE values [%] using GT-dose masks at 0.1%, 1%, 5%, 10%.
     gamma_params : dict
-        Dictionary with gamma evaluation parameters:
-            - 'dose_percent_threshold' : float
-            - 'distance_mm_threshold' : float
-            - 'lower_percent_dose_cutoff' : float
+        Dictionary with gamma evaluation parameters.
     logger : logging.Logger, optional
         If provided, each line is also logged via logger.info().
     """
 
     def _print(line: str) -> None:
-        """Print to console and optionally log."""
         print(line, flush=True)
         if logger is not None:
             logger.info(line)
 
-    header = "Energies [MeV] | GPR ({}%, {}mm, {}%) | RMSE [eV/g / proton] | MAPE [%] | RDE [%]".format(
+    header = (
+        "Energies [MeV] | GPR ({}%, {}mm, {}%) | RMSE [Gy] | "
+        "MAPE@0.1% GT [%] | MAPE@1% GT [%] | MAPE@5% GT [%] | "
+        "MAPE@10% GT [%] | RDE [%]"
+    ).format(
         gamma_params["dose_percent_threshold"],
         gamma_params["distance_mm_threshold"],
         gamma_params["lower_percent_dose_cutoff"],
@@ -49,80 +52,127 @@ def print_results_table(
     _print(header)
     _print("=" * len(header))
 
-    # Sort all metrics by energy
     if beamlet_angles is not None:
         sorted_data = sorted(
-            zip(energies, beamlet_angles, gprs_calc, rmses, mapes, rdes),
+            zip(
+                energies,
+                beamlet_angles,
+                gprs_calc,
+                rmses,
+                mapes_0_1_pct,
+                mapes_1_pct,
+                mapes_5_pct,
+                mapes_10_pct,
+                rdes,
+            ),
             key=lambda x: x[0],
         )
-    else:
-        sorted_data = sorted(
-            zip(energies, gprs_calc, rmses, mapes, rdes), key=lambda x: x[0]
+        col_widths = [12, 17, 10, 14, 16, 15, 16, 17, 10]
+        header_fmt = (
+            f"| {{:<{col_widths[0]}}} | {{:<{col_widths[1]}}} | "
+            f"{{:<{col_widths[2]}}} | {{:<{col_widths[3]}}} | "
+            f"{{:<{col_widths[4]}}} | {{:<{col_widths[5]}}} | "
+            f"{{:<{col_widths[6]}}} | {{:<{col_widths[7]}}} | "
+            f"{{:<{col_widths[8]}}} |"
         )
-
-    # Define consistent column widths
-    if beamlet_angles is not None:
-        col_widths = [14, 17, 20, 24, 14, 14]
-        header_fmt = f"| {{:<{col_widths[0]}}} | {{:<{col_widths[1]}}} | {{:<{col_widths[2]}}} | {{:<{col_widths[3]}}} | {{:<{col_widths[4]}}} | {{:<{col_widths[5]}}} |"
-        row_fmt = f"| {{:>{col_widths[0]}.2f}} | {{:>{col_widths[1]}}} | {{:>{col_widths[2]}.2f}} | {{:>{col_widths[3]}.9f}} | {{:>{col_widths[4]}.4f}} | {{:>{col_widths[5]}.4f}} |"
-
-        # Print header row
+        row_fmt = (
+            f"| {{:>{col_widths[0]}.2f}} | {{:>{col_widths[1]}}} | "
+            f"{{:>{col_widths[2]}.2f}} | {{:>{col_widths[3]}.9f}} | "
+            f"{{:>{col_widths[4]}.4f}} | {{:>{col_widths[5]}.4f}} | "
+            f"{{:>{col_widths[6]}.4f}} | {{:>{col_widths[7]}.4f}} | "
+            f"{{:>{col_widths[8]}.4f}} |"
+        )
         _print(
             header_fmt.format(
                 "Energy [MeV]",
                 "beamlet angles",
                 "GPR [%]",
                 "RMSE [Gy]",
-                "MAPE [%]",
+                "MAPE@0.1% [%]",
+                "MAPE@1% [%]",
+                "MAPE@5% [%]",
+                "MAPE@10% [%]",
                 "RDE [%]",
             )
         )
-        _print("-" * (sum(col_widths) + 16))  # account for pipes and spaces
-
-        # Print data rows
-        for e, angles, gpr, rmse, mape, rde in sorted_data:
+        separator_width = sum(col_widths) + 3 * len(col_widths) + 1
+        _print("-" * separator_width)
+        for e, angles, gpr, rmse, mape_0_1, mape_1, mape_5, mape_10, rde in sorted_data:
             angle_str = f"{angles[0]:.2f}, {angles[1]:.2f}"
-            _print(row_fmt.format(e, angle_str, gpr, rmse, mape, rde))
+            _print(
+                row_fmt.format(
+                    e,
+                    angle_str,
+                    gpr,
+                    rmse,
+                    mape_0_1,
+                    mape_1,
+                    mape_5,
+                    mape_10,
+                    rde,
+                )
+            )
     else:
-        col_widths = [14, 20, 24, 14, 14]
-        header_fmt = f"| {{:<{col_widths[0]}}} | {{:<{col_widths[1]}}} | {{:<{col_widths[2]}}} | {{:<{col_widths[3]}}} | {{:<{col_widths[4]}}} |"
-        row_fmt = f"| {{:>{col_widths[0]}.2f}} | {{:>{col_widths[1]}.2f}} | {{:>{col_widths[2]}.9f}} | {{:>{col_widths[3]}.4f}} | {{:>{col_widths[4]}.4f}} |"
-
-        # Print header row
+        sorted_data = sorted(
+            zip(
+                energies,
+                gprs_calc,
+                rmses,
+                mapes_0_1_pct,
+                mapes_1_pct,
+                mapes_5_pct,
+                mapes_10_pct,
+                rdes,
+            ),
+            key=lambda x: x[0],
+        )
+        col_widths = [12, 10, 14, 16, 15, 16, 17, 10]
+        header_fmt = (
+            f"| {{:<{col_widths[0]}}} | {{:<{col_widths[1]}}} | "
+            f"{{:<{col_widths[2]}}} | {{:<{col_widths[3]}}} | "
+            f"{{:<{col_widths[4]}}} | {{:<{col_widths[5]}}} | "
+            f"{{:<{col_widths[6]}}} | {{:<{col_widths[7]}}} |"
+        )
+        row_fmt = (
+            f"| {{:>{col_widths[0]}.2f}} | {{:>{col_widths[1]}.2f}} | "
+            f"{{:>{col_widths[2]}.9f}} | {{:>{col_widths[3]}.4f}} | "
+            f"{{:>{col_widths[4]}.4f}} | {{:>{col_widths[5]}.4f}} | "
+            f"{{:>{col_widths[6]}.4f}} | {{:>{col_widths[7]}.4f}} |"
+        )
         _print(
             header_fmt.format(
-                "Energy [MeV]", "GPR [%]", "RMSE [Gy]", "MAPE [%]", "RDE [%]"
+                "Energy [MeV]",
+                "GPR [%]",
+                "RMSE [Gy]",
+                "MAPE@0.1% [%]",
+                "MAPE@1% [%]",
+                "MAPE@5% [%]",
+                "MAPE@10% [%]",
+                "RDE [%]",
             )
         )
-        _print("-" * (sum(col_widths) + 13))  # account for pipes and spaces
+        separator_width = sum(col_widths) + 3 * len(col_widths) + 1
+        _print("-" * separator_width)
+        for e, gpr, rmse, mape_0_1, mape_1, mape_5, mape_10, rde in sorted_data:
+            _print(row_fmt.format(e, gpr, rmse, mape_0_1, mape_1, mape_5, mape_10, rde))
 
-        # Print data rows
-        for e, gpr, rmse, mape, rde in sorted_data:
-            _print(row_fmt.format(e, gpr, rmse, mape, rde))
-
-    # Calculate separator width based on whether angles are included
-    separator_width = (
-        (sum(col_widths) + 16) if beamlet_angles is not None else (sum(col_widths) + 13)
-    )
     _print("=" * separator_width)
-    # Print mean values, std values, min and max:
-    mean_gpr = np.mean(gprs_calc)
-    std_gpr = np.std(gprs_calc)
-    mean_rmse = np.mean(rmses)
-    std_rmse = np.std(rmses)
-    mean_mape = np.mean(mapes)
-    std_mape = np.std(mapes)
-    mean_rde = np.mean(rdes)
-    std_rde = np.std(rdes)
-    _print(f"Mean GPR: {mean_gpr:.2f} % ± {std_gpr:.2f} %")
-    _print(f"Mean RMSE: {mean_rmse:.9f} Gy ± {std_rmse:.9f} Gy")
-    _print(f"Mean MAPE: {mean_mape:.4f} % ± {std_mape:.4f} %")
-    _print(f"Mean RDE: {mean_rde:.4f} % ± {std_rde:.4f} %")
-    _print(f"Min GPR: {np.min(gprs_calc):.2f} %")
-    _print(f"Max GPR: {np.max(gprs_calc):.2f} %")
-    _print(f"Min RMSE: {np.min(rmses):.9f} Gy")
-    _print(f"Max RMSE: {np.max(rmses):.9f} Gy")
-    _print(f"Min MAPE: {np.min(mapes):.4f} %")
-    _print(f"Max MAPE: {np.max(mapes):.4f} %")
-    _print(f"Min RDE: {np.min(rdes):.4f} %")
-    _print(f"Max RDE: {np.max(rdes):.4f} %")
+
+    summary_metrics = [
+        ("GPR", gprs_calc, "{:.2f} %"),
+        ("RMSE", rmses, "{:.9f} Gy"),
+        ("MAPE@0.1% GT", mapes_0_1_pct, "{:.4f} %"),
+        ("MAPE@1% GT", mapes_1_pct, "{:.4f} %"),
+        ("MAPE@5% GT", mapes_5_pct, "{:.4f} %"),
+        ("MAPE@10% GT", mapes_10_pct, "{:.4f} %"),
+        ("RDE", rdes, "{:.4f} %"),
+    ]
+
+    for label, values, value_fmt in summary_metrics:
+        mean = value_fmt.format(np.mean(values))
+        std = value_fmt.format(np.std(values))
+        min_val = value_fmt.format(np.min(values))
+        max_val = value_fmt.format(np.max(values))
+        _print(f"Mean {label}: {mean} ± {std}")
+        _print(f"Min {label}: {min_val}")
+        _print(f"Max {label}: {max_val}")

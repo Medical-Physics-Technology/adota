@@ -4,6 +4,8 @@ DoTA Model Evaluation Script
 A command-line tool for running DoTA model inference on dose prediction tasks.
 """
 
+import csv
+from dataclasses import dataclass
 import logging
 import os
 import shutil
@@ -11,7 +13,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -54,6 +56,93 @@ from src.schemas.configs import EvaluationConfig
 from src.schemas.results import EvaluationResult
 
 app = typer.Typer(help="DoTA Model Evaluation Tool")
+
+MAPE_THRESHOLDS = (0.001, 0.01, 0.05, 0.1)
+
+
+@dataclass(frozen=True)
+class TestDataset:
+    """A labeled directory-based test dataset."""
+
+    label: str
+    path: Path
+
+
+def resolve_data_path(path_value: Union[str, Path]) -> Path:
+    """Resolve a test-data path relative to the project root when needed."""
+    path = Path(path_value)
+    return path if path.is_absolute() else PROJECT_ROOT / path
+
+
+def normalize_test_data_config(test_data_value: Any) -> list[TestDataset]:
+    """Normalize single-path and multi-site YAML formats to labeled datasets."""
+    if isinstance(test_data_value, (str, Path)):
+        path = resolve_data_path(test_data_value)
+        return [TestDataset(label=path.name, path=path)]
+
+    if not isinstance(test_data_value, list):
+        raise typer.BadParameter(
+            "TEST_DATA must be a path or a list of entries with 'label' and 'path'"
+        )
+
+    datasets: list[TestDataset] = []
+    for index, entry in enumerate(test_data_value, start=1):
+        if isinstance(entry, (str, Path)):
+            path = resolve_data_path(entry)
+            datasets.append(TestDataset(label=path.name, path=path))
+            continue
+
+        if not isinstance(entry, dict):
+            raise typer.BadParameter(
+                f"Invalid test_data entry #{index}: expected path or mapping"
+            )
+
+        label = entry.get("label")
+        path_value = entry.get("path")
+        if not label or not path_value:
+            raise typer.BadParameter(
+                f"Invalid test_data entry #{index}: 'label' and 'path' are required"
+            )
+
+        datasets.append(
+            TestDataset(label=str(label), path=resolve_data_path(path_value))
+        )
+
+    if not datasets:
+        raise typer.BadParameter("TEST_DATA must contain at least one dataset")
+
+    return datasets
+
+
+def discover_sample_ids(test_data_path: Path) -> list[str]:
+    """Discover sample IDs using the same filename convention as before."""
+    files = os.listdir(test_data_path)
+    return np.unique([f.split("_")[0] for f in files if "_" in f]).tolist()
+
+
+def calculate_thresholded_mapes(
+    ground_truth: np.ndarray,
+    prediction: np.ndarray,
+) -> dict[float, float]:
+    """Calculate MAPE values for fixed GT-dose thresholds."""
+    max_gt = float(np.max(ground_truth))
+    mapes: dict[float, float] = {}
+
+    for threshold in MAPE_THRESHOLDS:
+        if max_gt <= 0:
+            mapes[threshold] = 0.0
+            continue
+
+        mask = ground_truth > threshold * max_gt
+        if not np.any(mask):
+            mapes[threshold] = 0.0
+            continue
+
+        mapes[threshold] = float(
+            calculate_pure_mape(prediction[mask], ground_truth[mask])
+        )
+
+    return mapes
 
 
 def evaluate_single_sample(
@@ -123,9 +212,12 @@ def evaluate_single_sample(
     # Calculate metrics
     rmse = calculate_rmse(to_gy(y_pred_np), to_gy(y_np))
 
-    # MAPE with threshold mask
-    mask = y_pred_np > 0.1 * np.max(y_pred_np)
-    mape = calculate_pure_mape(y_np[mask], y_pred_np[mask])
+    thresholded_mapes = calculate_thresholded_mapes(y_np, y_pred_np)
+    mape_0_1_pct = thresholded_mapes[0.001]
+    mape_1_pct = thresholded_mapes[0.01]
+    mape_5_pct = thresholded_mapes[0.05]
+    mape_10_pct = thresholded_mapes[0.1]
+    mape = mape_10_pct
 
     rde = calculate_relative_dose_error(to_gy(y_pred_np), to_gy(y_np))
 
@@ -146,6 +238,10 @@ def evaluate_single_sample(
         beamlet_angles=tuple(ba) if isinstance(ba, list) else ba,
         gpr=gpr,
         rmse=rmse,
+        mape_0_1_pct=mape_0_1_pct,
+        mape_1_pct=mape_1_pct,
+        mape_5_pct=mape_5_pct,
+        mape_10_pct=mape_10_pct,
         mape=mape,
         rde=rde,
         calc_time=calc_time,
@@ -781,9 +877,12 @@ def generate_publication_figures(
             y_pred = result.prediction.to(device)
             energy_mev = result.energy_mev
         else:
+            source_test_data_path = Path(
+                getattr(result, "test_data_path", test_data_path)
+            )
             x, energy, y = get_single_record(
                 result.sample_id,
-                test_data_path,
+                source_test_data_path,
                 scale=scale,
                 normalize_flux=config.normalize_flux,
             )
@@ -812,8 +911,7 @@ def generate_publication_figures(
 
         # Calculate metrics
         rmse = calculate_rmse(to_gy(pred), to_gy(gt))
-        mask = gt > 0.1 * np.max(gt)
-        mape = calculate_pure_mape(pred[mask], gt[mask])
+        mape = result.mape
 
         scale_gpr = {"y_min": scale["min_ds"], "y_max": scale["max_ds"]}
         gpr_result = gamma_index_torch(
@@ -844,34 +942,216 @@ def generate_publication_figures(
         )
 
 
-def print_summary(results: list, total_time: float) -> None:
-    """Print evaluation summary.
+def format_mean_std(values: list[float], decimals: int = 4) -> str:
+    """Format mean ± std with the current population-std convention."""
+    return f"{np.mean(values):.{decimals}f} ± {np.std(values):.{decimals}f}"
 
-    Args:
-        results: List of evaluation results.
-        total_time: Total evaluation time in seconds.
-    """
+
+def anatomical_site_summary_rows(
+    results_by_site: dict[str, list],
+) -> list[dict[str, str]]:
+    """Build rows for the anatomical-site publication summary."""
+    rows: list[dict[str, str]] = []
+    for site, results in results_by_site.items():
+        if not results:
+            continue
+        rows.append(
+            {
+                "Anatomical Site": site,
+                "mean ± std GPR": format_mean_std([r.gpr for r in results]),
+                "mean ± std MAPE@1": format_mean_std(
+                    [r.mape_1_pct for r in results]
+                ),
+                "mean ± std MAPE@10": format_mean_std(
+                    [r.mape_10_pct for r in results]
+                ),
+            }
+        )
+
+    combined_results = [r for results in results_by_site.values() for r in results]
+    if combined_results:
+        rows.append(
+            {
+                "Anatomical Site": "combined",
+                "mean ± std GPR": format_mean_std(
+                    [r.gpr for r in combined_results]
+                ),
+                "mean ± std MAPE@1": format_mean_std(
+                    [r.mape_1_pct for r in combined_results]
+                ),
+                "mean ± std MAPE@10": format_mean_std(
+                    [r.mape_10_pct for r in combined_results]
+                ),
+            }
+        )
+
+    return rows
+
+
+def print_anatomical_site_summary(
+    results_by_site: dict[str, list],
+    logger: Optional[logging.Logger] = None,
+) -> None:
+    """Print the requested publication table by anatomical site."""
+    rows = anatomical_site_summary_rows(results_by_site)
+    fieldnames = [
+        "Anatomical Site",
+        "mean ± std GPR",
+        "mean ± std MAPE@1",
+        "mean ± std MAPE@10",
+    ]
+    widths = [
+        max(len(row[field]) for row in rows + [{field: field}])
+        for field in fieldnames
+    ]
+
+    def _print(line: str) -> None:
+        print(line, flush=True)
+        if logger is not None:
+            logger.info(line)
+
+    header = " | ".join(
+        field.ljust(width) for field, width in zip(fieldnames, widths)
+    )
+    separator = "-+-".join("-" * width for width in widths)
+    _print(header)
+    _print(separator)
+    for row in rows:
+        _print(
+            " | ".join(
+                row[field].ljust(width) for field, width in zip(fieldnames, widths)
+            )
+        )
+
+
+def save_anatomical_site_summary_csv(
+    results_by_site: dict[str, list],
+    output_path: Path,
+) -> None:
+    """Save the anatomical-site publication summary to CSV."""
+    fieldnames = [
+        "Anatomical Site",
+        "mean ± std GPR",
+        "mean ± std MAPE@1",
+        "mean ± std MAPE@10",
+    ]
+    rows = anatomical_site_summary_rows(results_by_site)
+    with open(output_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    logger.info(f"Anatomical-site summary CSV saved to {output_path}")
+
+
+def save_results_csv(results: list, output_path: Path) -> None:
+    """Save per-sample and aggregate evaluation results to CSV."""
+    fieldnames = [
+        "anatomical_site",
+        "test_data_path",
+        "sample_id",
+        "energy_mev",
+        "beamlet_angle_0_deg",
+        "beamlet_angle_1_deg",
+        "gpr_pct",
+        "rmse_gy",
+        "mape_0_1_pct",
+        "mape_1_pct",
+        "mape_5_pct",
+        "mape_10_pct",
+        "rde_pct",
+        "calc_time_s",
+    ]
+
+    sorted_results = sorted(
+        results, key=lambda r: (getattr(r, "anatomical_site", ""), r.energy_mev)
+    )
+
+    with open(output_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for r in sorted_results:
+            writer.writerow(
+                {
+                    "anatomical_site": getattr(r, "anatomical_site", ""),
+                    "test_data_path": getattr(r, "test_data_path", ""),
+                    "sample_id": r.sample_id,
+                    "energy_mev": f"{r.energy_mev:.2f}",
+                    "beamlet_angle_0_deg": f"{r.beamlet_angles[0]:.2f}",
+                    "beamlet_angle_1_deg": f"{r.beamlet_angles[1]:.2f}",
+                    "gpr_pct": f"{r.gpr:.4f}",
+                    "rmse_gy": f"{r.rmse:.9f}",
+                    "mape_0_1_pct": f"{r.mape_0_1_pct:.4f}",
+                    "mape_1_pct": f"{r.mape_1_pct:.4f}",
+                    "mape_5_pct": f"{r.mape_5_pct:.4f}",
+                    "mape_10_pct": f"{r.mape_10_pct:.4f}",
+                    "rde_pct": f"{r.rde:.4f}",
+                    "calc_time_s": f"{r.calc_time:.4f}",
+                }
+            )
+
+        writer.writerow({})
+        for label, fn in [
+            ("mean", np.mean),
+            ("std", np.std),
+            ("min", np.min),
+            ("max", np.max),
+        ]:
+            writer.writerow(
+                {
+                    "anatomical_site": "",
+                    "test_data_path": "",
+                    "sample_id": label,
+                    "energy_mev": "",
+                    "beamlet_angle_0_deg": "",
+                    "beamlet_angle_1_deg": "",
+                    "gpr_pct": f"{fn([r.gpr for r in results]):.4f}",
+                    "rmse_gy": f"{fn([r.rmse for r in results]):.9f}",
+                    "mape_0_1_pct": f"{fn([r.mape_0_1_pct for r in results]):.4f}",
+                    "mape_1_pct": f"{fn([r.mape_1_pct for r in results]):.4f}",
+                    "mape_5_pct": f"{fn([r.mape_5_pct for r in results]):.4f}",
+                    "mape_10_pct": f"{fn([r.mape_10_pct for r in results]):.4f}",
+                    "rde_pct": f"{fn([r.rde for r in results]):.4f}",
+                    "calc_time_s": f"{fn([r.calc_time for r in results]):.4f}",
+                }
+            )
+
+    logger.info(f"Results CSV saved to {output_path}")
+
+
+def print_summary(results: list, total_time: float) -> None:
+    """Print evaluation summary."""
     calc_times = [r.calc_time for r in results]
     gprs = [r.gpr for r in results]
+    rmses = [r.rmse for r in results]
+    rdes = [r.rde for r in results]
+    mapes_0_1_pct = [r.mape_0_1_pct for r in results]
+    mapes_1_pct = [r.mape_1_pct for r in results]
+    mapes_5_pct = [r.mape_5_pct for r in results]
+    mapes_10_pct = [r.mape_10_pct for r in results]
 
     logger.info(f"Total elapsed time: {total_time:.2f}s")
     logger.info(f"Average time per beamlet: {np.mean(calc_times):.4f}s")
+    logger.info(f"GPR  - mean: {np.mean(gprs):.4f}%, std: {np.std(gprs):.4f}%")
+    logger.info(f"RMSE - mean: {np.mean(rmses):.9f} Gy, std: {np.std(rmses):.9f} Gy")
+    logger.info(f"MAPE@0.1% GT - mean: {np.mean(mapes_0_1_pct):.4f}%, std: {np.std(mapes_0_1_pct):.4f}%")
+    logger.info(f"MAPE@1% GT   - mean: {np.mean(mapes_1_pct):.4f}%, std: {np.std(mapes_1_pct):.4f}%")
+    logger.info(f"MAPE@5% GT   - mean: {np.mean(mapes_5_pct):.4f}%, std: {np.std(mapes_5_pct):.4f}%")
+    logger.info(f"MAPE@10% GT  - mean: {np.mean(mapes_10_pct):.4f}%, std: {np.std(mapes_10_pct):.4f}%")
+    logger.info(f"RDE  - mean: {np.mean(rdes):.4f}%, std: {np.std(rdes):.4f}%")
 
-    worst_idx = np.argmin(gprs)
-    best_idx = np.argmax(gprs)
-
-    worst = results[worst_idx]
-    best = results[best_idx]
+    worst = max(results, key=lambda r: r.mape)
+    best = min(results, key=lambda r: r.mape)
 
     logger.info(
-        f"Worst case: Energy: {worst.energy_mev:.2f} MeV, "
-        f"Beamlet angles: ({worst.beamlet_angles[0]:.2f}, {worst.beamlet_angles[1]:.2f}) degrees, "
-        f"GPR: {worst.gpr:.2f}%"
+        f"Best case (lowest MAPE@10% GT): Energy: {best.energy_mev:.2f} MeV, "
+        f"Beamlet angles: ({best.beamlet_angles[0]:.2f}, {best.beamlet_angles[1]:.2f}) degrees, "
+        f"MAPE@10% GT: {best.mape:.2f}%, GPR: {best.gpr:.2f}%, RMSE: {best.rmse:.9f} Gy"
     )
     logger.info(
-        f"Best case: Energy: {best.energy_mev:.2f} MeV, "
-        f"Beamlet angles: ({best.beamlet_angles[0]:.2f}, {best.beamlet_angles[1]:.2f}) degrees, "
-        f"GPR: {best.gpr:.2f}%"
+        f"Worst case (highest MAPE@10% GT): Energy: {worst.energy_mev:.2f} MeV, "
+        f"Beamlet angles: ({worst.beamlet_angles[0]:.2f}, {worst.beamlet_angles[1]:.2f}) degrees, "
+        f"MAPE@10% GT: {worst.mape:.2f}%, GPR: {worst.gpr:.2f}%, RMSE: {worst.rmse:.9f} Gy"
     )
 
 
@@ -905,6 +1185,10 @@ def main(
     no_progress: Annotated[
         Optional[bool], typer.Option(help="Disable progress bar")
     ] = None,
+    depth_profiles: Annotated[
+        Optional[bool],
+        typer.Option("--depth-profiles/--no-depth-profiles", help="Generate optional depth-profile figures"),
+    ] = None,
     verbose: Annotated[
         Optional[bool], typer.Option(help="Enable verbose output")
     ] = None,
@@ -912,7 +1196,8 @@ def main(
     """Run the DoTA model for dose prediction.
 
     Evaluates the model on all samples in the test data directory,
-    computes metrics (GPR, RMSE, MAPE, RDE), and generates publication figures.
+    computes metrics (GPR, RMSE, thresholded MAPE, RDE), saves CSV results,
+    and generates publication figures.
 
     Can be configured via CLI arguments, a YAML config file (--config), or both.
     CLI arguments take precedence over YAML values.
@@ -926,8 +1211,8 @@ def main(
 
     # Merge: CLI args override YAML values, YAML overrides defaults
     model_name = model_name or yaml_config.get("model_name")
-    test_data = test_data or (
-        Path(yaml_config["test_data"]) if "test_data" in yaml_config else None
+    test_data_config = (
+        test_data if test_data is not None else yaml_config.get("test_data")
     )
     downsampling_method = downsampling_method or yaml_config.get(
         "downsampling_method", "interpolation"
@@ -951,6 +1236,11 @@ def main(
         if no_progress is not None
         else yaml_config.get("no_progress", False)
     )
+    depth_profiles = (
+        depth_profiles
+        if depth_profiles is not None
+        else yaml_config.get("depth_profiles", False)
+    )
     verbose = verbose if verbose is not None else yaml_config.get("verbose", False)
 
     # Validate required arguments
@@ -958,10 +1248,12 @@ def main(
         raise typer.BadParameter(
             "MODEL_NAME is required (via CLI argument or YAML config)"
         )
-    if test_data is None:
+    if test_data_config is None:
         raise typer.BadParameter(
             "TEST_DATA is required (via CLI argument or YAML config)"
         )
+
+    test_datasets = normalize_test_data_config(test_data_config)
 
     # Setup run directory and logging first
     runs_dir = PROJECT_ROOT / "runs"
@@ -988,12 +1280,9 @@ def main(
     model_path = model_hub / model_name / model_fname
     hyperparams_path = model_hub / model_name / "hyperparams.json"
 
-    # Convert test_data to absolute path if relative
-    if not test_data.is_absolute():
-        test_data = PROJECT_ROOT / test_data
-
     # Validate inputs
-    validate_inputs(test_data, model_path, hyperparams_path)
+    for dataset in test_datasets:
+        validate_inputs(dataset.path, model_path, hyperparams_path)
 
     # Log run configuration
     logger.info("=" * 60)
@@ -1001,10 +1290,12 @@ def main(
     logger.info("=" * 60)
     logger.info(f"Model name: {model_name}")
     logger.info(f"Model file: {model_fname}")
-    logger.info(f"Test data: {test_data}")
+    for dataset in test_datasets:
+        logger.info(f"Test data [{dataset.label}]: {dataset.path}")
     logger.info(f"Downsampling method: {downsampling_method}")
     logger.info(f"Dose threshold: {dose_threshold}%")
     logger.info(f"Distance threshold: {distance_threshold}mm")
+    logger.info(f"Depth profiles enabled: {depth_profiles}")
     logger.info("=" * 60)
 
     # Setup device and model
@@ -1018,26 +1309,34 @@ def main(
     config.gamma_params["dose_percent_threshold"] = dose_threshold
     config.gamma_params["distance_mm_threshold"] = distance_threshold
 
-    # Get sample IDs
-    files = os.listdir(test_data)
-    sample_ids = np.unique([f.split("_")[0] for f in files if "_" in f]).tolist()
-    logger.info(f"Found {len(sample_ids)} unique samples for evaluation")
-
-    if not sample_ids:
-        logger.error("No samples found in test data directory")
-        raise typer.Exit(code=1)
-
-    # Run evaluation
+    # Run evaluation for each configured anatomical site.
     start_time = perf_counter()
-    results = evaluate_samples(
-        model=model,
-        sample_ids=sample_ids,
-        test_data_path=test_data,
-        config=config,
-        device=device,
-        downsampling_method=downsampling_method,
-        show_progress=not no_progress,
-    )
+    results_by_site: dict[str, list] = {}
+    for dataset in test_datasets:
+        sample_ids = discover_sample_ids(dataset.path)
+        logger.info(
+            f"Found {len(sample_ids)} unique samples for {dataset.label} evaluation"
+        )
+
+        if not sample_ids:
+            logger.error(f"No samples found in test data directory: {dataset.path}")
+            raise typer.Exit(code=1)
+
+        dataset_results = evaluate_samples(
+            model=model,
+            sample_ids=sample_ids,
+            test_data_path=dataset.path,
+            config=config,
+            device=device,
+            downsampling_method=downsampling_method,
+            show_progress=not no_progress,
+        )
+        for result in dataset_results:
+            result.anatomical_site = dataset.label
+            result.test_data_path = str(dataset.path)
+        results_by_site[dataset.label] = dataset_results
+
+    results = [r for site_results in results_by_site.values() for r in site_results]
     total_time = perf_counter() - start_time
 
     # Print results table (goes to both console and log file)
@@ -1049,12 +1348,30 @@ def main(
         energies=[r.energy_mev for r in results],
         gprs_calc=[r.gpr for r in results],
         rmses=[r.rmse for r in results],
-        mapes=[r.mape for r in results],
+        mapes_0_1_pct=[r.mape_0_1_pct for r in results],
+        mapes_1_pct=[r.mape_1_pct for r in results],
+        mapes_5_pct=[r.mape_5_pct for r in results],
+        mapes_10_pct=[r.mape_10_pct for r in results],
         rdes=[r.rde for r in results],
         gamma_params=config.gamma_params,
         beamlet_angles=[list(r.beamlet_angles) for r in results],
         logger=logger,
     )
+
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info("ANATOMICAL SITE SUMMARY")
+    logger.info("=" * 60)
+    print_anatomical_site_summary(results_by_site, logger=logger)
+    save_anatomical_site_summary_csv(
+        results_by_site, run_dir / "anatomical_site_summary.csv"
+    )
+
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info("RESULTS CSV")
+    logger.info("=" * 60)
+    save_results_csv(results, run_dir / "results.csv")
 
     # Print summary
     logger.info("")
@@ -1075,17 +1392,20 @@ def main(
     generate_publication_figures(
         model=model,
         results=results,
-        test_data_path=test_data,
+        test_data_path=test_datasets[0].path,
         output_dir=figures_dir,
         config=config,
         device=device,
     )
 
-    advanced_metrics_and_figures(
-        results=results,
-        output_dir=figures_dir / "depth_profiles",
-        config=config,
-    )
+    if depth_profiles:
+        advanced_metrics_and_figures(
+            results=results,
+            output_dir=figures_dir / "depth_profiles",
+            config=config,
+        )
+    else:
+        logger.info("Skipping depth-profile figures (depth_profiles=False)")
 
     density_variability_vs_gpr(
         results=results,
