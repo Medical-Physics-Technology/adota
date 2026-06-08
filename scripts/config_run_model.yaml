@@ -17,7 +17,7 @@ model_name: DoTA_v3_grid_search_v11
 # Path(s) to the directory/directories with input data to evaluate
 test_data:
   - label: thoracic CT
-    path: /scratch/mstryja/DoTA_dataset_v2/testset_Lung-PET-CT-Dx_v3
+    path: /scratch/mstryja/DoTA_dataset_v2/lung_testset_paper
   - label: pelvic / abdominal
     path: /scratch/mstryja/DoTA_dataset_v2/pelvis_abdominal_testset_paper
 

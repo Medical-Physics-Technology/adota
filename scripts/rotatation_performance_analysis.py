@@ -794,15 +794,20 @@ def _resolve_device(device: Optional[str]) -> str:
     return "cuda:0" if torch.cuda.is_available() else "cpu"
 
 
-def _make_smoke_volumes() -> dict[str, Optional[np.ndarray]]:
+def _make_smoke_volumes(
+    shape_dhw: tuple[int, int, int] = (32, 64, 64),
+) -> dict[str, Optional[np.ndarray]]:
     rng = np.random.RandomState(0)
-    ct = rng.rand(32, 64, 64).astype(np.float32)
-    dose = rng.rand(32, 64, 64).astype(np.float32) * 50.0
+    depth, height, width = shape_dhw
+    ct = rng.rand(depth, height, width).astype(np.float32)
+    dose = rng.rand(depth, height, width).astype(np.float32) * 50.0
     zz, yy, xx = np.meshgrid(
-        np.arange(32), np.arange(64), np.arange(64), indexing="ij"
+        np.arange(depth), np.arange(height), np.arange(width), indexing="ij"
     )
+    radius = max(1, min(depth, height, width) // 6)
     target = (
-        ((zz - 16) ** 2 + (yy - 32) ** 2 + (xx - 32) ** 2) <= 10**2
+        ((zz - depth // 2) ** 2 + (yy - height // 2) ** 2 + (xx - width // 2) ** 2)
+        <= radius**2
     ).astype(np.float32)
     return {"ct": ct, "dose": dose, "target": target}
 
@@ -865,6 +870,24 @@ def main(
         "--smoke",
         help="Skip plan loading and run on small synthetic CT+dose+target volumes (32, 64, 64).",
     ),
+    smoke_depth: int = typer.Option(
+        32,
+        "--smoke-depth",
+        min=1,
+        help="Depth dimension for synthetic smoke volumes.",
+    ),
+    smoke_height: int = typer.Option(
+        64,
+        "--smoke-height",
+        min=1,
+        help="Height dimension for synthetic smoke volumes.",
+    ),
+    smoke_width: int = typer.Option(
+        64,
+        "--smoke-width",
+        min=1,
+        help="Width dimension for synthetic smoke volumes.",
+    ),
 ) -> None:
     device_resolved = _resolve_device(device)
     skip_set = {s.strip().lower() for s in skip_framework}
@@ -876,9 +899,9 @@ def main(
         )
 
     if smoke:
-        volumes = _make_smoke_volumes()
+        volumes = _make_smoke_volumes((smoke_depth, smoke_height, smoke_width))
         spacing_zyx = (1.0, 1.0, 1.0)
-        pivot_xy = (24.0, 40.0)
+        pivot_xy = (0.375 * smoke_width, 0.625 * smoke_height)
         plot_z = volumes["ct"].shape[0] // 2
         print(
             f"Smoke mode: synthetic volumes shape={volumes['ct'].shape} pivot_xy={pivot_xy} plot_z={plot_z}",

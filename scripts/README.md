@@ -154,6 +154,137 @@ The model directory must contain:
 
 ---
 
+## rotatation_performance_analysis.py
+
+Benchmarks 3-D rotation of CT, dose, and target-mask volumes around a plan-derived pivot point. The script compares SciPy, CuPy, and PyTorch implementations, checks numerical agreement against SciPy, and writes a comparison plot plus a CSV timing table.
+
+The filename is currently spelled `rotatation_performance_analysis.py`.
+
+### Quick Smoke Test
+
+Use the smoke mode to verify the script without external OpenTPS plan data. This uses small synthetic CT, dose, and target volumes and runs only the dependencies already declared in the project.
+
+```bash
+uv run --no-sync python scripts/rotatation_performance_analysis.py \
+    --smoke \
+    --device cpu \
+    --skip-framework cupy \
+    --repeats 1 \
+    --output-dir /tmp/adota_rotation_performance_smoke
+```
+
+Expected behavior:
+- the script prints timings for SciPy and Torch;
+- the correctness check reports `allclose=True` for CT, dose, and target;
+- outputs are saved to `/tmp/adota_rotation_performance_smoke/rotation_comparison.png` and `/tmp/adota_rotation_performance_smoke/results_table.csv`.
+
+`--no-sync` is recommended when you want to use the existing project virtual environment exactly as-is and avoid installing or updating packages.
+
+### Run On Plan Data
+
+To run on an OpenTPS plan folder, provide the root directory containing plan folders and the plan folder name:
+
+```bash
+uv run --no-sync python scripts/rotatation_performance_analysis.py \
+    --plans-root /scratch/mstryja/opentps_plans \
+    --plan-name Prostate-AEC-120_100M_bilateral_test_1_review \
+    --angle 30 \
+    --device cuda:0 \
+    --repeats 3 \
+    --output-dir results/rotation_performance_analysis
+```
+
+The plan folder is expected to contain:
+- `PlanPencil.txt` for the isocenter/pivot;
+- `CT.mhd` for the CT grid;
+- `Dose.mhd` for the dose grid, unless `--no-dose` is used;
+- `target.mhd` for the target mask, unless `--no-target` is used.
+
+### Common Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--smoke` | `False` | Use synthetic data instead of loading a plan folder. |
+| `--plans-root` | `/scratch/mstryja/opentps_plans/` | Directory containing OpenTPS plan folders. |
+| `--plan-name` | `Prostate-AEC-120_100M_bilateral_test_1_review` | Plan folder name inside `--plans-root`. |
+| `--angle` | `30.0` | Rotation angle in degrees. |
+| `--device` | CUDA if available, otherwise CPU | Device for Torch and CuPy, for example `cpu`, `cuda`, or `cuda:0`. |
+| `--repeats` | `3` | Number of timed runs per framework and volume. The median is reported. |
+| `--skip-framework` | none | Framework to skip. Repeatable; useful values are `scipy`, `cupy`, and `torch`. |
+| `--no-dose` | `False` | Do not load or rotate `Dose.mhd`. |
+| `--no-target` | `False` | Do not load or rotate `target.mhd`. |
+| `--output-dir` | `results/rotation_performance_analysis` | Directory for the plot and CSV output. |
+| `--show` | `False` | Display plots interactively in addition to saving them. |
+
+### CuPy Notes
+
+CuPy is optional and is not listed in the default project dependencies. If CuPy is not installed in the active `.venv`, run with `--skip-framework cupy`.
+
+To benchmark CuPy, install the CuPy package that matches the CUDA runtime on the machine, then run without `--skip-framework cupy`. Do not use `uv sync` or install new packages on a shared environment unless you intentionally want to update the virtual environment.
+
+### Outputs
+
+For each run with `--output-dir` set, the script writes:
+- `rotation_comparison.png` - a 2x2 visual comparison of original, SciPy, CuPy, and Torch rotations;
+- `results_table.csv` - per-framework, per-volume timings and any errors.
+
+The console output also includes a formatted timing table and a correctness check versus SciPy.
+
+---
+
+## beamlet_timing_comparison.py
+
+Loads ADoTA test samples, extracts `beamlet_angles` with `get_single_record(..., beamlet_angle=True)`, and applies the lateral-axis correction rotation to the raw full-resolution CT, flux, and ground-truth dose volumes. CT, flux, and dose are always rotated and timed separately; the CSV also reports the combined all-volume rotation time.
+
+The rotation order is Y/H first and X/W second:
+
+```text
+rotation_y_deg = -ba1
+rotation_x_deg = ba0
+```
+
+### Run A 10-Figure CPU Test
+
+`--max-samples` is applied per dataset. With the default two datasets, `--max-samples 5` produces 10 figures.
+
+```bash
+uv run --no-sync python scripts/beamlet_timing_comparison.py \
+    --device-index -1 \
+    --rotation-backend scipy \
+    --max-samples 5 \
+    --repeats 1 \
+    --output-dir runs/beamlet_timing_10figures_all_volumes_scipy
+```
+
+### Run The Full Timing Study
+
+Use `--full` to process all samples from each dataset. Full runs skip the per-sample CT/flux/dose validation figures automatically, but still generate the timing summary figures. If `--output-dir` is omitted, the run directory follows `runs/beamlet_timing_rotvsproj_<YYYYMMDD>_<HHMMSS>`.
+
+```bash
+uv run --no-sync python scripts/beamlet_timing_comparison.py \
+    --device-index -1 \
+    --rotation-backend scipy \
+    --repeats 1 \
+    --full
+```
+
+`--no-sync` is recommended to use the current project environment without installing or updating packages.
+
+### Outputs
+
+Each run writes:
+- `per_sample_rotation_timing.csv` - one row per sample with `ct_rotation_*`, `flux_rotation_*`, `dose_rotation_*`, and `all_rotation_total_s` timing columns;
+- `per_sample_branch_comparison.csv` - per-sample comparison of fixed ADoTA projection time versus measured CT/flux/dose rotation time, both with the shared crop/ray-tracer time included;
+- `timing_summary.csv` and `timing_summary.json` - overall and per-dataset mean/median/min/max/std summaries, including branch speedup ratios;
+- `rotated_previews/*.npz` - original and rotated CT, flux, and dose arrays;
+- `figures/preprocessing_times_per_beamlet_rotvsproj.png` and `figures/preprocessing_times_per_beamlet_rotvsproj.pdf` - publication-style two-panel bar figure comparing reinterpolation against ADoTA projection;
+- `figures/*.png` - optional five-row per-sample comparison figures, plus `timing_branch_comparison.png` and `timing_volume_breakdown.png` summary plots;
+- `config.json` and `run.log` for reproducibility.
+
+The legacy `--rotation-volume` option is ignored for timing; it remains accepted only for compatibility. All three volumes are rotated in every run.
+
+---
+
 ## analysis_texture_with_inference.py
 
 Combines DoTA model evaluation with CT heterogeneity / texture analysis and computes **Pearson correlations** between model performance (MAPE, GPR) and CT complexity scores (G_φ, R, H_φ, GLCM homogeneity).
