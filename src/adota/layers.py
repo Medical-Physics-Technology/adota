@@ -201,17 +201,32 @@ class ConvDecoder3D(nn.Module):
             "history_filters", [2, *self.conv_hidden_channels][::-1]
         )
 
+        # If False, the encoder-decoder skip (residual) connections are disabled
+        # (ablation): the encoder feature maps are no longer concatenated onto
+        # the decoder input, so the corresponding input channels are removed.
+        # Defaults to True to preserve the original behavior.
+        self.residual = kwargs.get("residual", True)
+
         self.decoder = nn.Sequential()
 
         for i in range(self.num_levels):
+            # When skip connections are enabled, the concatenated encoder
+            # feature map adds history_filters[i] channels to the block input.
+            # When disabled, no extra channels are added.
+            if self.residual:
+                skip_channels = self.history_filters[i]
+            else:
+                skip_channels = 0
+
+            if i == 0:
+                in_channels = self.input_shape[0] + skip_channels
+            else:
+                in_channels = self.conv_hidden_channels[i - 1] + skip_channels
+
             self.decoder.add_module(
                 f"conv_block_{i}",
                 ConvBlock3D_v2(
-                    in_channels=(
-                        self.input_shape[0] + self.history_filters[i]
-                        if i == 0
-                        else self.conv_hidden_channels[i - 1] + self.history_filters[i]
-                    ),
+                    in_channels=in_channels,
                     out_channels=(
                         self.conv_hidden_channels[i]
                         if i < self.num_levels - 1
@@ -228,7 +243,8 @@ class ConvDecoder3D(nn.Module):
 
     def forward(self, x, x_history):
         for i, conv_block in enumerate(self.decoder):
-            x = torch.cat([x, x_history[-(i + 1)]], dim=1)
+            if self.residual:
+                x = torch.cat([x, x_history[-(i + 1)]], dim=1)
             x = conv_block(x)
         return x
 
@@ -272,6 +288,10 @@ class TransformerEncoderLayerDoTA(nn.Module):
         self.hidden_dim = kwargs.get("hidden_dim", self.embeded_dim)
         self.causal = kwargs.get("causal", False)
         self.num_forward = kwargs.get("num_forward", 0)
+        # If False, the additive residual connections around the attention and
+        # feed-forward sub-blocks are disabled (ablation). Defaults to True to
+        # preserve the original behavior. Adds no learnable parameters.
+        self.residual = kwargs.get("residual", True)
 
         # num_heads must be a factor of embeded_dim
         assert (
@@ -321,11 +341,17 @@ class TransformerEncoderLayerDoTA(nn.Module):
                     x, x, x, average_attn_weights=False
                 )
 
-        x = x + mhout
+        if self.residual:
+            x = x + mhout
+        else:
+            x = mhout
         x = self.norm_1(x)
 
         ffout = self.feedforward_block(x)
-        x = x + ffout
+        if self.residual:
+            x = x + ffout
+        else:
+            x = ffout
         x = self.norm_2(x)
 
         if self.training:

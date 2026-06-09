@@ -9,32 +9,70 @@ from src.adota.layers import *
 logger = logging.getLogger(__name__)
 
 class DoTA3D_v3(nn.Module):
-    """_summary_
+    """Dose Transformer (DoTA) 3D model, version 3.
+
+    Encoder-decoder architecture for proton dose prediction. A convolutional
+    encoder maps the input volume into a sequence of per-slice tokens, a stack
+    of transformer encoder layers models the energy-conditioned inter-slice
+    dependencies, and a convolutional decoder reconstructs the dose volume.
+
+    The model contains two distinct residual / skip pathways, each separately
+    controllable for ablation studies:
+        1. The convolutional encoder-decoder skip connections (the ``x_hist``
+           tensors in ``forward``), which concatenate encoder feature maps into
+           the corresponding decoder blocks. Controlled by ``conv_residual``.
+        2. The transformer-internal residual connections around the attention
+           and feed-forward sub-blocks. Controlled by ``transformer_residual``.
+
+    Both default to True, reproducing the original architecture and keeping
+    existing checkpoints and hyperparameter dicts backward compatible.
 
     Args:
-        nn (_type_): _description_
+        nn (torch.nn.Module): Base module class from torch.nn.
     """
 
     def __init__(self, input_shape: tuple, **kwargs):
-        """_summary_
+        """Constructor of the DoTA3D_v3 model.
 
         Args:
-            input_shape (tuple): _description_
-            ourput_shape (tuple, optional): _description_. Defaults to (1, *input_shape[1:]).
-            zero_padding (bool, optional): _description_. Defaults to True.
-            last_activation (bool, optional): _description_. Defaults to False.
-            num_levels (int, optional): _description_. Defaults to 3.
-            enc_features (int, optional): _description_. Defaults to 8.
-            kernel_size (int, optional): _description_. Defaults to 3.
-            convolutional_steps (int, optional): _description_. Defaults to 2.
-            conv_hidden_channels (int, optional): _description_. Defaults to 64.
-            num_transformers (int, optional): _description_. Defaults to 1.
-            num_heads (int, optional): _description_. Defaults to 8.
-            dropout_rate (float, optional): _description_. Defaults to 0.1.
-            causal (bool, optional): _description_. Defaults to True.
-            num_forward (int, optional): _description_. Defaults to 0.
+            input_shape (tuple): Shape of the input volume (C, D, H, W).
+            output_shape (tuple, optional): Shape of the predicted dose volume.
+                Defaults to (1, *input_shape[1:]).
+            zero_padding (bool, optional): If True, the spatial dimensions are
+                zero-padded to the next power of two. Defaults to True.
+            last_activation (bool, optional): If True, a ReLU is applied to the
+                final output. Defaults to False.
+            num_levels (int, optional): Number of down/upsampling levels in the
+                convolutional encoder/decoder. Defaults to 3.
+            enc_features (int, optional): Number of channels at the flattened
+                encoder output. Defaults to 8.
+            kernel_size (int, optional): Convolution kernel size. Defaults to 3.
+            convolutional_steps (int, optional): Number of convolutional steps
+                per encoder/decoder block. Defaults to 2.
+            conv_hidden_channels (int, optional): Number of hidden channels per
+                convolutional block. Defaults to 64.
+            num_transformers (int, optional): Number of stacked transformer
+                encoder layers. Defaults to 1.
+            num_heads (int, optional): Number of attention heads. Defaults to 8.
+            dropout_rate (float, optional): Dropout probability in the attention
+                blocks. Defaults to 0.1.
+            causal (bool, optional): If True, applies a causal attention mask so
+                each slice only attends to previous slices. Defaults to True.
+            num_forward (int, optional): Number of look-ahead slices allowed by
+                the causal mask. Defaults to 0.
+            transformer_residual (bool, optional): If True, the transformer
+                encoder layers use additive residual (skip) connections around
+                the attention and feed-forward sub-blocks. Set to False to
+                ablate them. Adds no learnable parameters, so checkpoints stay
+                compatible across both settings. Defaults to True.
+            conv_residual (bool, optional): If True, the convolutional decoder
+                receives the encoder skip connections (``x_hist``) via channel
+                concatenation. Set to False to ablate them; this reduces the
+                decoder convolution input channels, so an ablated model has a
+                different parameter count from the baseline. Defaults to True.
+
         Raises:
-            ValueError: _description_
+            ValueError: If the configuration is invalid.
         """
         super(DoTA3D_v3, self).__init__()
         self.input_shape_initialized = input_shape
@@ -56,6 +94,11 @@ class DoTA3D_v3(nn.Module):
         self.dropout_rate = kwargs.get("dropout_rate", 0.1)
         self.causal = kwargs.get("causal", True)
         self.num_forward = kwargs.get("num_forward", 0)
+
+        # Residual / skip connection ablation flags. Both default to True to
+        # preserve the original architecture and backward compatibility.
+        self.transformer_residual = kwargs.get("transformer_residual", True)
+        self.conv_residual = kwargs.get("conv_residual", True)
 
         if self.zero_padding:
             self._padded_shape()
@@ -97,6 +140,7 @@ class DoTA3D_v3(nn.Module):
                     batch_first=True,
                     causal=self.causal,
                     num_forward=self.num_forward,
+                    residual=self.transformer_residual,
                 ),
             )
 
@@ -112,6 +156,7 @@ class DoTA3D_v3(nn.Module):
             conv_steps_per_block=self.convolutional_steps,
             conv_hidden_channels=self.conv_hidden_channels,
             output_shape=self.output_shape,
+            residual=self.conv_residual,
         )
 
         if self.last_activation:
@@ -218,5 +263,7 @@ class DoTA3D_v3(nn.Module):
             "dropout_rate": self.dropout_rate,
             "causal": self.causal,
             "num_forward": self.num_forward,
+            "transformer_residual": self.transformer_residual,
+            "conv_residual": self.conv_residual,
         }
         return model_parameters

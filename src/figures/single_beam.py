@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import matplotlib.pyplot as plt
 import numpy as np
 from mpl_toolkits.axes_grid1 import make_axes_locatable
@@ -29,7 +31,16 @@ def identify_axes(ax_dict: dict[str, plt.Axes], fontsize: int = 48) -> None:
         ax.text(0.5, 0.5, k, transform=ax.transAxes, **kw)
 
 
-def aligned_colorbar(fig, ct_ax, ax, label: str, label_coords: tuple = (4.7, 0.5)):
+def aligned_colorbar(
+    fig,
+    ct_ax,
+    ax,
+    label: str,
+    label_coords: tuple = (4.7, 0.5),
+    label_fontsize: int = 18,
+    tick_fontsize: int = 15,
+    size: str = "5%",
+):
     """Function to create an aligned colorbar for the given axes.
 
     Args:
@@ -42,13 +53,23 @@ def aligned_colorbar(fig, ct_ax, ax, label: str, label_coords: tuple = (4.7, 0.5
         _type_: _description_
     """
     divider = make_axes_locatable(ax)
-    cax = divider.append_axes("right", size="5%", pad=0.05)
+    cax = divider.append_axes("right", size=size, pad=0.05)
     colorbar = fig.colorbar(ct_ax, cax=cax, orientation="vertical")
-    colorbar.set_label(label, fontsize=18, labelpad=10)
+    colorbar.set_label(label, fontsize=label_fontsize, labelpad=10)
     colorbar.ax.yaxis.set_label_position("left")
     colorbar.ax.yaxis.set_label_coords(label_coords[0], label_coords[1])
-    colorbar.ax.yaxis.set_tick_params(labelsize=15)
+    colorbar.ax.yaxis.set_tick_params(labelsize=tick_fontsize)
     return colorbar
+
+
+def save_figure_as_publication_formats(fig, figure_path: str) -> list[Path]:
+    output_path = Path(figure_path)
+    output_paths = [
+        output_path.with_suffix(f".{extension}") for extension in ("svg", "pdf", "png")
+    ]
+    for path in output_paths:
+        fig.savefig(path, bbox_inches="tight", dpi=300)
+    return output_paths
 
 
 def compare_two_inputs(
@@ -225,6 +246,37 @@ def publication_figure(
     lateral_profiles_per_slice: bool = False,
     beamlet_shape: bool = False,
 ):
+    tick_fontsize = 18
+    row_label_fontsize = 18
+    colorbar_label_fontsize = 22
+    colorbar_tick_fontsize = 18
+    row_label_x = -0.13
+    wide_row_label_x = -0.055
+    bev_colorbar_size = "15%"
+
+    def set_row_ylabel(ax, label: str, label_x: float = row_label_x) -> None:
+        ax.set_ylabel(label, fontsize=row_label_fontsize)
+        ax.yaxis.set_label_coords(label_x, 0.5)
+
+    def publication_colorbar(
+        fig,
+        ct_ax,
+        ax,
+        label: str,
+        label_coords: tuple = (4.7, 0.5),
+        size: str = "5%",
+    ):
+        return aligned_colorbar(
+            fig,
+            ct_ax,
+            ax,
+            label,
+            label_coords=label_coords,
+            label_fontsize=colorbar_label_fontsize,
+            tick_fontsize=colorbar_tick_fontsize,
+            size=size,
+        )
+
     # Preprocessing - handled here for simplicity
     bp_idx_gt = estimate_bragg_peak(ground_truth)
     bp_idx_pred = estimate_bragg_peak(prediction)
@@ -239,7 +291,7 @@ def publication_figure(
         # Last row represents lateral profiles per displayed slice in the rows above
         mosaic = "AAABBB;CCCDDD;EEEFFF;TTTTTT;GHIJKL;MNOPQR;STUVWX;lfyzab"
 
-    fig_height = 18 if beamlet_shape else 16
+    fig_height = 19 if beamlet_shape else 17
     fig = plt.figure(layout="constrained", figsize=(18, fig_height), dpi=300)
     ax_dict = fig.subplot_mosaic(mosaic)
 
@@ -255,8 +307,8 @@ def publication_figure(
 
     diff = np.abs(ground_truth - prediction) / np.max(ground_truth) * 100
 
-    y_true_np = to_gy(ground_truth)
-    y_pred_np = to_gy(prediction)
+    y_true_np = to_gy(ground_truth) * 1000 # Convert to Gy / 10^7 particles, which is a more intuitive unit for visualization (and is what we used in the paper). The scaling by 1000 is to convert from Gy to mGy, which is a common unit for dose visualization.
+    y_pred_np = to_gy(prediction) * 1000 # Convert to Gy / 10^7 particles, which is a more intuitive unit for visualization (and is what we used in the paper). The scaling by 1000 is to convert from Gy to mGy, which is a common unit for dose visualization.
     x_np = ct_input.copy()
 
     true_min, true_max = np.min(y_true_np), np.max(y_true_np)
@@ -279,7 +331,7 @@ def publication_figure(
             32 if i % 2 == 0 else -2,
             f"{depth_layers_to_disp[i] * 2} mm",
             transform=ax.transData,
-            fontsize=14,
+            fontsize=16,
             color="red",
             va="center",
             ha="left",
@@ -291,12 +343,12 @@ def publication_figure(
         norm=norm_true,
     )
     ax.set_xticks([])
-    ax.set_ylabel("MCSquare\n[mm]", fontsize=16)
+    set_row_ylabel(ax, "MCSquare\n[mm]")
     # Replace y axis ticks to represent physical dimensions
     y_ticks = ax.get_yticks()
     y_tick_labels = (y_ticks * 2).astype(int)  # times 2 because of avg pooling
     ax.set_yticklabels(y_tick_labels)
-    ax.tick_params(labelsize=16)
+    ax.tick_params(labelsize=tick_fontsize)
 
     # Add xtick to effectively display the grid, but to not display x-ticks labels
     x_axis_ticks = np.arange(0, y_true_np.shape[0], 10)
@@ -326,16 +378,16 @@ def publication_figure(
                 32 if i % 2 == 0 else -2,
                 f"{depth_layers_to_disp[i] * 2} mm",
                 transform=ax.transData,
-                fontsize=14,
+                fontsize=16,
                 color="red",
                 va="center",
                 ha="left",
             )
-        ax.set_ylabel("CT + Flux\n[mm]", fontsize=16)
+        set_row_ylabel(ax, "CT + Flux\n[mm]")
         y_ticks = ax.get_yticks()
         y_tick_labels = (y_ticks * 2).astype(int)
         ax.set_yticklabels(y_tick_labels)
-        ax.tick_params(labelsize=16)
+        ax.tick_params(labelsize=tick_fontsize)
         x_axis_ticks = np.arange(0, x_np[0].shape[0], 10)
         ax.set_xticks(x_axis_ticks)
         ax.set_xticklabels([""] * len(x_axis_ticks))
@@ -347,14 +399,14 @@ def publication_figure(
         flux_sag = np.rot90(flux[:, :, bp_idx_gt[2]])
         flux_alpha_sag = np.where(flux_sag > flux_alpha_threshold, 0.65, 0.0)
         flux_im = ax.imshow(flux_sag, cmap="hot", alpha=flux_alpha_sag)
-        aligned_colorbar(fig, flux_im, ax, "Flux [a.u.]")
+        publication_colorbar(fig, flux_im, ax, "Flux [a.u.]")
         y_ticks = ax.get_yticks()
         ax.set_yticklabels([""] * len(y_ticks))
         x_axis_ticks = np.arange(0, x_np[0].shape[0], 10)
         ax.set_xticks(x_axis_ticks)
         ax.set_xticklabels([""] * len(x_axis_ticks))
         ax.grid(linestyle="--", linewidth=0.5, color="white")
-        ax.tick_params(labelsize=14)
+        ax.tick_params(labelsize=tick_fontsize)
 
     # Axial - Prediction
     ax = ax_dict["C"]
@@ -380,7 +432,7 @@ def publication_figure(
     )
     # aligned_colorbar(fig, ct_ax, ax, '')
     # ax.set_xticks([])
-    ax.set_ylabel("ADoTA\n[mm]", fontsize=16)
+    set_row_ylabel(ax, "ADoTA\n[mm]")
     # Replace y axis ticks to represent physical dimensions
     y_ticks = ax.get_yticks()
     y_tick_labels = (y_ticks * 2).astype(int)  # times
@@ -393,7 +445,7 @@ def publication_figure(
     ax.set_xticklabels([""] * len(x_axis_ticks))
 
     ax.grid(linestyle="--", linewidth=0.5, color="white")
-    ax.tick_params(labelsize=14)
+    ax.tick_params(labelsize=tick_fontsize)
 
     # Axial - Difference
     ax = ax_dict["E"]
@@ -401,13 +453,13 @@ def publication_figure(
         np.rot90(diff[:, bp_idx_gt[1], :]), cmap="seismic", vmin=diff_min, vmax=diff_max
     )
     # aligned_colorbar(fig, ct_ax, ax, '')
-    ax.set_ylabel("Abs. diff. [%]\n[mm]", fontsize=16)
+    set_row_ylabel(ax, "Abs. diff. [%]\n[mm]")
     # Replace y axis ticks to represent physical dimensions
     y_ticks = ax.get_yticks()
     y_tick_labels = (y_ticks * 2).astype(int)  # times 2 because of avg pooling
     ax.set_yticklabels(y_tick_labels)
     ax.set_xticks([])
-    ax.tick_params(labelsize=14)
+    ax.tick_params(labelsize=tick_fontsize)
 
     x_axis_ticks = np.arange(0, y_true_np.shape[0], 10)
     x_axis_ticks_labels = np.arange(0, 2 * x_np[0].shape[0], 20)
@@ -442,7 +494,7 @@ def publication_figure(
             va="center",
             ha="left",
         )
-    aligned_colorbar(fig, ct_ax, ax, "Dose [Gy]")
+    publication_colorbar(fig, ct_ax, ax, "Dose [Gy]")
     # Maintain the grid, but remove ticks
     # Set x and y ticks to represent physical dimensions
     y_ticks = ax.get_yticks()
@@ -456,7 +508,7 @@ def publication_figure(
     ax.set_xticklabels([""] * len(x_axis_ticks))
 
     ax.grid(linestyle="--", linewidth=0.5, color="white")
-    ax.tick_params(labelsize=14)
+    ax.tick_params(labelsize=tick_fontsize)
 
     # Saggital - Prediction
     ax = ax_dict["D"]
@@ -480,8 +532,8 @@ def publication_figure(
             va="center",
             ha="left",
         )
-    aligned_colorbar(fig, ct_ax, ax, "Dose [Gy]")
-    ax.tick_params(labelsize=14)
+    publication_colorbar(fig, ct_ax, ax, "Dose [Gy]")
+    ax.tick_params(labelsize=tick_fontsize)
     # Maintain the grid, but remove ticks
     # Set x and y ticks to represent physical dimensions
     y_ticks = ax.get_yticks()
@@ -495,15 +547,15 @@ def publication_figure(
     ax.set_xticklabels([""] * len(x_axis_ticks))
 
     ax.grid(linestyle="--", linewidth=0.5, color="white")
-    ax.tick_params(labelsize=14)
+    ax.tick_params(labelsize=tick_fontsize)
 
     # Saggital - Difference
     ax = ax_dict["F"]
     ct_ax = ax.imshow(
         np.rot90(diff[:, :, bp_idx_gt[2]]), cmap="seismic", vmin=diff_min, vmax=diff_max
     )
-    aligned_colorbar(fig, ct_ax, ax, "Abs. diff. [%]")
-    ax.tick_params(labelsize=14)
+    publication_colorbar(fig, ct_ax, ax, "Abs. diff. [%]")
+    ax.tick_params(labelsize=tick_fontsize)
     # Set x and y ticks to represent physical dimensions
     y_ticks = ax.get_yticks()
     y_tick_labels = (y_ticks * 2).astype(int)  # times
@@ -545,11 +597,11 @@ def publication_figure(
         np.arange(0, (x_np.shape[1] + 1) * 2, 20), rotation=45
     )  # times 2 because of avg pooling
     ax.set_xlabel("Depth [mm]", fontsize=16)
-    ax.set_ylabel("Normalized IDD [%]", fontsize=16)
+    set_row_ylabel(ax, "Normalized IDD [%]", label_x=wide_row_label_x)
     ax.legend(fontsize=14)
     ax.set_xlim(0, x_np.shape[1] - 1)
     ax.grid(linestyle="--", linewidth=0.5)
-    ax.tick_params(labelsize=16)
+    ax.tick_params(labelsize=tick_fontsize)
 
     # LAST THREE ROWS
     last_three_rows = mosaic.split(";")[-3:]
@@ -557,7 +609,7 @@ def publication_figure(
     for img_idx, ax_label in enumerate(list(last_three_rows[0])):
         ax = ax_dict[ax_label]
         if img_idx == 0:
-            ax.set_ylabel("MCSquare - BEV", fontsize=16)
+            set_row_ylabel(ax, "MCSquare - BEV")
         ax.imshow(np.rot90(x_np[0][depth_layers_to_disp[img_idx], :, :]), cmap="gray")
         dose_ax_bev = ax.imshow(
             np.rot90(y_true_np[depth_layers_to_disp[img_idx], :, :]),
@@ -566,7 +618,9 @@ def publication_figure(
             norm=norm_true,
         )
         if img_idx == len(last_three_rows[0]) - 1:
-            aligned_colorbar(fig, dose_ax_bev, ax, "Dose [Gy]", label_coords=(15, 0.5))
+            publication_colorbar(
+                fig, dose_ax_bev, ax, "Dose [Gy]", size=bev_colorbar_size
+            )
         ax.set_xticks([])
         ax.set_yticks([])
         ax.grid(linestyle="--", linewidth=0.5, color="white")
@@ -574,7 +628,7 @@ def publication_figure(
     for img_idx, ax_label in enumerate(list(last_three_rows[1])):
         ax = ax_dict[ax_label]
         if img_idx == 0:
-            ax.set_ylabel("ADoTA - BEV", fontsize=16)
+            set_row_ylabel(ax, "ADoTA - BEV")
         ax.imshow(np.rot90(x_np[0][depth_layers_to_disp[img_idx], :, :]), cmap="gray")
         dose_ax_bev = ax.imshow(
             np.rot90(y_pred_np[depth_layers_to_disp[img_idx], :, :]),
@@ -583,7 +637,9 @@ def publication_figure(
             norm=norm_true,
         )
         if img_idx == len(last_three_rows[1]) - 1:
-            aligned_colorbar(fig, dose_ax_bev, ax, "Dose [Gy]", label_coords=(15, 0.5))
+            publication_colorbar(
+                fig, dose_ax_bev, ax, "Dose [Gy]", size=bev_colorbar_size
+            )
         ax.set_xticks([])
         ax.set_yticks([])
         ax.grid(linestyle="--", linewidth=0.5, color="white")
@@ -592,7 +648,7 @@ def publication_figure(
     for img_idx, ax_label in enumerate(list(last_three_rows[2])):
         ax = ax_dict[ax_label]
         if img_idx == 0:
-            ax.set_ylabel("Abs. diff. - BEV", fontsize=16)
+            set_row_ylabel(ax, "Abs. diff. - BEV")
         diff_ax_bev = ax.imshow(
             np.rot90(diff[depth_layers_to_disp[img_idx], :, :]),
             cmap="seismic",
@@ -600,8 +656,8 @@ def publication_figure(
             vmax=diff_max,
         )
         if img_idx == len(last_three_rows[2]) - 1:
-            aligned_colorbar(
-                fig, diff_ax_bev, ax, "Abs. diff. [%]", label_coords=(15, 0.5)
+            publication_colorbar(
+                fig, diff_ax_bev, ax, "Abs. diff. [%]", size=bev_colorbar_size
             )
         ax.set_xticks([])
         ax.set_yticks([])
@@ -626,8 +682,8 @@ def publication_figure(
     #     y=1.05,
     # )
     print("Publication figure generated.")
-    fig.savefig(figure_path, bbox_inches="tight", dpi=300)
-    print("Figure saved to: ", figure_path)
+    output_paths = save_figure_as_publication_formats(fig, figure_path)
+    print("Figures saved to: ", ", ".join(str(path) for path in output_paths))
     plt.close(fig)
 
     # air_layer = os.path.basename(storage_path).split("_")[-3]

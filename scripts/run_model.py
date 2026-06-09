@@ -120,6 +120,13 @@ def discover_sample_ids(test_data_path: Path) -> list[str]:
     return np.unique([f.split("_")[0] for f in files if "_" in f]).tolist()
 
 
+def safe_directory_name(label: str) -> str:
+    """Convert a dataset label into a single safe directory name."""
+    parts = [part.strip() for part in label.replace("\\", "/").split("/")]
+    directory_name = "_".join(part for part in parts if part)
+    return directory_name or "dataset"
+
+
 def calculate_thresholded_mapes(
     ground_truth: np.ndarray,
     prediction: np.ndarray,
@@ -819,18 +826,16 @@ def advanced_metrics_and_figures(
 
 def generate_publication_figures(
     model: DoTA3D_v3,
-    results: list,
-    test_data_path: Path,
+    results_by_site: dict[str, list],
     output_dir: Path,
     config: EvaluationConfig,
     device: torch.device,
 ) -> None:
-    """Generate publication figures for best, worst, and mean cases.
+    """Generate publication figures for best, worst, and mean cases per site.
 
     Args:
         model: The loaded DoTA model.
-        results: List of evaluation results.
-        test_data_path: Path to the test data directory.
+        results_by_site: Evaluation results grouped by anatomical-site label.
         output_dir: Directory to save figures.
         config: Evaluation configuration.
         device: Target device for computation.
@@ -838,108 +843,122 @@ def generate_publication_figures(
     scale = config.scale
     gamma_params = config.gamma_params
 
-    gprs = [r.gpr for r in results]
-    mean_gpr = np.mean(gprs)
-
-    best_result = max(results, key=lambda r: r.gpr)
-    worst_result = min(results, key=lambda r: r.gpr)
-    closest_result = min(results, key=lambda r: abs(r.gpr - mean_gpr))
-
-    cases = {
-        "Best": best_result,
-        "Worst": worst_result,
-        "Closest_to_Mean": closest_result,
-    }
-
-    logger.info(f"Best GPR: {best_result.sample_id} with GPR: {best_result.gpr:.2f}%")
-    logger.info(
-        f"Worst GPR: {worst_result.sample_id} with GPR: {worst_result.gpr:.2f}%"
-    )
-    logger.info(
-        f"Closest to mean GPR: {closest_result.sample_id} with GPR: {closest_result.gpr:.2f}%"
-    )
-
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    for desc, result in cases.items():
-        logger.info(
-            f"Generating publication figure for {desc} case, id: {result.sample_id}"
-        )
+    for site_label, site_results in results_by_site.items():
+        if not site_results:
+            logger.info(f"Skipping publication figures for {site_label} - no results")
+            continue
 
-        # Use cached data if available, otherwise reload
-        if (
-            result.input_data is not None
-            and result.ground_truth is not None
-            and result.prediction is not None
-        ):
-            x = result.input_data.to(device)
-            y = result.ground_truth.to(device)
-            y_pred = result.prediction.to(device)
-            energy_mev = result.energy_mev
-        else:
-            source_test_data_path = Path(
-                getattr(result, "test_data_path", test_data_path)
-            )
-            x, energy, y = get_single_record(
-                result.sample_id,
-                source_test_data_path,
-                scale=scale,
-                normalize_flux=config.normalize_flux,
-            )
-            x, energy, y = x.to(device), energy.to(device), y.to(device)
-            energy_mev = denormalize_energy(energy.item(), scale)
+        site_output_dir = output_dir / safe_directory_name(site_label)
+        site_output_dir.mkdir(parents=True, exist_ok=True)
 
-            with torch.no_grad():
-                y_pred = model(x.unsqueeze(0), energy.unsqueeze(0))[0]
+        gprs = [r.gpr for r in site_results]
+        mean_gpr = np.mean(gprs)
 
-        # Prepare data for figure
-        x_input = inverse_minmax(
-            x.squeeze().cpu().numpy(),
-            scale["min_ct"],
-            scale["max_ct"],
-        )
-        gt = inverse_minmax(
-            y.squeeze().cpu().numpy(),
-            scale["min_ds"],
-            scale["max_ds"],
-        )
-        pred = inverse_minmax(
-            y_pred.squeeze().cpu().numpy(),
-            scale["min_ds"],
-            scale["max_ds"],
-        )
+        best_result = max(site_results, key=lambda r: r.gpr)
+        worst_result = min(site_results, key=lambda r: r.gpr)
+        closest_result = min(site_results, key=lambda r: abs(r.gpr - mean_gpr))
 
-        # Calculate metrics
-        rmse = calculate_rmse(to_gy(pred), to_gy(gt))
-        mape = result.mape
-
-        scale_gpr = {"y_min": scale["min_ds"], "y_max": scale["max_ds"]}
-        gpr_result = gamma_index_torch(
-            y.unsqueeze(0),
-            y_pred,
-            scale=scale_gpr,
-            gamma_params=gamma_params,
-            resolution=config.resolution,
-        )
-        gpr = gpr_result[1][0] * 100
+        cases = {
+            "Best": best_result,
+            "Worst": worst_result,
+            "Closest_to_Mean": closest_result,
+        }
 
         logger.info(
-            f"{desc} case - RMSE: {rmse:.6f}, MAPE: {mape:.2f}%, GPR: {gpr:.2f}%"
+            f"Publication figures for {site_label} will be saved to {site_output_dir}"
+        )
+        logger.info(
+            f"{site_label} best GPR: {best_result.sample_id} with GPR: {best_result.gpr:.2f}%"
+        )
+        logger.info(
+            f"{site_label} worst GPR: {worst_result.sample_id} with GPR: {worst_result.gpr:.2f}%"
+        )
+        logger.info(
+            f"{site_label} closest to mean GPR: {closest_result.sample_id} "
+            f"with GPR: {closest_result.gpr:.2f}%"
         )
 
-        figure_path = output_dir / f"{desc}_E{energy_mev:.2f}MeV.svg"
+        for desc, result in cases.items():
+            logger.info(
+                f"Generating publication figure for {site_label} {desc} case, "
+                f"id: {result.sample_id}"
+            )
 
-        publication_figure(
-            x_input,
-            energy_mev,
-            gt,
-            pred,
-            str(figure_path),
-            rmse,
-            mape,
-            gpr,
-            gamma_params=gamma_params,
-        )
+            # Use cached data if available, otherwise reload
+            if (
+                result.input_data is not None
+                and result.ground_truth is not None
+                and result.prediction is not None
+            ):
+                x = result.input_data.to(device)
+                y = result.ground_truth.to(device)
+                y_pred = result.prediction.to(device)
+                energy_mev = result.energy_mev
+            else:
+                source_test_data_path = Path(result.test_data_path)
+                x, energy, y = get_single_record(
+                    result.sample_id,
+                    source_test_data_path,
+                    scale=scale,
+                    normalize_flux=config.normalize_flux,
+                )
+                x, energy, y = x.to(device), energy.to(device), y.to(device)
+                energy_mev = denormalize_energy(energy.item(), scale)
+
+                with torch.no_grad():
+                    y_pred = model(x.unsqueeze(0), energy.unsqueeze(0))[0]
+
+            # Prepare data for figure
+            x_input = inverse_minmax(
+                x.squeeze().cpu().numpy(),
+                scale["min_ct"],
+                scale["max_ct"],
+            )
+            gt = inverse_minmax(
+                y.squeeze().cpu().numpy(),
+                scale["min_ds"],
+                scale["max_ds"],
+            )
+            pred = inverse_minmax(
+                y_pred.squeeze().cpu().numpy(),
+                scale["min_ds"],
+                scale["max_ds"],
+            )
+
+            # Calculate metrics
+            rmse = calculate_rmse(to_gy(pred), to_gy(gt))
+            mape = result.mape
+
+            scale_gpr = {"y_min": scale["min_ds"], "y_max": scale["max_ds"]}
+            gpr_result = gamma_index_torch(
+                y.unsqueeze(0),
+                y_pred,
+                scale=scale_gpr,
+                gamma_params=gamma_params,
+                resolution=config.resolution,
+            )
+            gpr = gpr_result[1][0] * 100
+
+            logger.info(
+                f"{site_label} {desc} case - RMSE: {rmse:.6f}, "
+                f"MAPE: {mape:.2f}%, GPR: {gpr:.2f}%"
+            )
+
+            figure_path = site_output_dir / f"{desc}_E{energy_mev:.2f}MeV.svg"
+
+            publication_figure(
+                x_input,
+                energy_mev,
+                gt,
+                pred,
+                str(figure_path),
+                rmse,
+                mape,
+                gpr,
+                gamma_params=gamma_params,
+            )
 
 
 def format_mean_std(values: list[float], decimals: int = 4) -> str:
@@ -1382,6 +1401,7 @@ def main(
 
     # Generate plots and figures in run directory
     figures_dir = run_dir / "figures"
+    figures_dir.mkdir(parents=True, exist_ok=True)
 
     generate_gpr_plot(
         results=results,
@@ -1391,8 +1411,7 @@ def main(
 
     generate_publication_figures(
         model=model,
-        results=results,
-        test_data_path=test_datasets[0].path,
+        results_by_site=results_by_site,
         output_dir=figures_dir,
         config=config,
         device=device,

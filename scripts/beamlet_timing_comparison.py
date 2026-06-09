@@ -269,25 +269,34 @@ def write_timing_summary(
     comparison_rows: list[dict[str, str | float]] = []
     for row in ok_rows:
         rotate_all_s = _float_or_nan(row.all_rotation_total_s)
+        ct_rotation_s = _float_or_nan(row.ct_rotation_total_s)
+        flux_rotation_s = _float_or_nan(row.flux_rotation_total_s)
+        dose_rotation_s = _float_or_nan(row.dose_rotation_total_s)
+        ct_to_bev_rotation_s = ct_rotation_s
+        dose_back_rotation_s = dose_rotation_s
+        dota_bev_reinterpolation_s = ct_to_bev_rotation_s + dose_back_rotation_s
         inference_time_s = inference_time_ms / 1000.0
         adota_total_s = projection_time_s + cropping_time_s + inference_time_s
-        rotation_total_s = rotate_all_s + cropping_time_s + inference_time_s
+        dota_total_s = dota_bev_reinterpolation_s + cropping_time_s + inference_time_s
         comparison_rows.append(
             {
                 "dataset_label": row.dataset_label,
                 "sample_id": row.sample_id,
                 "projection_time_s": projection_time_s,
                 "cropping_time_s": cropping_time_s,
-            "inference_time_s": inference_time_s,
+                "inference_time_s": inference_time_s,
                 "adota_projection_branch_total_s": adota_total_s,
-                "rotation_reinterpolation_branch_total_s": rotation_total_s,
+                "rotation_reinterpolation_branch_total_s": dota_total_s,
+                "dota_bev_reinterpolation_total_s": dota_bev_reinterpolation_s,
+                "ct_to_bev_rotation_s": ct_to_bev_rotation_s,
+                "dose_back_rotation_s": dose_back_rotation_s,
                 "all_rotation_total_s": rotate_all_s,
-                "ct_rotation_total_s": _float_or_nan(row.ct_rotation_total_s),
-                "flux_rotation_total_s": _float_or_nan(row.flux_rotation_total_s),
-                "dose_rotation_total_s": _float_or_nan(row.dose_rotation_total_s),
-                "rotation_minus_projection_s": rotate_all_s - projection_time_s,
-                "rotation_over_projection_ratio": rotate_all_s / projection_time_s,
-                "branch_speedup_ratio": rotation_total_s / adota_total_s,
+                "ct_rotation_total_s": ct_rotation_s,
+                "flux_rotation_total_s": flux_rotation_s,
+                "dose_rotation_total_s": dose_rotation_s,
+                "rotation_minus_projection_s": dota_bev_reinterpolation_s - projection_time_s,
+                "rotation_over_projection_ratio": dota_bev_reinterpolation_s / projection_time_s,
+                "branch_speedup_ratio": dota_total_s / adota_total_s,
             }
         )
 
@@ -301,6 +310,9 @@ def write_timing_summary(
     metrics = [
         "adota_projection_branch_total_s",
         "rotation_reinterpolation_branch_total_s",
+        "dota_bev_reinterpolation_total_s",
+        "ct_to_bev_rotation_s",
+        "dose_back_rotation_s",
         "all_rotation_total_s",
         "ct_rotation_total_s",
         "flux_rotation_total_s",
@@ -349,7 +361,7 @@ def write_timing_summary(
     width = 0.36
     fig, ax = plt.subplots(figsize=(9, 5), dpi=200)
     ax.bar(x_positions - width / 2, adota_means, width, label="ADoTA projection + crop")
-    ax.bar(x_positions + width / 2, rotation_means, width, label="Rotate CT/flux/dose + crop")
+    ax.bar(x_positions + width / 2, rotation_means, width, label="DoTA BEV rotations + crop")
     ax.set_ylabel("Mean time [s]")
     ax.set_title("Branch timing comparison")
     ax.set_xticks(x_positions, labels, rotation=20, ha="right")
@@ -359,16 +371,15 @@ def write_timing_summary(
     fig.savefig(run_dir / "figures" / "timing_branch_comparison.png", bbox_inches="tight")
     plt.close(fig)
 
-    component_labels = ["CT", "Flux", "Dose"]
+    component_labels = ["CT to BEV", "Dose back"]
     component_means = [
-        summary_json["overall"]["ct_rotation_total_s"]["mean"],
-        summary_json["overall"]["flux_rotation_total_s"]["mean"],
-        summary_json["overall"]["dose_rotation_total_s"]["mean"],
+        summary_json["overall"]["ct_to_bev_rotation_s"]["mean"],
+        summary_json["overall"]["dose_back_rotation_s"]["mean"],
     ]
     fig, ax = plt.subplots(figsize=(7, 4), dpi=200)
-    ax.bar(component_labels, component_means, color=["#4c78a8", "#f58518", "#54a24b"])
-    ax.set_ylabel("Mean two-axis rotation time [s]")
-    ax.set_title("Rotation time by volume")
+    ax.bar(component_labels, component_means, color=["#4c78a8", "#54a24b"])
+    ax.set_ylabel("Mean BEV reorientation time [s]")
+    ax.set_title("DoTA BEV reorientation components")
     ax.grid(axis="y", linestyle="--", linewidth=0.5, alpha=0.6)
     fig.subplots_adjust(bottom=0.28, wspace=0.35)
     fig.savefig(run_dir / "figures" / "timing_volume_breakdown.png", bbox_inches="tight")
@@ -379,7 +390,8 @@ def write_timing_summary(
         projection_time_s=projection_time_s,
         cropping_time_s=cropping_time_s,
         inference_time_ms=inference_time_ms,
-        reinterpolation_time_s=float(summary_json["overall"]["all_rotation_total_s"]["mean"]),
+        ct_rotation_time_s=float(summary_json["overall"]["ct_rotation_total_s"]["mean"]),
+        dose_rotation_time_s=float(summary_json["overall"]["dose_rotation_total_s"]["mean"]),
     )
 
 
@@ -389,59 +401,64 @@ def write_publication_preprocessing_figure(
     projection_time_s: float,
     cropping_time_s: float,
     inference_time_ms: float,
-    reinterpolation_time_s: float,
+    ct_rotation_time_s: float,
+    dose_rotation_time_s: float,
 ) -> None:
     colors = ["#00CECE", "#6441CD", "#C90000", "#077312"]
-    gantry_angles_list = ["Mean"]
-    mean_times_flux = [projection_time_s]
-    mean_times_cropping = [cropping_time_s]
+    label_fontsize = 13
+    title_fontsize = 15
+    tick_fontsize = 12
+    annotation_fontsize = 11
+    legend_fontsize = 11
     inference_time_s = inference_time_ms / 1000.0
-    reinterpolation_times = [reinterpolation_time_s]
-    x = np.arange(len(gantry_angles_list))
-    width = 0.15
+    ct_rotation_to_bev_s = ct_rotation_time_s
+    dose_rotation_from_bev_s = dose_rotation_time_s
+    dota_bev_reinterpolation_s = ct_rotation_to_bev_s + dose_rotation_from_bev_s
+    x = np.arange(1)
+    width = 0.16
 
-    fig = plt.figure(figsize=(14, 6), dpi=300)
-    gs = fig.add_gridspec(1, 2, width_ratios=[2, 1], hspace=0.3, wspace=0.35)
+    fig = plt.figure(figsize=(14, 6.5), dpi=300)
+    gs = fig.add_gridspec(1, 2, width_ratios=[1.8, 1], hspace=0.3, wspace=0.38)
     ax = fig.add_subplot(gs[0])
 
-    rects_cropping = ax.bar(
-        x - width,
-        mean_times_cropping,
+    rects_projection = ax.bar(
+        x - 1.5 * width,
+        [projection_time_s],
         width,
-        label="Constructing single beamlet central axis and cropping CT",
-        color=colors[0],
-        edgecolor="black",
-        linewidth=0.5,
-    )
-    rects_flux = ax.bar(
-        x,
-        mean_times_flux,
-        width,
-        label="Single beamlet shape projection",
+        label="ADoTA: analytical beamlet projection",
         color=colors[1],
         edgecolor="black",
         linewidth=0.5,
     )
-    rects_inference = ax.bar(
-        x + width,
-        [inference_time_s for _ in gantry_angles_list],
+    rects_ct_forward = ax.bar(
+        x - 0.5 * width,
+        [ct_rotation_to_bev_s],
         width,
-        label="Single beamlet inference (BS=200)",
-        color="#FFA500",
+        label="DoTA: rotate CT subvolume to BEV",
+        color=colors[0],
         edgecolor="black",
         linewidth=0.5,
     )
-    rects_reinterp = ax.bar(
-        x + 2 * width,
-        reinterpolation_times,
+    rects_dose_back = ax.bar(
+        x + 0.5 * width,
+        [dose_rotation_from_bev_s],
         width,
-        label="Single beamlet reinterpolation (redundant for ADoTA)",
+        label="DoTA: rotate predicted dose back",
         color=colors[3],
         edgecolor="black",
         linewidth=0.5,
     )
+    rects_dota_total = ax.bar(
+        x + 1.5 * width,
+        [dota_bev_reinterpolation_s],
+        width,
+        label="DoTA: two rotations total",
+        color=colors[2],
+        edgecolor="black",
+        linewidth=0.5,
+    )
 
-    for bar_container in [rects_flux, rects_cropping, rects_inference, rects_reinterp]:
+    for bar_container in [rects_projection, rects_ct_forward, rects_dose_back, rects_dota_total]:
         for bar in bar_container:
             height = bar.get_height()
             if height > 0.001:
@@ -451,7 +468,7 @@ def write_publication_preprocessing_figure(
                     f"{height:.3f}",
                     ha="center",
                     va="bottom",
-                    fontsize=13,
+                    fontsize=annotation_fontsize,
                     weight="bold",
                     bbox=dict(
                         boxstyle="round,pad=0.2",
@@ -462,10 +479,11 @@ def write_publication_preprocessing_figure(
                     ),
                 )
 
-    ax.set_ylabel("Calculation time for\npreprocessing steps (seconds)", fontsize=16, weight="bold")
-    ax.tick_params(axis="both", labelsize=14, width=1.2)
-    ax.set_xlabel("Mean times across tested beamlets", fontsize=16, weight="bold")
-    ax.set_xticklabels([], fontsize=13, weight="bold")
+    ax.set_ylabel("Beamlet-specific step time [s]", fontsize=label_fontsize, weight="bold")
+    ax.tick_params(axis="both", labelsize=tick_fontsize, width=1.1)
+    ax.set_xlabel("Mean across tested beamlets", fontsize=label_fontsize, weight="bold")
+    ax.set_title("Beamlet-specific preprocessing", fontsize=title_fontsize, weight="bold")
+    ax.set_xticklabels([], fontsize=tick_fontsize, weight="bold")
     ax.set_xticks([])
     ax.grid(linestyle="--", which="both", axis="y", alpha=0.3, linewidth=0.8, zorder=0)
     ax.set_yscale("log")
@@ -475,9 +493,9 @@ def write_publication_preprocessing_figure(
     ax.spines["bottom"].set_linewidth(1.2)
     ax.legend(
         loc="upper center",
-        bbox_to_anchor=(0.8, -0.15),
+        bbox_to_anchor=(0.5, -0.18),
         ncol=2,
-        fontsize=13,
+        fontsize=legend_fontsize,
         frameon=True,
         fancybox=True,
         shadow=True,
@@ -489,14 +507,14 @@ def write_publication_preprocessing_figure(
 
     ax2 = fig.add_subplot(gs[1])
     x2 = np.arange(2)
-    with_reinterpolation_time = reinterpolation_time_s + cropping_time_s + inference_time_s
-    without_reinterpolation_time = projection_time_s + cropping_time_s + inference_time_s
+    dota_time = dota_bev_reinterpolation_s
+    adota_time = projection_time_s
 
     rects_with = ax2.bar(
         x2[0],
-        with_reinterpolation_time,
+        dota_time,
         0.6,
-        label="With grid reinterpolation",
+        label="DoTA regime",
         color="#FF0000",
         edgecolor="black",
         linewidth=1.0,
@@ -504,22 +522,23 @@ def write_publication_preprocessing_figure(
     )
     rects_without = ax2.bar(
         x2[1],
-        without_reinterpolation_time,
+        adota_time,
         0.6,
-        label="Without grid reinterpolation",
+        label="ADoTA regime",
         color="#6441CD",
         edgecolor="black",
         linewidth=1.0,
         alpha=0.85,
     )
 
-    ax2.set_ylabel("End-to-end (single beamlet)\ncalculation time (seconds)", fontsize=16, weight="bold")
-    ax2.tick_params(axis="both", labelsize=14, width=1.2)
+    ax2.set_ylabel("Beamlet-specific step time [s]", fontsize=label_fontsize, weight="bold")
+    ax2.tick_params(axis="both", labelsize=tick_fontsize, width=1.1)
     ax2.set_xticks(x2)
     ax2.grid(linestyle="--", which="both", axis="y", alpha=0.3, linewidth=0.8, zorder=0)
+    ax2.set_title("Direct replacement comparison", fontsize=title_fontsize, weight="bold")
     ax2.set_xticklabels(
-        ["With grid\nreinterpolation\n(others)", "Without grid\nreinterpolation\n(this work)"],
-        fontsize=13,
+        ["DoTA\nBEV rotations", "ADoTA\nprojection"],
+        fontsize=tick_fontsize,
         weight="bold",
     )
     ax2.spines["top"].set_visible(False)
@@ -536,7 +555,7 @@ def write_publication_preprocessing_figure(
                 f"{height:.3f}s",
                 ha="center",
                 va="bottom",
-                fontsize=13,
+                fontsize=annotation_fontsize,
                 weight="bold",
                 bbox=dict(
                     boxstyle="round,pad=0.3",
@@ -546,7 +565,24 @@ def write_publication_preprocessing_figure(
                 ),
             )
 
-    fig.subplots_adjust(bottom=0.28, wspace=0.35)
+    ax2.text(
+        0.5,
+        -0.18,
+        "DoTA BEV step = CT to BEV + dose back",
+        transform=ax2.transAxes,
+        ha="center",
+        va="top",
+        fontsize=10.5,
+        weight="bold",
+        bbox=dict(
+            boxstyle="round,pad=0.3",
+            facecolor="white",
+            edgecolor="gray",
+            alpha=0.85,
+        ),
+    )
+
+    fig.subplots_adjust(bottom=0.32, left=0.08, right=0.98, top=0.88, wspace=0.38)
     output_stem = run_dir / "figures" / "preprocessing_times_per_beamlet_rotvsproj"
     fig.savefig(output_stem.with_suffix(".png"), format="png", bbox_inches="tight", dpi=300)
     fig.savefig(output_stem.with_suffix(".pdf"), format="pdf", bbox_inches="tight")
