@@ -222,6 +222,7 @@ def _build_model(config: TrainingConfig, device: torch.device) -> DoTA3D_v3:
         input_shape=tuple(config.input_shape),
         num_transformers=config.num_transformers,
         num_heads=config.num_heads,
+        dim_feedforward=config.dim_feedforward,
         num_levels=config.num_levels,
         enc_features=config.enc_features,
         kernel_size=config.kernel_size,
@@ -232,6 +233,8 @@ def _build_model(config: TrainingConfig, device: torch.device) -> DoTA3D_v3:
         zero_padding=config.zero_padding,
         last_activation=config.last_activation,
         num_forward=config.num_forward,
+        transformer_residual=config.transformer_residual,
+        conv_residual=config.conv_residual,
     ).to(device)
     return model
 
@@ -455,8 +458,19 @@ def main(
             "Useful for tiny end-to-end runs that exercise every artifact path."
         ),
     ] = None,
+    num_epochs: Annotated[
+        Optional[int],
+        typer.Option(
+            help="Override num_epochs from the config. Handy for short smoke "
+            "runs that reuse a full training config."
+        ),
+    ] = None,
     config_name: Annotated[
         Optional[str], typer.Option(help="Override config_name (used in run dir name).")
+    ] = None,
+    runs_dir: Annotated[
+        Optional[str],
+        typer.Option(help="Override the base directory under which the run directory is created."),
     ] = None,
     verbose: Annotated[bool, typer.Option(help="Enable DEBUG-level logging.")] = False,
 ) -> None:
@@ -466,6 +480,8 @@ def main(
         "max_hours": max_hours,
         "smoke_test": smoke_test if smoke_test else None,  # leave default if False
         "config_name": config_name,
+        "num_epochs": num_epochs,
+        "runs_dir": runs_dir,
     }
     cfg = _build_config_from_yaml(config, overrides)
 
@@ -475,7 +491,7 @@ def main(
         )
 
     # ── Run dir + logging ────────────────────────────────────────────
-    runs_dir = PROJECT_ROOT / "runs"
+    runs_dir = Path(cfg.runs_dir)
     run_dir = setup_training_run_directory(runs_dir, cfg.config_name)
 
     import time

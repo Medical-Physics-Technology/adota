@@ -123,6 +123,9 @@ resume_from: null    # path to a previous checkpoint .pth
 input_shape: [2, 160, 30, 30]
 num_transformers: 1
 num_heads: 4
+# Feed-forward hidden dim of the transformer layers.
+# null = use the model's token_size (original behavior).
+dim_feedforward: null
 num_levels: 4
 enc_features: 32
 kernel_size: 3

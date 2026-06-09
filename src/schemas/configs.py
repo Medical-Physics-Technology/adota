@@ -152,6 +152,11 @@ class TrainingConfig:
     # ── Run identification ──────────────────────────────────────────────
     config_name: str = "default"
 
+    # Base directory under which each run directory
+    # (``train_<timestamp>_<config_name>/``) is created. All training
+    # artifacts for a run live inside it.
+    runs_dir: str = "/scratch/mstryja/adota_runs"
+
     # ── Data ────────────────────────────────────────────────────────────
     dataset_path: str = ""
     excluded_indexes_file: str = ""
@@ -237,6 +242,9 @@ class TrainingConfig:
     input_shape: Tuple[int, int, int, int] = (2, 160, 30, 30)
     num_transformers: int = 1
     num_heads: int = 4
+    # Feed-forward hidden dim of the transformer layers. None -> defaults to the
+    # model's token_size (original behavior).
+    dim_feedforward: Optional[int] = None
     num_levels: int = 4
     enc_features: int = 32
     kernel_size: int = 3
@@ -258,3 +266,10 @@ class TrainingConfig:
     #                        sqrt(theta_x^2 + theta_y^2), removing all
     #                        spatial structure from the flux channel
     flux_mode: str = "analytical"
+
+    # Residual-connection ablations (passed verbatim to DoTA3D_v3). Both
+    # default to True, reproducing the original architecture.
+    #   transformer_residual -- additive residuals inside the transformer layers
+    #   conv_residual        -- encoder-decoder skip connections in the decoder
+    transformer_residual: bool = True
+    conv_residual: bool = True

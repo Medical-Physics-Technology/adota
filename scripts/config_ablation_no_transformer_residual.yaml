@@ -1,0 +1,123 @@
+# ============================================================
+# Ablation: transformer_residual = OFF
+# ============================================================
+# Cloned from the reference run
+#   train_20260519_231135_ablation_A_analytical_mse_idd
+# Only `transformer_residual` is changed; everything else matches the
+# reference so the ablation is isolated.
+#
+# Smoke test (1% of data, 3 epochs):
+#   uv run python scripts/train_adota.py \
+#     --config scripts/config_ablation_no_transformer_residual.yaml \
+#     --max-records 701 --num-epochs 3
+#
+# Full run: drop --max-records and --num-epochs.
+# ============================================================
+
+config_name: ablation_no_transformer_residual
+
+dataset_path: /scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5
+excluded_indexes_file: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
+train_test_split: 0.2
+split_random_state: 42
+
+scale:
+  min_ds: 0.0
+  max_ds: 25277028.0
+  min_ct: -1024
+  max_ct: 3071
+  min_energy: 70.0
+  max_energy: 270.0
+
+batch_size: 56
+num_workers: 4
+augmentation: true
+normalize_flux_only: true
+
+num_epochs: 400
+learning_rate: 0.0005
+weight_decay: 0.001
+patience: 100
+seed: 1234
+device_index: 2
+
+lr_factor: 0.9
+lr_patience: 20
+
+loss_mode: mse_idd
+initial_weight_mse: 0.7
+initial_weight_ps: 0.3
+balancer_smoothing: 0.9
+adaptive_after_epoch: 10000
+
+lps_dx_mm: 2.0
+lps_dy_mm: 2.0
+
+gpr_every_n_epochs: 25
+gpr_subset_size: 20
+
+gamma_params:
+  dose_percent_threshold: 2
+  distance_mm_threshold: 2
+  interp_fraction: 10
+  max_gamma: 2
+  lower_percent_dose_cutoff: 10
+  random_subset: null
+  local_gamma: false
+  quiet: true
+
+gpr_resolution_mm: [2.0, 2.0, 2.0]
+
+energy_bins_fixed:
+  - 70.0
+  - 80.0
+  - 90.0
+  - 100.0
+  - 110.0
+  - 120.0
+  - 130.0
+  - 140.0
+  - 150.0
+  - 160.0
+  - 170.0
+  - 180.0
+  - 190.0
+  - 200.0
+  - 210.0
+  - 220.0
+  - 230.0
+  - 240.0
+  - 250.0
+  - 260.0
+  - 270.0
+energy_bins_quantile_n: 10
+
+worst_k_samples: 10
+checkpoint_every_n_epochs: 25
+attention_every_n_epochs: 10
+
+max_hours: null
+smoke_test: false
+resume_from: null
+
+input_shape: [2, 160, 30, 30]
+num_transformers: 1
+num_heads: 4
+num_levels: 4
+enc_features: 32
+kernel_size: 3
+convolutional_steps: 2
+conv_hidden_channels: 64
+dropout_rate: 0.1
+causal: true
+zero_padding: true
+last_activation: false
+num_forward: 2
+
+flux_mode: analytical
+
+# ── Ablation under investigation ────────────────────────────
+transformer_residual: false
+conv_residual: true
+
+comment: "Ablation: transformer_residual OFF (vs reference ablation_A)"

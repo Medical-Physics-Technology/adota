@@ -54,6 +54,9 @@ class DoTA3D_v3(nn.Module):
             num_transformers (int, optional): Number of stacked transformer
                 encoder layers. Defaults to 1.
             num_heads (int, optional): Number of attention heads. Defaults to 8.
+            dim_feedforward (int, optional): Hidden dimensionality of the Linear
+                feed-forward sub-block inside each transformer layer. If unset
+                (None), defaults to ``token_size`` (the original behavior).
             dropout_rate (float, optional): Dropout probability in the attention
                 blocks. Defaults to 0.1.
             causal (bool, optional): If True, applies a causal attention mask so
@@ -105,6 +108,14 @@ class DoTA3D_v3(nn.Module):
 
         self._calculate_token_size()
 
+        # Feed-forward (Linear) hidden dimensionality of the transformer layers.
+        # User-configurable; defaults to token_size, which reproduces the
+        # original architecture and keeps existing checkpoints compatible.
+        dim_feedforward = kwargs.get("dim_feedforward", None)
+        self.dim_feedforward = (
+            int(dim_feedforward) if dim_feedforward is not None else self.token_size
+        )
+
         if self.zero_padding:
             # Depending on the input shape, we need to zero pad the input tensor.
             self.zero_padding_layer = nn.ZeroPad3d(self.pad_size)
@@ -135,7 +146,7 @@ class DoTA3D_v3(nn.Module):
                 TransformerEncoderLayerDoTA(
                     embeded_dim=self.token_size,
                     num_heads=self.num_heads,
-                    dim_feedforward=self.token_size,
+                    dim_feedforward=self.dim_feedforward,
                     dropout=self.dropout_rate,
                     batch_first=True,
                     causal=self.causal,
@@ -163,6 +174,11 @@ class DoTA3D_v3(nn.Module):
             self.last_activation_layer = nn.ReLU()
 
     def forward(self, x: torch.Tensor, energy: torch.Tensor):
+        # Token sequence length: depth (input tensor dim 2, i.e. D in
+        # (B, C, D, H, W)) plus one energy token. Captured before any padding,
+        # which only affects H and W.
+        sequence_length = x.shape[2] + 1
+
         if self.zero_padding:
             x = self.zero_padding_layer(x)
 
@@ -184,21 +200,24 @@ class DoTA3D_v3(nn.Module):
         if self.last_activation:
             x = self.last_activation_layer(x)
 
-        # If zero padding, crop the output tensor
-        # Based on the padding size, we need to crop the output tensor.
-        x = x[
-            :,
-            :,
-            :,
-            self.pad_size[0] : -self.pad_size[1],
-            self.pad_size[2] : -self.pad_size[3],
-        ]
+        # If zero padding was applied, crop the output tensor back to the
+        # original H and W. pad_size only exists when zero_padding is enabled.
+        if self.zero_padding:
+            x = x[
+                :,
+                :,
+                :,
+                self.pad_size[0] : -self.pad_size[1],
+                self.pad_size[2] : -self.pad_size[3],
+            ]
         if self.training:
             return x
 
         else:
             if len(self.transformer_layer) == 0:
-                attn_weights = torch.zeros([1, 161, 161], dtype=torch.float16)
+                attn_weights = torch.zeros(
+                    [1, sequence_length, sequence_length], dtype=torch.float16
+                )
             return x, attn_weights
 
     def _padded_shape(self):
@@ -230,7 +249,7 @@ class DoTA3D_v3(nn.Module):
             int(self.input_shape[-1] // (2**self.num_levels)),
             self.enc_features,
         )  # After permutation layer.
-        self.token_size = np.prod(self.latent_space_dimension)
+        self.token_size = int(np.prod(self.latent_space_dimension))
         logger.debug("Token size: %s", self.token_size)
 
     def generate_subsequent_mask(self, sequence_length):
@@ -260,6 +279,7 @@ class DoTA3D_v3(nn.Module):
             "conv_hidden_channels": self.conv_hidden_channels,
             "num_transformers": self.num_transformers,
             "num_heads": self.num_heads,
+            "dim_feedforward": self.dim_feedforward,
             "dropout_rate": self.dropout_rate,
             "causal": self.causal,
             "num_forward": self.num_forward,

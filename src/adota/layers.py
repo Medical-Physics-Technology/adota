@@ -285,13 +285,21 @@ class TransformerEncoderLayerDoTA(nn.Module):
         self.num_heads = num_heads
         self.dropout = dropout
         self.batch_first = kwargs.get("batch_first", True)
-        self.hidden_dim = kwargs.get("hidden_dim", self.embeded_dim)
+        # Hidden dimensionality of the feed-forward (Linear) sub-block. Defaults
+        # to embeded_dim to preserve the original architecture when unset.
+        self.dim_feedforward = kwargs.get("dim_feedforward", self.embeded_dim)
         self.causal = kwargs.get("causal", False)
         self.num_forward = kwargs.get("num_forward", 0)
         # If False, the additive residual connections around the attention and
         # feed-forward sub-blocks are disabled (ablation). Defaults to True to
         # preserve the original behavior. Adds no learnable parameters.
         self.residual = kwargs.get("residual", True)
+
+        # Lazy cache for the causal attention mask, keyed by
+        # (sequence_length, device). The mask is constant for a given model, so
+        # it is built once and reused instead of rebuilt every forward pass.
+        # Kept as a plain dict (not a buffer) so the state_dict is unchanged.
+        self._mask_cache: dict = {}
 
         # num_heads must be a factor of embeded_dim
         assert (
@@ -306,11 +314,11 @@ class TransformerEncoderLayerDoTA(nn.Module):
             nn.Sequential()
         )  # [Linear -> ReLU -> Linear -> LayerNorm -> Dropout]
         self.feedforward_block.add_module(
-            "linear_1", nn.Linear(self.embeded_dim, self.hidden_dim)
+            "linear_1", nn.Linear(self.embeded_dim, self.dim_feedforward)
         )
         self.feedforward_block.add_module("relu", nn.ReLU())
         self.feedforward_block.add_module(
-            "linear_2", nn.Linear(self.hidden_dim, self.embeded_dim)
+            "linear_2", nn.Linear(self.dim_feedforward, self.embeded_dim)
         )
 
         self.norm_1 = nn.LayerNorm(self.embeded_dim)
@@ -321,7 +329,7 @@ class TransformerEncoderLayerDoTA(nn.Module):
     def forward(self, x):
         if self.training:
             if self.causal:
-                attn_mask = self._causal_mask(x.shape[-2]).to(x.device)
+                attn_mask = self._causal_mask(x.shape[-2], x.device)
                 mhout, _ = self.multihead_attention_block(x, x, x, attn_mask=attn_mask)
 
             else:
@@ -329,7 +337,7 @@ class TransformerEncoderLayerDoTA(nn.Module):
 
         else:
             if self.causal:
-                attn_mask = self._causal_mask(x.shape[-2]).to(x.device)
+                attn_mask = self._causal_mask(x.shape[-2], x.device)
                 # Weights are average over all heads.
                 mhout, atten_weights = self.multihead_attention_block(
                     x, x, x, attn_mask=attn_mask, average_attn_weights=False
@@ -360,11 +368,30 @@ class TransformerEncoderLayerDoTA(nn.Module):
         else:
             return x, atten_weights
 
-    def _causal_mask(self, sequence_length: int):
-        """Creates a causal mask for the input tensor."""
+    def _causal_mask(self, sequence_length: int, device: torch.device):
+        """Return the causal attention mask, building and caching it lazily.
+
+        The mask depends only on ``sequence_length`` and ``self.num_forward``,
+        both fixed for a given model, so it is computed once per
+        ``(sequence_length, device)`` and reused afterwards. This avoids
+        rebuilding the mask and copying it to the device on every forward pass.
+        """
+        cache_key = (sequence_length, device)
+        cached = self._mask_cache.get(cache_key)
+        if cached is None:
+            cached = self._build_causal_mask(sequence_length, device)
+            self._mask_cache[cache_key] = cached
+        return cached
+
+    def _build_causal_mask(self, sequence_length: int, device: torch.device):
+        """Construct the causal mask (0 where attention is allowed, -inf else).
+
+        Built directly on ``device`` to avoid a host-to-device copy. Produces
+        the same float32 values as the previous CPU-built implementation.
+        """
         mask = (
             torch.triu(
-                torch.ones(sequence_length, sequence_length),
+                torch.ones(sequence_length, sequence_length, device=device),
                 diagonal=(-1) * self.num_forward,
             )
             == 1
@@ -377,11 +404,6 @@ class TransformerEncoderLayerDoTA(nn.Module):
             .masked_fill(mask == 1, float(0.0))
         )
         return mask
-
-        # """Creates a causal mask for the input tensor."""
-        # mask = (torch.tril(torch.ones(sequence_length, sequence_length), diagonal=num_forward))
-        # mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-        # return mask
 
 
 class ReshapeLayer(nn.Module):
@@ -433,15 +455,17 @@ class PositionalEmbedding(nn.Module):
 
         self.embedding = nn.Embedding(num_tokens, token_size)
 
-    def forward(self, *args):
-        positions = torch.arange(
-            0,
-            self.num_tokens,
-            step=1,
-            dtype=torch.int32,
-            device=self.embedding.weight.device,
+        # Position indices are constant; register them as a non-persistent
+        # buffer so they move with the module (.to(device)) and are not rebuilt
+        # on every forward. persistent=False keeps them out of the state_dict.
+        self.register_buffer(
+            "positions",
+            torch.arange(0, num_tokens, step=1, dtype=torch.int32),
+            persistent=False,
         )
-        return torch.cat(list(args), dim=1) + self.embedding(positions)
+
+    def forward(self, *args):
+        return torch.cat(list(args), dim=1) + self.embedding(self.positions)
 
 
 class LinearProj(nn.Module):
