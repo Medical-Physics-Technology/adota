@@ -137,5 +137,13 @@ zero_padding: true
 last_activation: false
 num_forward: 2
 
+# Convolutional regularization. Defaults reproduce the original architecture.
+# weight_standardization: per-filter weight standardization in convs.
+# norm_layer: batch | group | none  (group pairs naturally with WS).
+# weight_init: default | kaiming | xavier.
+weight_standardization: false
+norm_layer: batch
+weight_init: default
+
 # ── Free-form notes ────────────────────────────────────────
 comment: ""

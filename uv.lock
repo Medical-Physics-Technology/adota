@@ -63,7 +63,7 @@ wheels = [
 
 [[package]]
 name = "adota"
-version = "0.1.0"
+version = "1.0.0"
 source = { virtual = "." }
 dependencies = [
     { name = "accelerate", version = "1.10.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
@@ -81,10 +81,7 @@ dependencies = [
     { name = "pydicom", version = "3.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "pymedphys", version = "0.40.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "pymedphys", version = "0.41.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "pytest", version = "9.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "pyyaml" },
-    { name = "ruff" },
     { name = "scipy", version = "1.13.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.10.*'" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -99,6 +96,13 @@ dependencies = [
     { name = "typer", version = "0.24.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest", version = "8.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "pytest", version = "9.0.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "ruff" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "accelerate", specifier = ">=0.34.0" },
@@ -108,9 +112,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "pydicom", specifier = ">=2.4.4" },
     { name = "pymedphys", specifier = ">=0.40.0" },
-    { name = "pytest", specifier = ">=8.4.2" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "ruff", specifier = ">=0.15.0" },
     { name = "scipy", specifier = ">=1.13.0" },
     { name = "seaborn", specifier = ">=0.13.2" },
     { name = "simpleitk", specifier = ">=2.4.0" },
@@ -118,6 +120,12 @@ requires-dist = [
     { name = "tqdm", specifier = ">=4.66.0" },
     { name = "transformers", specifier = ">=4.45.0" },
     { name = "typer", specifier = ">=0.21.1" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.4.2" },
+    { name = "ruff", specifier = ">=0.15.0" },
 ]
 
 [[package]]

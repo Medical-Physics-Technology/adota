@@ -47,7 +47,8 @@ def test_zero_padding_false_forward_runs():
     model = DoTA3D_v3(input_shape=SMALL_SHAPE, zero_padding=False, **SMALL_KWARGS)
     model.train()
     x, e = _record(SMALL_SHAPE)
-    out = model(x, e)
+    out, attn = model(x, e)  # forward returns (dose, attention)
+    assert attn is None  # not computed during training
     # Output keeps the original spatial extent (no padding => no cropping).
     assert out.shape == (1, 1, SMALL_SHAPE[1], SMALL_SHAPE[2], SMALL_SHAPE[3])
     assert torch.isfinite(out).all()
@@ -58,7 +59,7 @@ def test_zero_padding_true_still_works():
     model = DoTA3D_v3(input_shape=SMALL_SHAPE, zero_padding=True, **SMALL_KWARGS)
     model.train()
     x, e = _record(SMALL_SHAPE)
-    out = model(x, e)
+    out, _ = model(x, e)  # forward returns (dose, attention)
     assert out.shape == (1, 1, SMALL_SHAPE[1], SMALL_SHAPE[2], SMALL_SHAPE[3])
     assert torch.isfinite(out).all()
 
@@ -143,6 +144,16 @@ def test_attn_placeholder_size_derived_from_depth():
         assert attn.shape == (1, depth + 1, depth + 1)
 
 
+def test_dead_mask_code_removed():
+    """self.mask / generate_subsequent_mask are gone, causal forward still works."""
+    model = DoTA3D_v3(input_shape=SMALL_SHAPE, **SMALL_KWARGS)
+    assert not hasattr(model, "mask")
+    assert not hasattr(model, "generate_subsequent_mask")
+    model.train()
+    x, e = _record(SMALL_SHAPE)
+    assert model(x, e)[0].shape == (1, 1, *SMALL_SHAPE[1:])
+
+
 def test_attn_placeholder_matches_legacy_161_for_trained_depth():
     """Trained depth 160 reproduces the previous hardcoded 161."""
     shape = (2, 160, 30, 30)
@@ -153,3 +164,32 @@ def test_attn_placeholder_matches_legacy_161_for_trained_depth():
     with torch.no_grad():
         _, attn = model(x, e)
     assert attn.shape == (1, 161, 161)
+
+
+# ── #8: uniform (dose, attention) return contract ────────────────────────────
+
+
+def test_forward_returns_dose_attention_tuple_in_both_modes():
+    """forward always returns (dose, attention); attention is None in training."""
+    model = DoTA3D_v3(input_shape=SMALL_SHAPE, **SMALL_KWARGS)
+    x, e = _record(SMALL_SHAPE)
+    dose_shape = (1, 1, *SMALL_SHAPE[1:])
+    seq = SMALL_SHAPE[1] + 1
+
+    # Training: (dose, None)
+    model.train()
+    out = model(x, e)
+    assert isinstance(out, tuple) and len(out) == 2
+    assert out[0].shape == dose_shape  # dose is always first
+    assert out[1] is None  # attention not computed during training
+
+    # Eval: (dose, per-head attention tensor)
+    model.eval()
+    with torch.no_grad():
+        out = model(x, e)
+    assert isinstance(out, tuple) and len(out) == 2
+    dose, attn = out  # unpacking works
+    assert dose.shape == dose_shape
+    assert out[0] is dose  # dose still first
+    assert attn is not None
+    assert attn.shape == (1, SMALL_KWARGS["num_heads"], seq, seq)

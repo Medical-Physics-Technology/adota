@@ -4,7 +4,15 @@ import torch
 import numpy as np
 import torch.nn as nn
 
-from src.adota.layers import *
+from src.adota.layers import (
+    ConvDecoder3D,
+    ConvEncoder3D,
+    CroppingLayer,
+    LinearProj,
+    PositionalEmbedding,
+    ReshapeLayer,
+    TransformerEncoderLayerDoTA,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +81,17 @@ class DoTA3D_v3(nn.Module):
                 concatenation. Set to False to ablate them; this reduces the
                 decoder convolution input channels, so an ablated model has a
                 different parameter count from the baseline. Defaults to True.
+            weight_standardization (bool, optional): If True, convolutions use
+                weight standardization (per-filter zero-mean/unit-variance
+                weights at forward). Adds no parameters. Pairs naturally with
+                ``norm_layer="group"``. Defaults to False (plain conv).
+            norm_layer (str, optional): Per-conv normalization, one of "batch"
+                (BatchNorm3d, default), "group" (GroupNorm), or "none". Changing
+                this alters the conv-block parameters, so only the default
+                "batch" reproduces existing checkpoints.
+            weight_init (str, optional): Weight initialization applied at
+                construction: "default" (PyTorch built-in, no-op), "kaiming", or
+                "xavier". Defaults to "default".
 
         Raises:
             ValueError: If the configuration is invalid.
@@ -103,6 +122,15 @@ class DoTA3D_v3(nn.Module):
         self.transformer_residual = kwargs.get("transformer_residual", True)
         self.conv_residual = kwargs.get("conv_residual", True)
 
+        # Convolutional regularization options. Defaults reproduce the original
+        # architecture (plain conv + BatchNorm, PyTorch default init).
+        #   weight_standardization: standardize conv weights per filter at forward
+        #   norm_layer: "batch" | "group" | "none" (group pairs well with WS)
+        #   weight_init: "default" | "kaiming" | "xavier" (applied at construction)
+        self.weight_standardization = kwargs.get("weight_standardization", False)
+        self.norm_layer = kwargs.get("norm_layer", "batch")
+        self.weight_init = kwargs.get("weight_init", "default")
+
         if self.zero_padding:
             self._padded_shape()
 
@@ -120,10 +148,6 @@ class DoTA3D_v3(nn.Module):
             # Depending on the input shape, we need to zero pad the input tensor.
             self.zero_padding_layer = nn.ZeroPad3d(self.pad_size)
 
-        if self.causal:
-            # Deprecate this attribute
-            self.mask = self.generate_subsequent_mask(self.input_shape[1] + 1)
-
         self.encoder = ConvEncoder3D(
             input_shape=self.input_shape,
             num_levels=self.num_levels,
@@ -131,6 +155,8 @@ class DoTA3D_v3(nn.Module):
             kernel_size=self.kernel_size,
             conv_steps_per_block=self.convolutional_steps,
             conv_hidden_channels=self.conv_hidden_channels,
+            weight_standardization=self.weight_standardization,
+            norm_layer=self.norm_layer,
         )
 
         self.linear_projection_energy = LinearProj(self.token_size)
@@ -168,10 +194,16 @@ class DoTA3D_v3(nn.Module):
             conv_hidden_channels=self.conv_hidden_channels,
             output_shape=self.output_shape,
             residual=self.conv_residual,
+            weight_standardization=self.weight_standardization,
+            norm_layer=self.norm_layer,
         )
 
         if self.last_activation:
             self.last_activation_layer = nn.ReLU()
+
+        # Optional weight (re-)initialization. Defaults to "default" (a no-op
+        # that keeps PyTorch's built-in init and existing behavior).
+        self._apply_weight_init()
 
     def forward(self, x: torch.Tensor, energy: torch.Tensor):
         # Token sequence length: depth (input tensor dim 2, i.e. D in
@@ -186,12 +218,11 @@ class DoTA3D_v3(nn.Module):
         e = self.linear_projection_energy(energy)
         x = self.positional_embedding_layer(e, x)
 
+        # attn_weights stays None during training (the layers do not compute the
+        # per-head weights) and holds the last block's weights during eval.
+        attn_weights = None
         for transformer_block in self.transformer_layer:
-            if self.training:
-                x = transformer_block(x)
-
-            else:
-                x, attn_weights = transformer_block(x)
+            x, attn_weights = transformer_block(x)
 
         x = self.reshape_layer(x)
         x = self.cropp_layer(x)
@@ -210,15 +241,15 @@ class DoTA3D_v3(nn.Module):
                 self.pad_size[0] : -self.pad_size[1],
                 self.pad_size[2] : -self.pad_size[3],
             ]
-        if self.training:
-            return x
 
-        else:
-            if len(self.transformer_layer) == 0:
-                attn_weights = torch.zeros(
-                    [1, sequence_length, sequence_length], dtype=torch.float16
-                )
-            return x, attn_weights
+        # Uniform return: (dose, attention). attention is None during training,
+        # the per-head weights during eval. For the degenerate no-transformer
+        # case in eval, return a zero placeholder so consumers still get a tensor.
+        if not self.training and len(self.transformer_layer) == 0:
+            attn_weights = torch.zeros(
+                [1, sequence_length, sequence_length], dtype=torch.float16
+            )
+        return x, attn_weights
 
     def _padded_shape(self):
         # Find the closes power of 2 for the input shape
@@ -252,16 +283,29 @@ class DoTA3D_v3(nn.Module):
         self.token_size = int(np.prod(self.latent_space_dimension))
         logger.debug("Token size: %s", self.token_size)
 
-    def generate_subsequent_mask(self, sequence_length):
-        mask = (
-            torch.triu(torch.ones(sequence_length, sequence_length)) == 1
-        ).transpose(0, 1)
-        mask = (
-            mask.float()
-            .masked_fill(mask == 0, float("-inf"))
-            .masked_fill(mask == 1, float(0.0))
-        )
-        return mask
+    def _apply_weight_init(self):
+        """Re-initialize conv/linear weights according to ``self.weight_init``.
+
+        ``"default"`` leaves PyTorch's built-in initialization untouched
+        (no-op), preserving the original behavior. Norm and embedding layers are
+        not touched. Conv3D (weight-standardized conv) is covered because it
+        subclasses ``nn.Conv3d``.
+        """
+        if self.weight_init == "default":
+            return
+        if self.weight_init not in ("kaiming", "xavier"):
+            raise ValueError(
+                f"Unknown weight_init: {self.weight_init!r} "
+                "(expected 'default', 'kaiming', or 'xavier')"
+            )
+        for module in self.modules():
+            if isinstance(module, (nn.Conv3d, nn.Linear)):
+                if self.weight_init == "kaiming":
+                    nn.init.kaiming_normal_(module.weight, nonlinearity="relu")
+                else:
+                    nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
 
     def to_dict(self):
         model_parameters = {
@@ -285,5 +329,8 @@ class DoTA3D_v3(nn.Module):
             "num_forward": self.num_forward,
             "transformer_residual": self.transformer_residual,
             "conv_residual": self.conv_residual,
+            "weight_standardization": self.weight_standardization,
+            "norm_layer": self.norm_layer,
+            "weight_init": self.weight_init,
         }
         return model_parameters

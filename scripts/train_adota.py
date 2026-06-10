@@ -235,6 +235,9 @@ def _build_model(config: TrainingConfig, device: torch.device) -> DoTA3D_v3:
         num_forward=config.num_forward,
         transformer_residual=config.transformer_residual,
         conv_residual=config.conv_residual,
+        weight_standardization=config.weight_standardization,
+        norm_layer=config.norm_layer,
+        weight_init=config.weight_init,
     ).to(device)
     return model
 
@@ -329,7 +332,7 @@ def _train_one_epoch(
 
         optimizer.zero_grad()
         t_fwd = perf_counter()
-        outputs = model(x, e)
+        outputs = model(x, e)[0]  # forward returns (dose, attention)
         timings["forward_s"].append(perf_counter() - t_fwd)
 
         loss_mse = loss_mse_fn(outputs, y)

@@ -249,25 +249,26 @@ def test_training_step_equivalence_and_perf():
     x = single_token_sequence(DEVICE)
 
     # ── Correctness: optimized vs original mask path, same dropout draws ──
+    # forward returns (x, attn); attn is None in training, so take [0].
     restore = install_original_mask_path(layer)
     torch.manual_seed(SEED)
-    ref = layer(x).detach().clone()
+    ref = layer(x)[0].detach().clone()
     restore()
     torch.manual_seed(SEED)
-    opt = layer(x).detach().clone()
+    opt = layer(x)[0].detach().clone()
     print(f"\n[CORRECTNESS] train step max|orig-opt| = {(ref - opt).abs().max():.3e}")
     assert torch.allclose(ref, opt, atol=1e-6, rtol=1e-5)
 
     # Gradients finite through the optimized path.
     layer.zero_grad(set_to_none=True)
-    layer(x).pow(2).mean().backward()
+    layer(x)[0].pow(2).mean().backward()
     grads = [p.grad for p in layer.parameters() if p.grad is not None]
     assert grads and all(torch.isfinite(g).all() for g in grads)
 
     # ── Performance: forward + backward, strict speedup ──
     def step():
         layer.zero_grad(set_to_none=True)
-        layer(x).pow(2).mean().backward()
+        layer(x)[0].pow(2).mean().backward()
 
     restore = install_original_mask_path(layer)
     t_orig = bench(step, iters=100, warmup=20)
@@ -335,13 +336,14 @@ def test_full_model_equivalence_and_reported_timing():
     x, e, y = single_record(DEVICE)
 
     # Training-step equivalence (re-seed for identical dropout draws).
+    # forward returns (dose, attention); attention is None in training.
     model.train()
     restore = install_original_mask_path(model)
     torch.manual_seed(SEED)
-    ref = model(x, e).detach().clone()
+    ref = model(x, e)[0].detach().clone()
     restore()
     torch.manual_seed(SEED)
-    opt = model(x, e).detach().clone()
+    opt = model(x, e)[0].detach().clone()
     print(f"\n[CORRECTNESS] full train step max|orig-opt| = {(ref - opt).abs().max():.3e}")
     assert torch.allclose(ref, opt, atol=1e-5, rtol=1e-4)
 
@@ -363,7 +365,7 @@ def test_full_model_equivalence_and_reported_timing():
 
     def train_step():
         model.zero_grad(set_to_none=True)
-        ((model(x, e) - y) ** 2).mean().backward()
+        ((model(x, e)[0] - y) ** 2).mean().backward()
 
     t_train = bench(train_step, iters=20, warmup=5)
 

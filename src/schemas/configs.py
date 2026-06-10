@@ -273,3 +273,12 @@ class TrainingConfig:
     #   conv_residual        -- encoder-decoder skip connections in the decoder
     transformer_residual: bool = True
     conv_residual: bool = True
+
+    # Convolutional regularization (passed verbatim to DoTA3D_v3). Defaults
+    # reproduce the original architecture.
+    #   weight_standardization -- per-filter weight standardization in convs
+    #   norm_layer             -- "batch" | "group" | "none" (group pairs with WS)
+    #   weight_init            -- "default" | "kaiming" | "xavier"
+    weight_standardization: bool = False
+    norm_layer: str = "batch"
+    weight_init: str = "default"

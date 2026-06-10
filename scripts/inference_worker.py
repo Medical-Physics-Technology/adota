@@ -91,7 +91,7 @@ def main() -> None:
             energy = energy.unsqueeze(0).to(device)   # (1, 1)
 
             with torch.no_grad():
-                pred = model(x, energy)           # (1, 1, 160, 30, 30)
+                pred = model(x, energy)[0]        # (dose, attention) -> dose
 
             save_prediction(pred, spot_id, output_path, scale=scale)
         except Exception as exc:

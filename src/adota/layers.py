@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 
 import torch
 import torch.nn as nn
@@ -104,6 +105,10 @@ class ConvEncoder3D(nn.Module):
 
         self.input_shape = kwargs.get("input_shape", (2, 160, 32, 32))
 
+        # Weight standardization + per-conv norm choice (forwarded to each block).
+        self.weight_standardization = kwargs.get("weight_standardization", False)
+        self.norm_layer = kwargs.get("norm_layer", "batch")
+
         # Adjust types depending on passed constructor parameters.
         if isinstance(self.conv_steps_per_block, int):
             self.conv_steps_per_block = [self.conv_steps_per_block] * self.num_levels
@@ -132,6 +137,8 @@ class ConvEncoder3D(nn.Module):
                     steps=self.conv_steps_per_block[i],
                     downsample=True,
                     layer_norm=True if i < self.num_levels - 1 else False,
+                    weight_standardization=self.weight_standardization,
+                    norm_layer=self.norm_layer,
                 ),
             )
 
@@ -143,6 +150,8 @@ class ConvEncoder3D(nn.Module):
             num_slices=self.input_shape[1],
             steps=self.conv_steps_per_block[-1],
             flatten=True,
+            weight_standardization=self.weight_standardization,
+            norm_layer=self.norm_layer,
         )
 
     def forward(self, x):
@@ -207,6 +216,10 @@ class ConvDecoder3D(nn.Module):
         # Defaults to True to preserve the original behavior.
         self.residual = kwargs.get("residual", True)
 
+        # Weight standardization + per-conv norm choice (forwarded to each block).
+        self.weight_standardization = kwargs.get("weight_standardization", False)
+        self.norm_layer = kwargs.get("norm_layer", "batch")
+
         self.decoder = nn.Sequential()
 
         for i in range(self.num_levels):
@@ -238,6 +251,8 @@ class ConvDecoder3D(nn.Module):
                     steps=self.conv_steps_per_block[i],
                     upsample=True,
                     layer_norm=True if i < self.num_levels - 1 else False,
+                    weight_standardization=self.weight_standardization,
+                    norm_layer=self.norm_layer,
                 ),
             )
 
@@ -327,27 +342,19 @@ class TransformerEncoderLayerDoTA(nn.Module):
         # self.last_linear_layer = nn.Linear(self.embeded_dim, self.embeded_dim)
 
     def forward(self, x):
+        # Uniform return: (x, attn_weights). attn_weights is None during training
+        # (the per-head weights are not computed, which is faster) and the
+        # per-head attention tensor during evaluation.
+        attn_mask = self._causal_mask(x.shape[-2], x.device) if self.causal else None
+
         if self.training:
-            if self.causal:
-                attn_mask = self._causal_mask(x.shape[-2], x.device)
-                mhout, _ = self.multihead_attention_block(x, x, x, attn_mask=attn_mask)
-
-            else:
-                mhout, _ = self.multihead_attention_block(x, x, x)
-
+            mhout, _ = self.multihead_attention_block(x, x, x, attn_mask=attn_mask)
+            attn_weights = None
         else:
-            if self.causal:
-                attn_mask = self._causal_mask(x.shape[-2], x.device)
-                # Weights are average over all heads.
-                mhout, atten_weights = self.multihead_attention_block(
-                    x, x, x, attn_mask=attn_mask, average_attn_weights=False
-                )
-
-            else:
-                # Weights are average over all heads.
-                mhout, atten_weights = self.multihead_attention_block(
-                    x, x, x, average_attn_weights=False
-                )
+            # Per-head weights (averaging over heads disabled).
+            mhout, attn_weights = self.multihead_attention_block(
+                x, x, x, attn_mask=attn_mask, average_attn_weights=False
+            )
 
         if self.residual:
             x = x + mhout
@@ -362,11 +369,7 @@ class TransformerEncoderLayerDoTA(nn.Module):
             x = ffout
         x = self.norm_2(x)
 
-        if self.training:
-            return x
-
-        else:
-            return x, atten_weights
+        return x, attn_weights
 
     def _causal_mask(self, sequence_length: int, device: torch.device):
         """Return the causal attention mask, building and caching it lazily.
@@ -481,91 +484,6 @@ class LinearProj(nn.Module):
         return projected.unsqueeze(1)
 
 
-class ConvBlock3D(nn.Module):
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        kernel_size: int,
-        token_size: tuple,
-        num_slices: int,
-        conv_steps: int = 1,
-        downsample: bool = False,
-        upsample: bool = False,
-        flatten: bool = False,
-        batch_normalization: bool = False,
-        layer_norm: bool = True,
-        **kwargs,
-    ):
-
-        super(ConvBlock3D, self).__init__()
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.kernel_size = kernel_size
-
-        # Size-related attributes
-        self.token_size = token_size
-        self.num_slices = num_slices
-
-        # Default attributes
-        self.conv_steps = conv_steps
-        self.downsample = downsample
-        self.upsample = upsample
-        self.flatten = flatten
-        self.batch_normalization = batch_normalization
-        self.layer_norm = layer_norm
-
-        self.blocks = nn.ModuleList()
-
-        for i in range(self.conv_steps):
-            self.blocks.append(
-                nn.Conv3d(
-                    in_channels if i == 0 else out_channels,
-                    out_channels,
-                    kernel_size,
-                    padding="same",
-                )
-                # Currently not used - this implementation use a trick with wieghts standardization.
-                # Conv3D(
-                #    in_channels if i == 0 else out_channels,
-                #    out_channels,
-                #    kernel_size,
-                #    padding='same',
-                # )
-            )
-            if self.batch_normalization:
-                self.blocks.append(nn.BatchNorm3d(out_channels))
-
-            # self.blocks.append(nn.LeakyReLU(negative_slope=0.05))
-            self.blocks.append(nn.ReLU())
-
-        if self.downsample:
-            self.blocks.append(nn.MaxPool3d(kernel_size=(1, 2, 2)))
-            self.token_size = (ts // 2 for ts in self.token_size)
-
-        if self.upsample:
-            self.blocks.append(nn.Upsample(scale_factor=(1, 2, 2), mode="trilinear"))
-            self.token_size = (ts * 2 for ts in self.token_size)
-
-        if self.layer_norm:
-            self.blocks.append(
-                nn.LayerNorm([out_channels, num_slices, *self.token_size])
-            )
-
-        if self.flatten:
-            # If flatten is True, provided tensor must be permuted, to have a following data format: (B, D, H, W, C).
-            self.blocks.append(nn.Flatten(start_dim=2))
-
-    def forward(self, x):
-        for block in self.blocks:
-            if isinstance(block, nn.Flatten):
-                x = torch.permute(
-                    x, (0, 2, 3, 4, 1)
-                )  # (B, C, D, H, W) -> (B, D, H, W, C)
-            x = block(x)
-        return x
-
-
 class ConvBlock3D_v2(nn.Module):
     """Class repreenting a ConvBlock3D layer. ConvBlock is responsible for processing an input signal and perform downsampling / upsampling.
     In the paper nomenclature, this class represents both Convolutional Encoder Layer and Convolutional Decoder Layer.
@@ -579,7 +497,7 @@ class ConvBlock3D_v2(nn.Module):
         in_channels: int,
         out_channels: int,
         kernel_size: int | tuple,
-        token_size: int,
+        token_size: tuple[int, int],
         num_slices: int,
         **kwargs,
     ):
@@ -589,7 +507,7 @@ class ConvBlock3D_v2(nn.Module):
             in_channels (int): Number of input channels (C_in in paper).
             out_channels (int): Number of output channels (C_out in paper).
             kernel_size (int | tuple): Kernel size (k). If int is passed, the isotropic kernel is constructed with the same size in all dimensions.
-            token_size (int):
+            token_size (tuple[int, int]): The (height, width) of the feature map at this depth, used to build the LayerNorm shape.
             num_slices (int): Number of slices (D in paper).
             **kwargs: Additional arguments:
                 - steps (int): Number of convolutional steps in the block.
@@ -606,7 +524,7 @@ class ConvBlock3D_v2(nn.Module):
         self.out_channels = out_channels
         self.kernel_size = kernel_size
         self.num_slices = num_slices
-        self.token_size = token_size  # Token represents the physical slice of the CT. It is a tuple of 3 elements (channels, height, width)
+        self.token_size = token_size  # (height, width) of the feature map at this depth.
 
         self.steps = kwargs.get("steps", 2)
 
@@ -615,6 +533,15 @@ class ConvBlock3D_v2(nn.Module):
         self.flatten = kwargs.get("flatten", False)
 
         self.layer_norm = kwargs.get("layer_norm", True)
+
+        # Weight standardization + per-conv normalization choice. Defaults
+        # (False / "batch") reproduce the original nn.Conv3d + BatchNorm3d block,
+        # keeping existing checkpoints compatible. norm_layer in
+        # {"batch", "group", "none"}; weight standardization pairs naturally with
+        # "group" (GroupNorm).
+        self.weight_standardization = kwargs.get("weight_standardization", False)
+        self.norm_layer = kwargs.get("norm_layer", "batch")
+        self.num_groups = kwargs.get("num_groups", 32)
 
         self.conv_block = nn.Sequential()
 
@@ -634,13 +561,13 @@ class ConvBlock3D_v2(nn.Module):
 
         if self.downsample:
             self.conv_block.append(nn.MaxPool3d(kernel_size=(1, 2, 2)))
-            self.token_size = (ts // 2 for ts in self.token_size)
+            self.token_size = tuple(ts // 2 for ts in self.token_size)
 
         if self.upsample:
             self.conv_block.append(
                 nn.Upsample(scale_factor=(1, 2, 2), mode="trilinear")
             )
-            self.token_size = (ts * 2 for ts in self.token_size)
+            self.token_size = tuple(ts * 2 for ts in self.token_size)
 
         if self.layer_norm:
             self.conv_block.append(
@@ -660,10 +587,31 @@ class ConvBlock3D_v2(nn.Module):
     def _construct_convblock(
         self, in_channels: int, out_channels: int, kernel_size: int | tuple
     ):
-        """Constructs the convblock as described in the https://arxiv.org/abs/1505.04597 paper."""
-        conv_block = nn.Sequential(
-            nn.Conv3d(in_channels, out_channels, kernel_size, padding="same"),
-            nn.BatchNorm3d(out_channels),
-            nn.ReLU(),
+        """Constructs the convblock as described in the https://arxiv.org/abs/1505.04597 paper.
+
+        With the defaults (weight_standardization=False, norm_layer="batch") this
+        is the original nn.Conv3d -> BatchNorm3d -> ReLU block.
+        """
+        conv_cls = Conv3D if self.weight_standardization else nn.Conv3d
+        layers = [conv_cls(in_channels, out_channels, kernel_size, padding="same")]
+
+        norm = self._make_norm(out_channels)
+        if norm is not None:
+            layers.append(norm)
+
+        layers.append(nn.ReLU())
+        return nn.Sequential(*layers)
+
+    def _make_norm(self, num_channels: int):
+        """Builds the per-conv normalization layer per ``norm_layer``."""
+        if self.norm_layer == "batch":
+            return nn.BatchNorm3d(num_channels)
+        if self.norm_layer == "group":
+            # gcd guarantees num_groups divides num_channels (GroupNorm requires it).
+            num_groups = math.gcd(self.num_groups, num_channels) or 1
+            return nn.GroupNorm(num_groups, num_channels)
+        if self.norm_layer == "none":
+            return None
+        raise ValueError(
+            f"Unknown norm_layer: {self.norm_layer!r} (expected 'batch', 'group', or 'none')"
         )
-        return conv_block
