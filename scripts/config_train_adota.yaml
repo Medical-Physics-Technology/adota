@@ -39,7 +39,7 @@ normalize_flux_only: true
 num_epochs: 400
 learning_rate: 0.0005
 weight_decay: 0.001
-patience: 100          # early-stopping patience (epochs)
+patience: 50        # early-stopping patience (epochs)
 seed: 1234
 device_index: 1
 

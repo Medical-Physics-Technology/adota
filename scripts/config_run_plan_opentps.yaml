@@ -1,0 +1,40 @@
+# ADoTA End-to-End Plan Pipeline Configuration
+# =============================================
+# Configures scripts/run_plan_opentps.py. Every key corresponds to a CLI
+# option and can be overridden on the command line (CLI takes precedence).
+#
+# Usage:
+#   uv run python scripts/run_plan_opentps.py --config scripts/config_run_plan_opentps.yaml
+#
+# A copy of this file is saved in the run directory for reproducibility.
+
+# --- Required ---
+
+# OpenTPS plan directory: CT.mhd, PlanPencil.txt, bdl.txt, config.txt,
+# structure masks (target.mhd / OAR_*.mhd), and the MC reference Dose.mhd.
+plan_dir: /scratch/mstryja/opentps_plans/Prostate-AEC-001_Publication_Prostate-AEC-001_100MperBeam
+
+# Model directory name under models/.
+model_name: DoTA_v3_grid_search_v11
+
+# --- Optional ---
+
+# Model weights filename within the model directory.
+model_fname: best_model.pth
+
+# Beam data library path. Leave null to use the plan-local bdl.txt
+# (the BDL is fine-tuned and request-only; it is not committed to the repo).
+bdl_path: null
+
+# CUDA device index (-1 for CPU).
+device_index: 0
+
+# Base directory for run outputs (kept on /scratch, never under /home).
+runs_dir: /scratch/mstryja/tmp_adota/runs
+
+# Preview verbosity: how much of the parsed plan tree to expand.
+max_fields: 2
+max_control_points: 3
+
+# Enable verbose/debug logging.
+verbose: false
