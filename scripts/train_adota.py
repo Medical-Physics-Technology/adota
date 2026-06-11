@@ -53,6 +53,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.adota.config import load_yaml_config  # noqa: E402
 from src.adota.models import DoTA3D_v3  # noqa: E402
+from src.evaluation.cli import resolve_device  # noqa: E402
 from src.loaders.generator import H5PYGenerator  # noqa: E402
 from src.schemas.configs import TrainingConfig  # noqa: E402
 from src.training.losses import LMSE, LPS, TwoObjectiveBalancer  # noqa: E402
@@ -518,13 +519,12 @@ def main(
     _set_determinism(cfg.seed)
 
     # ── Device ────────────────────────────────────────────────────────
-    if cfg.device_index >= 0 and torch.cuda.is_available():
-        device = torch.device(f"cuda:{cfg.device_index}")
-        gpu_name = torch.cuda.get_device_name(cfg.device_index)
-        cap = torch.cuda.get_device_capability(cfg.device_index)
+    device = resolve_device(cfg.device_index)
+    if device.type == "cuda":
+        gpu_name = torch.cuda.get_device_name(device.index)
+        cap = torch.cuda.get_device_capability(device.index)
         log_phase("INIT", f"Device    : {device} ({gpu_name}, sm_{cap[0]}{cap[1]})")
     else:
-        device = torch.device("cpu")
         log_phase("INIT", f"Device    : {device}")
 
     # ── Dataset discovery + split ────────────────────────────────────

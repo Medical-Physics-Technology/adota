@@ -39,11 +39,11 @@ from src.adota.config import (
     DEFAULT_GAMMA_PARAMS,
     DEFAULT_SCALE,
     denormalize_energy,
-    get_device,
     load_yaml_config,
     setup_logging,
     setup_run_directory,
 )
+from src.evaluation.cli import resolve_device
 from src.adota.models import DoTA3D_v3
 from src.adota.utils import (
     count_parameters_per_block,
@@ -1611,7 +1611,7 @@ def main(
     logger.info(f"H5PYGenerator created with {len(dataset)} samples")
 
     # ── Setup device & load model ───────────────────────────────────────
-    device = get_device(device_index)
+    device = resolve_device(device_index)
     logger.info(f"Using device: {device}")
 
     model = load_model(model_path, hyperparams_path, device)

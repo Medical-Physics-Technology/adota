@@ -5,7 +5,6 @@ A command-line tool for running DoTA model inference on samples stored
 in an HDF5 dataset via H5PYGenerator.
 """
 
-import csv
 import logging
 import shutil
 import sys
@@ -30,7 +29,6 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.adota.config import (
     DEFAULT_SCALE,
     denormalize_energy,
-    get_device,
     load_yaml_config,
     setup_logging,
     setup_run_directory,
@@ -59,100 +57,75 @@ app = typer.Typer(help="DoTA Model Evaluation Tool (HDF5)")
 
 from src.schemas.configs import EvaluationConfig
 from src.schemas.results import H5EvaluationResult as EvaluationResult
+from src.evaluation.cli import resolve_device
+from src.evaluation.engine import InferenceContext, evaluate
+from src.evaluation.outputs import CsvColumn, save_results_csv as save_csv
+from src.evaluation.sources import H5Source
 
 # ── Per-sample evaluation ───────────────────────────────────────────────────
 
 
-def evaluate_single_sample(
-    model: DoTA3D_v3,
-    sample_idx: int,
-    record_id: str,
-    dataset: H5PYGenerator,
-    config: EvaluationConfig,
-    device: torch.device,
-) -> EvaluationResult:
-    """Evaluate a single sample and compute metrics.
+def _make_per_sample_fn(config: EvaluationConfig):
+    """Build the per-sample callback for the evaluation engine.
+
+    Reproduces the original metric block: RMSE, MAPE at the 10% ground-truth
+    threshold (canonical form), RDE, and CT-channel TV / CV. No gamma pass rate.
 
     Args:
-        model: The loaded DoTA model.
-        sample_idx: Index into the H5PYGenerator dataset.
-        record_id: Unique identifier for the sample.
-        dataset: The H5PYGenerator dataset.
         config: Evaluation configuration.
-        device: Target device for computation.
 
     Returns:
-        EvaluationResult containing all metrics and cached tensors.
+        A callable mapping an ``InferenceContext`` to an ``H5EvaluationResult``.
     """
     scale = config.scale
 
-    start_time = perf_counter()
+    def per_sample_fn(ctx: InferenceContext) -> EvaluationResult:
+        energy_mev = denormalize_energy(ctx.energy.item(), scale)
 
-    # Load data from HDF5
-    x, energy, y = dataset[sample_idx]
-    x = x.to(device)
-    energy = energy.to(device)
-    y = y.to(device)
+        # Convert to numpy for metrics
+        y_np, y_pred_np = ctx.denorm(scale)
 
-    energy_mev = denormalize_energy(energy.item(), scale)
+        # ── Metrics ─────────────────────────────────────────────────────
 
-    # Run inference
-    with torch.no_grad():
-        y_pred_tuple = model(x.unsqueeze(0), energy.unsqueeze(0))
-        y_pred = y_pred_tuple[0]
+        # RMSE
+        rmse = calculate_rmse(to_gy(y_pred_np), to_gy(y_np))
 
-    calc_time = perf_counter() - start_time
+        # MAPE at the 10% ground-truth-dose threshold. Canonical run_model.py
+        # form: mask on the ground truth, calculate_pure_mape(predicted, reference).
+        mask = y_np > 0.1 * np.max(y_np)
+        mape = calculate_pure_mape(y_pred_np[mask], y_np[mask])
 
-    # Convert to numpy for metrics
-    y_np = inverse_minmax(
-        y.unsqueeze(0).detach().cpu().numpy(),
-        scale["min_ds"],
-        scale["max_ds"],
-    )
-    y_pred_np = inverse_minmax(
-        y_pred.detach().cpu().numpy(),
-        scale["min_ds"],
-        scale["max_ds"],
-    )
+        # Relative Dose Error
+        rde = calculate_relative_dose_error(to_gy(y_pred_np), to_gy(y_np))
 
-    # ── Metrics ─────────────────────────────────────────────────────────
+        # ── CT-based variability metrics ────────────────────────────────
+        ct_norm = ctx.x[0].cpu().numpy()  # (D, H, W) – CT channel
+        ct_hu = inverse_minmax(ct_norm, scale["min_ct"], scale["max_ct"])
+        avg_density = ct_hu.mean(axis=(1, 2))  # (D,)
 
-    # RMSE
-    rmse = calculate_rmse(to_gy(y_pred_np), to_gy(y_np))
+        # Total Variation
+        tv = float(np.sum(np.abs(np.diff(avg_density))))
 
-    # MAPE with threshold mask
-    mask = y_pred_np > 0.1 * np.max(y_pred_np)
-    mape = calculate_pure_mape(y_np[mask], y_pred_np[mask])
+        # Coefficient of Variation
+        mu = np.mean(avg_density)
+        sigma = np.std(avg_density)
+        cv = float(sigma / np.abs(mu)) if np.abs(mu) > 1e-9 else 0.0
 
-    # Relative Dose Error
-    rde = calculate_relative_dose_error(to_gy(y_pred_np), to_gy(y_np))
+        return EvaluationResult(
+            sample_id=ctx.sample_id,
+            energy_mev=energy_mev,
+            rmse=rmse,
+            mape=mape,
+            rde=rde,
+            tv=tv,
+            cv=cv,
+            calc_time=ctx.calc_time,
+            prediction=ctx.y_pred.cpu(),
+            ground_truth=ctx.y.cpu(),
+            input_data=ctx.x.cpu(),
+        )
 
-    # ── CT-based variability metrics ────────────────────────────────────
-    ct_norm = x[0].cpu().numpy()  # (D, H, W) – CT channel
-    ct_hu = inverse_minmax(ct_norm, scale["min_ct"], scale["max_ct"])
-    avg_density = ct_hu.mean(axis=(1, 2))  # (D,)
-
-    # Total Variation
-    tv = float(np.sum(np.abs(np.diff(avg_density))))
-
-    # Coefficient of Variation
-    mu = np.mean(avg_density)
-    sigma = np.std(avg_density)
-    cv = float(sigma / np.abs(mu)) if np.abs(mu) > 1e-9 else 0.0
-
-    return EvaluationResult(
-        sample_id=record_id,
-        energy_mev=energy_mev,
-        rmse=rmse,
-        mape=mape,
-        rde=rde,
-        tv=tv,
-        cv=cv,
-        calc_time=calc_time,
-        prediction=y_pred.cpu(),
-        ground_truth=y.cpu(),
-        input_data=x.cpu(),
-    )
+    return per_sample_fn
 
 
 def evaluate_samples(
@@ -163,45 +136,33 @@ def evaluate_samples(
     device: torch.device,
     show_progress: bool = True,
 ) -> list:
-    """Evaluate multiple samples.
+    """Evaluate every sample in the dataset via the shared evaluation engine.
 
     Args:
         model: The loaded DoTA model.
-        record_ids: List of record IDs to evaluate.
+        record_ids: List of record IDs aligned with the dataset indices.
         dataset: The H5PYGenerator dataset.
         config: Evaluation configuration.
         device: Target device for computation.
         show_progress: Whether to show a progress bar.
 
     Returns:
-        List of EvaluationResult objects.
+        List of H5EvaluationResult objects.
     """
-    results = []
-    n_samples = len(dataset)
-    iterator = (
-        tqdm(range(n_samples), desc="Evaluating samples")
-        if show_progress
-        else range(n_samples)
+    source = H5Source(dataset, record_ids)
+    per_sample_fn = _make_per_sample_fn(config)
+    return evaluate(
+        model,
+        source,
+        device=device,
+        per_sample_fn=per_sample_fn,
+        show_progress=show_progress,
+        desc="Evaluating samples",
+        postfix_fn=lambda r: {
+            "energy": f"{r.energy_mev:.1f}MeV",
+            "mape": f"{r.mape:.2f}%",
+        },
     )
-
-    for i in iterator:
-        result = evaluate_single_sample(
-            model=model,
-            sample_idx=i,
-            record_id=record_ids[i],
-            dataset=dataset,
-            config=config,
-            device=device,
-        )
-        results.append(result)
-
-        if show_progress:
-            iterator.set_postfix(
-                energy=f"{result.energy_mev:.1f}MeV",
-                mape=f"{result.mape:.2f}%",
-            )
-
-    return results
 
 
 # ── Results table (CSV) ─────────────────────────────────────────────────────
@@ -214,62 +175,30 @@ def save_results_csv(results: list, output_path: Path) -> None:
     with the addition of TV and CV metrics.
 
     Args:
-        results: List of EvaluationResult objects.
+        results: List of H5EvaluationResult objects.
         output_path: Path to the output CSV file.
     """
-    fieldnames = [
-        "sample_id",
-        "energy_mev",
-        "rmse_gy",
-        "mape_pct",
-        "rde_pct",
-        "tv_hu",
-        "cv",
-        "calc_time_s",
+    columns = [
+        CsvColumn("sample_id", lambda r: r.sample_id),
+        CsvColumn("energy_mev", lambda r: f"{r.energy_mev:.2f}"),
+        CsvColumn("rmse_gy", lambda r: f"{r.rmse:.9f}", lambda r: r.rmse, ".9f"),
+        CsvColumn("mape_pct", lambda r: f"{r.mape:.4f}", lambda r: r.mape, ".4f"),
+        CsvColumn("rde_pct", lambda r: f"{r.rde:.4f}", lambda r: r.rde, ".4f"),
+        CsvColumn("tv_hu", lambda r: f"{r.tv:.4f}", lambda r: r.tv, ".4f"),
+        CsvColumn("cv", lambda r: f"{r.cv:.6f}", lambda r: r.cv, ".6f"),
+        CsvColumn(
+            "calc_time_s", lambda r: f"{r.calc_time:.4f}", lambda r: r.calc_time, ".4f"
+        ),
     ]
-
     # Sort by energy for consistency with run_model.py
-    sorted_results = sorted(results, key=lambda r: r.energy_mev)
-
-    with open(output_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for r in sorted_results:
-            writer.writerow(
-                {
-                    "sample_id": r.sample_id,
-                    "energy_mev": f"{r.energy_mev:.2f}",
-                    "rmse_gy": f"{r.rmse:.9f}",
-                    "mape_pct": f"{r.mape:.4f}",
-                    "rde_pct": f"{r.rde:.4f}",
-                    "tv_hu": f"{r.tv:.4f}",
-                    "cv": f"{r.cv:.6f}",
-                    "calc_time_s": f"{r.calc_time:.4f}",
-                }
-            )
-
-        # Summary rows
-        writer.writerow({})  # blank separator
-        for label, fn in [
-            ("mean", np.mean),
-            ("std", np.std),
-            ("min", np.min),
-            ("max", np.max),
-        ]:
-            writer.writerow(
-                {
-                    "sample_id": label,
-                    "energy_mev": "",
-                    "rmse_gy": f"{fn([r.rmse for r in results]):.9f}",
-                    "mape_pct": f"{fn([r.mape for r in results]):.4f}",
-                    "rde_pct": f"{fn([r.rde for r in results]):.4f}",
-                    "tv_hu": f"{fn([r.tv for r in results]):.4f}",
-                    "cv": f"{fn([r.cv for r in results]):.6f}",
-                    "calc_time_s": f"{fn([r.calc_time for r in results]):.4f}",
-                }
-            )
-
-    logger.info(f"Results CSV saved to {output_path}")
+    save_csv(
+        results,
+        output_path,
+        columns,
+        sort_key=lambda r: r.energy_mev,
+        label_column="sample_id",
+        logger=logger,
+    )
 
 
 # ── Publication figures (best / worst / closest-to-mean) ────────────────────
@@ -662,7 +591,7 @@ def main(
     logger.info(f"H5PYGenerator created with {len(dataset)} samples")
 
     # ── Setup device & load model ──────────────────────────────────────
-    device = get_device(device_index)
+    device = resolve_device(device_index)
     logger.info(f"Using device: {device}")
 
     model = load_model(model_path, hyperparams_path, device)

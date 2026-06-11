@@ -30,7 +30,6 @@ from src.adota.config import (
     DEFAULT_GAMMA_PARAMS,
     DEFAULT_SCALE,
     denormalize_energy,
-    get_device,
     load_yaml_config,
     setup_logging,
     setup_run_directory,
@@ -54,6 +53,10 @@ logger = logging.getLogger(__name__)
 
 from src.schemas.configs import EvaluationConfig
 from src.schemas.results import EvaluationResult
+from src.evaluation.cli import resolve_device
+from src.evaluation.engine import InferenceContext, evaluate
+from src.evaluation.outputs import CsvColumn, save_results_csv as save_csv
+from src.evaluation.sources import DirSource
 
 app = typer.Typer(help="DoTA Model Evaluation Tool")
 
@@ -152,110 +155,81 @@ def calculate_thresholded_mapes(
     return mapes
 
 
-def evaluate_single_sample(
-    model: DoTA3D_v3,
-    sample_id: str,
-    test_data_path: Path,
+def _make_per_sample_fn(
     config: EvaluationConfig,
-    device: torch.device,
-    downsampling_method: str,
-    save_predictions: bool = True,
-) -> EvaluationResult:
-    """Evaluate a single sample and compute metrics.
+    test_data_path: Path,
+    save_predictions: bool,
+):
+    """Build the per-sample callback for the evaluation engine.
+
+    Reproduces the original ``evaluate_single_sample`` metric block exactly:
+    optional prediction save, de-normalization, RMSE / thresholded-MAPE / RDE,
+    and the gamma pass rate via ``gamma_index_torch``.
 
     Args:
-        model: The loaded DoTA model.
-        sample_id: Unique identifier for the sample.
-        test_data_path: Path to the test data directory.
         config: Evaluation configuration.
-        device: Target device for computation.
-        downsampling_method: Method for downsampling.
-        save_predictions: Whether to save prediction to disk.
+        test_data_path: Directory predictions are written into (if enabled).
+        save_predictions: Whether to save each prediction to disk.
 
     Returns:
-        EvaluationResult containing all metrics and optionally cached tensors.
+        A callable mapping an ``InferenceContext`` to an ``EvaluationResult``.
     """
     scale = config.scale
     gamma_params = config.gamma_params
 
-    start_time = perf_counter()
+    def per_sample_fn(ctx: InferenceContext) -> EvaluationResult:
+        ba = ctx.extra.get("beamlet_angles")
+        energy_mev = denormalize_energy(ctx.energy.item(), scale)
 
-    # Load data
-    x, energy, y, ba = get_single_record(
-        sample_id,
-        test_data_path,
-        scale=scale,
-        normalize_flux=config.normalize_flux,
-        downsampling_method=downsampling_method,
-        beamlet_angle=True,
-    )
+        # Save prediction if requested
+        if save_predictions:
+            save_prediction(ctx.y_pred, ctx.sample_id, test_data_path, scale)
 
-    x, energy, y = x.to(device), energy.to(device), y.to(device)
-    energy_mev = denormalize_energy(energy.item(), scale)
+        # Convert to numpy for metrics
+        y_np, y_pred_np = ctx.denorm(scale)
 
-    # Run inference
-    with torch.no_grad():
-        y_pred_tuple = model(x.unsqueeze(0), energy.unsqueeze(0))
-        y_pred = y_pred_tuple[0]
+        # Calculate metrics
+        rmse = calculate_rmse(to_gy(y_pred_np), to_gy(y_np))
 
-    # Save prediction if requested
-    if save_predictions:
-        save_prediction(y_pred, sample_id, test_data_path, scale)
+        thresholded_mapes = calculate_thresholded_mapes(y_np, y_pred_np)
+        mape_0_1_pct = thresholded_mapes[0.001]
+        mape_1_pct = thresholded_mapes[0.01]
+        mape_5_pct = thresholded_mapes[0.05]
+        mape_10_pct = thresholded_mapes[0.1]
+        mape = mape_10_pct
 
-    calc_time = perf_counter() - start_time
+        rde = calculate_relative_dose_error(to_gy(y_pred_np), to_gy(y_np))
 
-    # Convert to numpy for metrics
-    y_np = inverse_minmax(
-        y.unsqueeze(0).detach().cpu().numpy(),
-        scale["min_ds"],
-        scale["max_ds"],
-    )
-    y_pred_np = inverse_minmax(
-        y_pred.detach().cpu().numpy(),
-        scale["min_ds"],
-        scale["max_ds"],
-    )
+        # Gamma pass rate
+        scale_gpr = {"y_min": scale["min_ds"], "y_max": scale["max_ds"]}
+        gpr_result = gamma_index_torch(
+            ctx.y.unsqueeze(0),
+            ctx.y_pred,
+            scale=scale_gpr,
+            gamma_params=gamma_params,
+            resolution=config.resolution,
+        )
+        gpr = gpr_result[1][0] * 100
 
-    # Calculate metrics
-    rmse = calculate_rmse(to_gy(y_pred_np), to_gy(y_np))
+        return EvaluationResult(
+            sample_id=ctx.sample_id,
+            energy_mev=energy_mev,
+            beamlet_angles=tuple(ba) if isinstance(ba, list) else ba,
+            gpr=gpr,
+            rmse=rmse,
+            mape_0_1_pct=mape_0_1_pct,
+            mape_1_pct=mape_1_pct,
+            mape_5_pct=mape_5_pct,
+            mape_10_pct=mape_10_pct,
+            mape=mape,
+            rde=rde,
+            calc_time=ctx.calc_time,
+            prediction=ctx.y_pred.cpu(),
+            ground_truth=ctx.y.cpu(),
+            input_data=ctx.x.cpu(),
+        )
 
-    thresholded_mapes = calculate_thresholded_mapes(y_np, y_pred_np)
-    mape_0_1_pct = thresholded_mapes[0.001]
-    mape_1_pct = thresholded_mapes[0.01]
-    mape_5_pct = thresholded_mapes[0.05]
-    mape_10_pct = thresholded_mapes[0.1]
-    mape = mape_10_pct
-
-    rde = calculate_relative_dose_error(to_gy(y_pred_np), to_gy(y_np))
-
-    # Gamma pass rate
-    scale_gpr = {"y_min": scale["min_ds"], "y_max": scale["max_ds"]}
-    gpr_result = gamma_index_torch(
-        y.unsqueeze(0),
-        y_pred,
-        scale=scale_gpr,
-        gamma_params=gamma_params,
-        resolution=config.resolution,
-    )
-    gpr = gpr_result[1][0] * 100
-
-    return EvaluationResult(
-        sample_id=sample_id,
-        energy_mev=energy_mev,
-        beamlet_angles=tuple(ba) if isinstance(ba, list) else ba,
-        gpr=gpr,
-        rmse=rmse,
-        mape_0_1_pct=mape_0_1_pct,
-        mape_1_pct=mape_1_pct,
-        mape_5_pct=mape_5_pct,
-        mape_10_pct=mape_10_pct,
-        mape=mape,
-        rde=rde,
-        calc_time=calc_time,
-        prediction=y_pred.cpu(),
-        ground_truth=y.cpu(),
-        input_data=x.cpu(),
-    )
+    return per_sample_fn
 
 
 def evaluate_samples(
@@ -266,8 +240,9 @@ def evaluate_samples(
     device: torch.device,
     downsampling_method: str,
     show_progress: bool = True,
+    save_predictions: bool = True,
 ) -> list:
-    """Evaluate multiple samples.
+    """Evaluate multiple samples via the shared evaluation engine.
 
     Args:
         model: The loaded DoTA model.
@@ -277,37 +252,36 @@ def evaluate_samples(
         device: Target device for computation.
         downsampling_method: Method for downsampling.
         show_progress: Whether to show a progress bar.
+        save_predictions: Whether to save each prediction to disk.
 
     Returns:
         List of EvaluationResult objects.
     """
-    results = []
-    iterator = (
-        tqdm(sample_ids, desc="Evaluating samples") if show_progress else sample_ids
+    source = DirSource(
+        test_data_path,
+        sample_ids,
+        scale=config.scale,
+        normalize_flux=config.normalize_flux,
+        downsampling_method=downsampling_method,
+        beamlet_angle=True,
     )
-
-    for i, sample_id in enumerate(iterator):
-        if i == 169:
-            logger.debug(f"Debug breakpoint: sample_id={sample_id}")
-            continue
-
-        result = evaluate_single_sample(
-            model=model,
-            sample_id=sample_id,
-            test_data_path=test_data_path,
-            config=config,
-            device=device,
-            downsampling_method=downsampling_method,
-        )
-        results.append(result)
-
-        if show_progress:
-            iterator.set_postfix(
-                energy=f"{result.energy_mev:.1f}MeV",
-                gpr=f"{result.gpr:.1f}%",
-            )
-
-    return results
+    per_sample_fn = _make_per_sample_fn(
+        config=config,
+        test_data_path=test_data_path,
+        save_predictions=save_predictions,
+    )
+    return evaluate(
+        model,
+        source,
+        device=device,
+        per_sample_fn=per_sample_fn,
+        show_progress=show_progress,
+        desc="Evaluating samples",
+        postfix_fn=lambda r: {
+            "energy": f"{r.energy_mev:.1f}MeV",
+            "gpr": f"{r.gpr:.1f}%",
+        },
+    )
 
 
 def generate_gpr_plot(
@@ -1065,77 +1039,46 @@ def save_anatomical_site_summary_csv(
 
 def save_results_csv(results: list, output_path: Path) -> None:
     """Save per-sample and aggregate evaluation results to CSV."""
-    fieldnames = [
-        "anatomical_site",
-        "test_data_path",
-        "sample_id",
-        "energy_mev",
-        "beamlet_angle_0_deg",
-        "beamlet_angle_1_deg",
-        "gpr_pct",
-        "rmse_gy",
-        "mape_0_1_pct",
-        "mape_1_pct",
-        "mape_5_pct",
-        "mape_10_pct",
-        "rde_pct",
-        "calc_time_s",
+    columns = [
+        CsvColumn("anatomical_site", lambda r: getattr(r, "anatomical_site", "")),
+        CsvColumn("test_data_path", lambda r: getattr(r, "test_data_path", "")),
+        CsvColumn("sample_id", lambda r: r.sample_id),
+        CsvColumn("energy_mev", lambda r: f"{r.energy_mev:.2f}"),
+        CsvColumn("beamlet_angle_0_deg", lambda r: f"{r.beamlet_angles[0]:.2f}"),
+        CsvColumn("beamlet_angle_1_deg", lambda r: f"{r.beamlet_angles[1]:.2f}"),
+        CsvColumn("gpr_pct", lambda r: f"{r.gpr:.4f}", lambda r: r.gpr, ".4f"),
+        CsvColumn("rmse_gy", lambda r: f"{r.rmse:.9f}", lambda r: r.rmse, ".9f"),
+        CsvColumn(
+            "mape_0_1_pct",
+            lambda r: f"{r.mape_0_1_pct:.4f}",
+            lambda r: r.mape_0_1_pct,
+            ".4f",
+        ),
+        CsvColumn(
+            "mape_1_pct", lambda r: f"{r.mape_1_pct:.4f}", lambda r: r.mape_1_pct, ".4f"
+        ),
+        CsvColumn(
+            "mape_5_pct", lambda r: f"{r.mape_5_pct:.4f}", lambda r: r.mape_5_pct, ".4f"
+        ),
+        CsvColumn(
+            "mape_10_pct",
+            lambda r: f"{r.mape_10_pct:.4f}",
+            lambda r: r.mape_10_pct,
+            ".4f",
+        ),
+        CsvColumn("rde_pct", lambda r: f"{r.rde:.4f}", lambda r: r.rde, ".4f"),
+        CsvColumn(
+            "calc_time_s", lambda r: f"{r.calc_time:.4f}", lambda r: r.calc_time, ".4f"
+        ),
     ]
-
-    sorted_results = sorted(
-        results, key=lambda r: (getattr(r, "anatomical_site", ""), r.energy_mev)
+    save_csv(
+        results,
+        output_path,
+        columns,
+        sort_key=lambda r: (getattr(r, "anatomical_site", ""), r.energy_mev),
+        label_column="sample_id",
+        logger=logger,
     )
-
-    with open(output_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for r in sorted_results:
-            writer.writerow(
-                {
-                    "anatomical_site": getattr(r, "anatomical_site", ""),
-                    "test_data_path": getattr(r, "test_data_path", ""),
-                    "sample_id": r.sample_id,
-                    "energy_mev": f"{r.energy_mev:.2f}",
-                    "beamlet_angle_0_deg": f"{r.beamlet_angles[0]:.2f}",
-                    "beamlet_angle_1_deg": f"{r.beamlet_angles[1]:.2f}",
-                    "gpr_pct": f"{r.gpr:.4f}",
-                    "rmse_gy": f"{r.rmse:.9f}",
-                    "mape_0_1_pct": f"{r.mape_0_1_pct:.4f}",
-                    "mape_1_pct": f"{r.mape_1_pct:.4f}",
-                    "mape_5_pct": f"{r.mape_5_pct:.4f}",
-                    "mape_10_pct": f"{r.mape_10_pct:.4f}",
-                    "rde_pct": f"{r.rde:.4f}",
-                    "calc_time_s": f"{r.calc_time:.4f}",
-                }
-            )
-
-        writer.writerow({})
-        for label, fn in [
-            ("mean", np.mean),
-            ("std", np.std),
-            ("min", np.min),
-            ("max", np.max),
-        ]:
-            writer.writerow(
-                {
-                    "anatomical_site": "",
-                    "test_data_path": "",
-                    "sample_id": label,
-                    "energy_mev": "",
-                    "beamlet_angle_0_deg": "",
-                    "beamlet_angle_1_deg": "",
-                    "gpr_pct": f"{fn([r.gpr for r in results]):.4f}",
-                    "rmse_gy": f"{fn([r.rmse for r in results]):.9f}",
-                    "mape_0_1_pct": f"{fn([r.mape_0_1_pct for r in results]):.4f}",
-                    "mape_1_pct": f"{fn([r.mape_1_pct for r in results]):.4f}",
-                    "mape_5_pct": f"{fn([r.mape_5_pct for r in results]):.4f}",
-                    "mape_10_pct": f"{fn([r.mape_10_pct for r in results]):.4f}",
-                    "rde_pct": f"{fn([r.rde for r in results]):.4f}",
-                    "calc_time_s": f"{fn([r.calc_time for r in results]):.4f}",
-                }
-            )
-
-    logger.info(f"Results CSV saved to {output_path}")
 
 
 def print_summary(results: list, total_time: float) -> None:
@@ -1318,7 +1261,7 @@ def main(
     logger.info("=" * 60)
 
     # Setup device and model
-    device = get_device(device_index)
+    device = resolve_device(device_index)
     logger.info(f"Using device: {device}")
 
     model = load_model(model_path, hyperparams_path, device)

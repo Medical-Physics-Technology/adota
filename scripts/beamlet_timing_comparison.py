@@ -22,8 +22,9 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from src.adota.config import denormalize_energy, get_device
+from src.adota.config import denormalize_energy
 from src.adota.utils import load_model
+from src.evaluation.cli import resolve_device
 from src.figures.single_beam import compare_two_inputs
 from src.image_processing.rotation import rotate_lateral_axes_sequential
 from src.loaders.dir_based import get_single_record
@@ -711,7 +712,7 @@ def main(
     if not hyperparams_path.exists():
         raise FileNotFoundError(f"Model hyperparameters not found: {hyperparams_path}")
 
-    device = get_device(device_index)
+    device = resolve_device(device_index)
     logger.info("Run directory: %s", run_dir)
     logger.info("Log file: %s", log_path)
     logger.info("Loading model: %s", model_path)

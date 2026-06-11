@@ -14,7 +14,6 @@ Steps implemented:
   6. Report prevalence + performance split; generate violin & scatter plots.
 """
 
-import csv
 import logging
 import shutil
 import sys
@@ -40,7 +39,6 @@ from src.adota.config import (
     DEFAULT_GAMMA_PARAMS,
     DEFAULT_SCALE,
     denormalize_energy,
-    get_device,
     load_yaml_config,
     setup_logging,
     setup_run_directory,
@@ -71,6 +69,10 @@ app = typer.Typer(help="Training-set tissue-interface analysis")
 
 from src.schemas.analysis import BeamletResult
 from src.schemas.configs import AnalysisConfig
+from src.evaluation.cli import resolve_device
+from src.evaluation.engine import InferenceContext, evaluate
+from src.evaluation.outputs import CsvColumn, save_results_csv as save_csv
+from src.evaluation.sources import H5Source
 
 # ── Bragg-peak heterogeneity ────────────────────────────────────────────────
 
@@ -209,144 +211,104 @@ def compute_bp_cv(
 # ── Per-sample evaluation ───────────────────────────────────────────────────
 
 
-def evaluate_single_sample(
-    model: DoTA3D_v3,
-    sample_idx: int,
-    record_id: str,
-    dataset: H5PYGenerator,
-    config: AnalysisConfig,
-    device: torch.device,
-    compute_gpr: bool = True,
-) -> BeamletResult:
-    """Evaluate a single beamlet: compute BP heterogeneity + model metrics.
+def _make_per_sample_fn(config: AnalysisConfig, compute_gpr: bool):
+    """Build the per-sample callback for the evaluation engine.
+
+    Reproduces the original ``evaluate_single_sample``: zero-flux and
+    energy-threshold skip guards (returning ``None``), Bragg-peak heterogeneity
+    (sigma_HU / TV / CV) with the interface/homogeneous label, RMSE / MAPE / RDE,
+    and an optional gamma pass rate.
 
     Args:
-        model: The loaded DoTA model.
-        sample_idx: Index into the H5PYGenerator dataset.
-        record_id: Unique identifier for the sample.
-        dataset: The H5PYGenerator dataset.
         config: Analysis configuration.
-        device: Target device for computation.
-        compute_gpr: Whether to compute the gamma pass rate (slow).
-            Set to ``False`` to skip GPR for fast experiments.
+        compute_gpr: Whether to compute the gamma pass rate per beamlet.
 
     Returns:
-        BeamletResult with heterogeneity label and all metrics,
-        or ``None`` if the flux channel is all zeros (skipped).
+        A callable mapping an ``InferenceContext`` to a ``BeamletResult``, or
+        ``None`` to skip the beamlet.
     """
     scale = config.scale
     gamma_params = config.gamma_params
 
-    start_time = perf_counter()
+    def per_sample_fn(ctx: InferenceContext):
+        energy_mev = denormalize_energy(ctx.energy.item(), scale)
 
-    # Load data from HDF5
-    x, energy, y = dataset[sample_idx]
-    x = x.to(device)
-    energy = energy.to(device)
-    y = y.to(device)
+        # ── Zero-flux guard ─────────────────────────────────────────────
+        flux_channel = ctx.x[1]  # (D, H, W)
+        if torch.abs(flux_channel).max().item() < 1e-9:
+            logger.warning(
+                f"Skipping sample {ctx.sample_id}: flux channel is all zeros"
+            )
+            return None
 
-    energy_mev = denormalize_energy(energy.item(), scale)
+        # ── Energy threshold guard ──────────────────────────────────────
+        if energy_mev > config.max_energy_mev:
+            logger.debug(
+                f"Skipping sample {ctx.sample_id}: "
+                f"energy {energy_mev:.1f} MeV > threshold {config.max_energy_mev:.1f} MeV"
+            )
+            return None
 
-    # ── Zero-flux guard ─────────────────────────────────────────────────
-    flux_channel = x[1]  # (D, H, W)
-    if torch.abs(flux_channel).max().item() < 1e-9:
-        logger.warning(
-            f"Skipping sample {record_id} (idx={sample_idx}): "
-            f"flux channel is all zeros"
+        # ── De-normalise to physical units ──────────────────────────────
+        y_np, y_pred_np = ctx.denorm(scale)
+
+        ct_norm = ctx.x[0].cpu().numpy()  # (D, H, W) – CT channel
+        ct_hu = inverse_minmax(ct_norm, scale["min_ct"], scale["max_ct"])
+
+        # ── Bragg-peak location (from GT dose) ──────────────────────────
+        dose_3d = y_np.squeeze()  # (D, H, W)
+        bp_idx = estimate_bragg_peak(dose_3d)  # (depth, y, x)
+
+        # ── BP-neighbourhood heterogeneity ──────────────────────────────
+        sigma_hu = compute_bp_sigma_hu(
+            ct_hu, bp_idx, config.bp_radius_mm, config.resolution
         )
-        return None
-
-    # ── Energy threshold guard ──────────────────────────────────────────
-    if energy_mev > config.max_energy_mev:
-        logger.debug(
-            f"Skipping sample {record_id} (idx={sample_idx}): "
-            f"energy {energy_mev:.1f} MeV > threshold {config.max_energy_mev:.1f} MeV"
+        tv = compute_bp_tv(ct_hu, bp_idx, config.bp_radius_mm, config.resolution)
+        cv = compute_bp_cv(ct_hu, bp_idx, config.bp_radius_mm, config.resolution)
+        label = (
+            "interface" if sigma_hu > config.sigma_hu_threshold else "homogeneous"
         )
-        return None
 
-    # Run inference
-    with torch.no_grad():
-        y_pred_tuple = model(x.unsqueeze(0), energy.unsqueeze(0))
-        y_pred = y_pred_tuple[0]
+        # ── Dose-prediction metrics ─────────────────────────────────────
+        rmse = calculate_rmse(to_gy(y_pred_np), to_gy(y_np))
 
-    calc_time = perf_counter() - start_time
+        # MAPE at the 10% ground-truth-dose threshold. Canonical run_model.py
+        # form: mask on the ground truth, calculate_pure_mape(predicted, reference).
+        mask = y_np > 0.1 * np.max(y_np)
+        mape = calculate_pure_mape(y_pred_np[mask], y_np[mask])
 
-    # ── De-normalise to physical units ──────────────────────────────────
-    y_np = inverse_minmax(
-        y.unsqueeze(0).detach().cpu().numpy(),
-        scale["min_ds"],
-        scale["max_ds"],
-    )
-    y_pred_np = inverse_minmax(
-        y_pred.detach().cpu().numpy(),
-        scale["min_ds"],
-        scale["max_ds"],
-    )
+        rde = calculate_relative_dose_error(to_gy(y_pred_np), to_gy(y_np))
 
-    ct_norm = x[0].cpu().numpy()  # (D, H, W) – CT channel
-    ct_hu = inverse_minmax(ct_norm, scale["min_ct"], scale["max_ct"])
+        # Gamma pass rate (optionally skipped for speed)
+        if compute_gpr:
+            scale_gpr = {"y_min": scale["min_ds"], "y_max": scale["max_ds"]}
+            gpr_result = gamma_index_torch(
+                ctx.y.unsqueeze(0),
+                ctx.y_pred,
+                scale=scale_gpr,
+                gamma_params=gamma_params,
+                resolution=config.resolution,
+            )
+            gpr = gpr_result[1][0] * 100
+        else:
+            gpr = float("nan")
 
-    # ── Bragg-peak location (from GT dose) ──────────────────────────────
-    dose_3d = y_np.squeeze()  # (D, H, W)
-    bp_idx = estimate_bragg_peak(dose_3d)  # (depth, y, x)
-
-    # ── BP-neighbourhood heterogeneity ──────────────────────────────────
-    sigma_hu = compute_bp_sigma_hu(
-        ct_hu,
-        bp_idx,
-        config.bp_radius_mm,
-        config.resolution,
-    )
-    tv = compute_bp_tv(
-        ct_hu,
-        bp_idx,
-        config.bp_radius_mm,
-        config.resolution,
-    )
-    cv = compute_bp_cv(
-        ct_hu,
-        bp_idx,
-        config.bp_radius_mm,
-        config.resolution,
-    )
-    label = "interface" if sigma_hu > config.sigma_hu_threshold else "homogeneous"
-
-    # ── Dose-prediction metrics ─────────────────────────────────────────
-    rmse = calculate_rmse(to_gy(y_pred_np), to_gy(y_np))
-
-    mask = y_pred_np > 0.1 * np.max(y_pred_np)
-    mape = calculate_pure_mape(y_np[mask], y_pred_np[mask])
-
-    rde = calculate_relative_dose_error(to_gy(y_pred_np), to_gy(y_np))
-
-    # Gamma pass rate (optionally skipped for speed)
-    if compute_gpr:
-        scale_gpr = {"y_min": scale["min_ds"], "y_max": scale["max_ds"]}
-        gpr_result = gamma_index_torch(
-            y.unsqueeze(0),
-            y_pred,
-            scale=scale_gpr,
-            gamma_params=gamma_params,
-            resolution=config.resolution,
+        return BeamletResult(
+            sample_id=ctx.sample_id,
+            energy_mev=energy_mev,
+            bp_idx=bp_idx,
+            sigma_hu=sigma_hu,
+            tv=tv,
+            cv=cv,
+            label=label,
+            gpr=gpr,
+            rmse=rmse,
+            mape=mape,
+            rde=rde,
+            calc_time=ctx.calc_time,
         )
-        gpr = gpr_result[1][0] * 100
-    else:
-        gpr = float("nan")
 
-    return BeamletResult(
-        sample_id=record_id,
-        energy_mev=energy_mev,
-        bp_idx=bp_idx,
-        sigma_hu=sigma_hu,
-        tv=tv,
-        cv=cv,
-        label=label,
-        gpr=gpr,
-        rmse=rmse,
-        mape=mape,
-        rde=rde,
-        calc_time=calc_time,
-    )
+    return per_sample_fn
 
 
 def evaluate_samples(
@@ -358,11 +320,11 @@ def evaluate_samples(
     show_progress: bool = True,
     compute_gpr: bool = True,
 ) -> list:
-    """Evaluate all beamlets.
+    """Evaluate all beamlets via the shared evaluation engine.
 
     Args:
         model: The loaded DoTA model.
-        record_ids: List of record IDs.
+        record_ids: List of record IDs aligned with the dataset indices.
         dataset: The H5PYGenerator dataset.
         config: Analysis configuration.
         device: Target device for computation.
@@ -372,38 +334,24 @@ def evaluate_samples(
     Returns:
         List of BeamletResult objects.
     """
-    results = []
-    n_skipped = 0
-    n_samples = len(dataset)
-    iterator = (
-        tqdm(range(n_samples), desc="Analysing beamlets")
-        if show_progress
-        else range(n_samples)
+    source = H5Source(dataset, record_ids)
+    per_sample_fn = _make_per_sample_fn(config, compute_gpr)
+    results = evaluate(
+        model,
+        source,
+        device=device,
+        per_sample_fn=per_sample_fn,
+        show_progress=show_progress,
+        desc="Analysing beamlets",
+        postfix_fn=lambda r: {
+            "sigma": f"{r.sigma_hu:.0f}",
+            "label": r.label[:4],
+            "gpr": f"{r.gpr:.1f}%",
+        },
     )
 
-    for i in iterator:
-        result = evaluate_single_sample(
-            model=model,
-            sample_idx=i,
-            record_id=record_ids[i],
-            dataset=dataset,
-            config=config,
-            device=device,
-            compute_gpr=compute_gpr,
-        )
-        if result is None:
-            n_skipped += 1
-            continue
-
-        results.append(result)
-
-        if show_progress:
-            iterator.set_postfix(
-                sigma=f"{result.sigma_hu:.0f}",
-                label=result.label[:4],
-                gpr=f"{result.gpr:.1f}%",
-            )
-
+    n_samples = len(source)
+    n_skipped = n_samples - len(results)
     if n_skipped > 0:
         logger.info(
             f"Skipped {n_skipped}/{n_samples} samples "
@@ -424,76 +372,32 @@ def save_results_csv(results: list, output_path: Path) -> None:
         results: List of BeamletResult objects.
         output_path: Path to the output CSV file.
     """
-    fieldnames = [
-        "sample_id",
-        "energy_mev",
-        "bp_depth",
-        "bp_y",
-        "bp_x",
-        "sigma_hu",
-        "tv",
-        "cv",
-        "label",
-        "gpr_pct",
-        "rmse_gy",
-        "mape_pct",
-        "rde_pct",
-        "calc_time_s",
+    columns = [
+        CsvColumn("sample_id", lambda r: r.sample_id),
+        CsvColumn("energy_mev", lambda r: f"{r.energy_mev:.2f}"),
+        CsvColumn("bp_depth", lambda r: r.bp_idx[0]),
+        CsvColumn("bp_y", lambda r: r.bp_idx[1]),
+        CsvColumn("bp_x", lambda r: r.bp_idx[2]),
+        CsvColumn("sigma_hu", lambda r: f"{r.sigma_hu:.4f}", lambda r: r.sigma_hu, ".4f"),
+        CsvColumn("tv", lambda r: f"{r.tv:.4f}", lambda r: r.tv, ".4f"),
+        CsvColumn("cv", lambda r: f"{r.cv:.6f}", lambda r: r.cv, ".6f"),
+        CsvColumn("label", lambda r: r.label),
+        CsvColumn("gpr_pct", lambda r: f"{r.gpr:.2f}", lambda r: r.gpr, ".2f"),
+        CsvColumn("rmse_gy", lambda r: f"{r.rmse:.9f}", lambda r: r.rmse, ".9f"),
+        CsvColumn("mape_pct", lambda r: f"{r.mape:.4f}", lambda r: r.mape, ".4f"),
+        CsvColumn("rde_pct", lambda r: f"{r.rde:.4f}", lambda r: r.rde, ".4f"),
+        CsvColumn(
+            "calc_time_s", lambda r: f"{r.calc_time:.4f}", lambda r: r.calc_time, ".4f"
+        ),
     ]
-
-    sorted_results = sorted(results, key=lambda r: r.energy_mev)
-
-    with open(output_path, "w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for r in sorted_results:
-            writer.writerow(
-                {
-                    "sample_id": r.sample_id,
-                    "energy_mev": f"{r.energy_mev:.2f}",
-                    "bp_depth": r.bp_idx[0],
-                    "bp_y": r.bp_idx[1],
-                    "bp_x": r.bp_idx[2],
-                    "sigma_hu": f"{r.sigma_hu:.4f}",
-                    "tv": f"{r.tv:.4f}",
-                    "cv": f"{r.cv:.6f}",
-                    "label": r.label,
-                    "gpr_pct": f"{r.gpr:.2f}",
-                    "rmse_gy": f"{r.rmse:.9f}",
-                    "mape_pct": f"{r.mape:.4f}",
-                    "rde_pct": f"{r.rde:.4f}",
-                    "calc_time_s": f"{r.calc_time:.4f}",
-                }
-            )
-
-        # Summary rows
-        writer.writerow({})
-        for label_name, fn in [
-            ("mean", np.mean),
-            ("std", np.std),
-            ("min", np.min),
-            ("max", np.max),
-        ]:
-            writer.writerow(
-                {
-                    "sample_id": label_name,
-                    "energy_mev": "",
-                    "bp_depth": "",
-                    "bp_y": "",
-                    "bp_x": "",
-                    "sigma_hu": f"{fn([r.sigma_hu for r in results]):.4f}",
-                    "tv": f"{fn([r.tv for r in results]):.4f}",
-                    "cv": f"{fn([r.cv for r in results]):.6f}",
-                    "label": "",
-                    "gpr_pct": f"{fn([r.gpr for r in results]):.2f}",
-                    "rmse_gy": f"{fn([r.rmse for r in results]):.9f}",
-                    "mape_pct": f"{fn([r.mape for r in results]):.4f}",
-                    "rde_pct": f"{fn([r.rde for r in results]):.4f}",
-                    "calc_time_s": f"{fn([r.calc_time for r in results]):.4f}",
-                }
-            )
-
-    logger.info(f"Results CSV saved to {output_path}")
+    save_csv(
+        results,
+        output_path,
+        columns,
+        sort_key=lambda r: r.energy_mev,
+        label_column="sample_id",
+        logger=logger,
+    )
 
 
 # ── Prevalence report ──────────────────────────────────────────────────────
@@ -1456,7 +1360,7 @@ def main(
     logger.info(f"H5PYGenerator created with {len(dataset)} samples")
 
     # ── Setup device & load model ──────────────────────────────────────
-    device = get_device(device_index)
+    device = resolve_device(device_index)
     logger.info(f"Using device: {device}")
 
     model = load_model(model_path, hyperparams_path, device)
