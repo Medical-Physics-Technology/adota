@@ -12,7 +12,7 @@
 
 # OpenTPS plan directory: CT.mhd, PlanPencil.txt, bdl.txt, config.txt,
 # structure masks (target.mhd / OAR_*.mhd), and the MC reference Dose.mhd.
-plan_dir: /scratch/mstryja/opentps_plans/Prostate-AEC-001_Publication_Prostate-AEC-001_100MperBeam
+plan_dir: /scratch/mstryja/opentps_plans/LUNG1-193_lung1-193_1beam_neg90gantry
 
 # Model directory name under models/.
 model_name: DoTA_v3_grid_search_v11
@@ -33,8 +33,38 @@ device_index: 0
 runs_dir: /scratch/mstryja/tmp_adota/runs
 
 # Preview verbosity: how much of the parsed plan tree to expand.
-max_fields: 2
-max_control_points: 3
+max_fields: 10
+max_control_points: 10000
+
+# --- Pipeline stages ---
+
+# Comma-separated stages to run end to end.
+# extract  -> per-spot CT crops + flux projections under adota_beamlets/
+# infer    -> batched ADoTA inference -> {id}_ds_pred.npy
+# accumulate -> deposit predicted dose back into the grid -> Dose_ADoTA.mhd
+# ("compare" against the MC Dose.mhd is a later stage.)
+stages: extract,infer,accumulate
+
+# Subset controls for cheap runs (null = all).
+# n_spots: extract only the first N spots (global order).
+# beams: comma-separated beam (field) indices, e.g. "0".
+n_spots: null
+beams: null
+
+# Allow re-extracting into a non-empty <plan_dir>/adota_beamlets/ directory.
+overwrite: true
+
+# Skip the per-field overlay PNGs (visual sanity check).
+no_overlays: false
+
+# Inference: spots per forward pass (batched on the GPU).
+batch_size: 56
+
+# Accumulation: which per-spot array to deposit as "dose".
+# Leave null to auto-select: "prediction" (the ADoTA model output) when the
+# infer stage runs, otherwise "flux" (the constructed flux projection stand-in).
+# Set explicitly to "flux" or "prediction" to force.
+dose_source: null
 
 # Enable verbose/debug logging.
 verbose: false

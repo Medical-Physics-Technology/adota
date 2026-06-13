@@ -51,9 +51,11 @@ PLAN_FILENAME = "PlanPencil.txt"
 CONFIG_FILENAME = "config.txt"
 DEFAULT_BDL_FILENAME = "bdl.txt"
 MC_DOSE_FILENAME = "Dose.mhd"
+ADOTA_DOSE_FILENAME = "Dose_ADoTA.mhd"
 
-# .mhd files that are NOT structure contours.
-_NON_CONTOUR_MHD = {CT_FILENAME, MC_DOSE_FILENAME}
+# .mhd files that are NOT structure contours (the CT and the dose grids -- the
+# MC reference and our accumulated ADoTA output written into the same dir).
+_NON_CONTOUR_MHD = {CT_FILENAME, MC_DOSE_FILENAME, ADOTA_DOSE_FILENAME}
 
 
 def parse_opentps_config(config_path: Path) -> Dict[str, Optional[str]]:

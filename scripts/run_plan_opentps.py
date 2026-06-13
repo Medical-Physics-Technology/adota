@@ -20,12 +20,15 @@ Usage:
         --config scripts/config_run_plan_opentps.yaml
 """
 
+import json
 import logging
 import sys
 from pathlib import Path
+from time import perf_counter
 from typing import Annotated, Optional
 
 import pydicom
+import SimpleITK as sitk
 import typer
 
 # Add the project root to the path for imports.
@@ -34,9 +37,23 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.adota.config import load_yaml_config, setup_logging, setup_run_directory
 from src.adota.utils import load_model
+from src.beamlets.accumulation import AccumulationConfig, run_accumulation
+from src.beamlets.bdl import BeamDataLibrary
+from src.beamlets.dose_scaling import load_dose_gy
+from src.beamlets.extraction import ExtractionConfig, run_extraction
+from src.beamlets.inference import InferenceConfig, run_inference
+from src.beamlets.structures import load_oriented_structures
 from src.dcm.load_data import list_all_files
 from src.evaluation.cli import resolve_device
+from src.figures.dvh_comparison import dvh_comparison_figure, write_dvh_metrics_json
+from src.figures.plan_comparison import plan_dose_comparison
 from src.loaders.plan_directory import load_plan_directory
+
+# Pipeline stages, in execution order. "extract" and "accumulate" are
+# implemented; "infer"/"compare" are added in later tasks.
+ALL_STAGES = ("extract", "infer", "accumulate", "compare")
+BEAMLET_SUBDIR = "adota_beamlets"
+ADOTA_DOSE_NAME = "Dose_ADoTA.mhd"
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +99,151 @@ def load_ct_from_dicom_dir(dicom_dir: Path, logger: logging.Logger) -> list:
     return ct_slices
 
 
+def _row(label: str, seconds: float, per_beamlet_ms: Optional[float] = None) -> str:
+    """Format one timing row, optionally with a per-beamlet figure."""
+    row = f"  {label:<24}: {seconds:8.2f} s"
+    if per_beamlet_ms is not None:
+        row += f"   ({per_beamlet_ms:8.3f} ms/beamlet)"
+    return row
+
+
+def _step(total_s: float, per_beamlet_ms: Optional[float] = None) -> dict:
+    """One timing entry: total seconds (and optional per-beamlet ms)."""
+    out = {"total_s": round(float(total_s), 3)}
+    if per_beamlet_ms is not None:
+        out["ms_per_beamlet"] = round(float(per_beamlet_ms), 3)
+    return out
+
+
+def _build_timing_report(
+    *,
+    total_s: float,
+    model_load_s: float,
+    plan_load_s: float,
+    extraction: Optional[dict],
+    inference: Optional[dict],
+    accumulation: Optional[dict],
+    figure_s: float,
+) -> dict:
+    """Assemble the structured per-stage timing report (single source of truth)."""
+    report: dict = {"total_s": round(float(total_s), 3), "stages": {}}
+    stages = report["stages"]
+
+    if model_load_s > 0:
+        stages["model_load"] = _step(model_load_s)
+    stages["plan_load"] = _step(plan_load_s)
+
+    if extraction is not None:
+        n = max(int(extraction["n_spots"]), 1)
+        report["n_spots"] = int(extraction["n_spots"])
+        tpf = extraction.get("timing_per_field", {}).values()
+        rotation = sum(t["rotation_s"] for t in tpf)
+        crop = sum(t["crop_s_total"] for t in tpf)
+        flux = sum(t["flux_s_total"] for t in tpf)
+        save = sum(t["save_s_total"] for t in tpf)
+        stages["extraction"] = {
+            **_step(extraction["elapsed_s"], extraction["elapsed_s"] / n * 1000),
+            "n_spots": n,
+            "steps": {
+                "rotation": _step(rotation),
+                "ct_cropping": _step(crop, crop / n * 1000),
+                "flux_projection": _step(flux, flux / n * 1000),
+                "save_beamlets": _step(save, save / n * 1000),
+            },
+        }
+
+    if inference is not None:
+        n = max(int(inference["n_spots"]), 1)
+        stages["inference"] = {
+            **_step(inference["elapsed_s"], inference["elapsed_s"] / n * 1000),
+            "n_spots": n,
+            "n_batches": inference["n_batches"],
+            "batch_size": inference["batch_size"],
+            "device": inference.get("device"),
+            "steps": {
+                "record_load": _step(inference["load_s"], inference["ms_per_spot_load"]),
+                "forward": _step(inference["forward_s"], inference["ms_per_spot_forward"]),
+                "save_predictions": _step(inference["save_s"], inference["ms_per_spot_save"]),
+            },
+        }
+
+    if accumulation is not None:
+        n = max(int(accumulation["n_spots"]), 1)
+        steps = {
+            "deposit": _step(accumulation["deposit_s"]),
+            "derotate": _step(accumulation["derotate_s"]),
+        }
+        if "write_s" in accumulation:
+            steps["write"] = _step(accumulation["write_s"])
+        stages["accumulation"] = {
+            **_step(accumulation["elapsed_s"], accumulation["elapsed_s"] / n * 1000),
+            "n_fields": accumulation["n_fields"],
+            "steps": steps,
+        }
+
+    if figure_s > 0:
+        stages["comparison_figures"] = _step(figure_s)
+
+    return report
+
+
+def _format_timing_report(report: dict) -> str:
+    """Render the timing report as the human-readable summary table."""
+    stages = report["stages"]
+    lines = ["=" * 70, "TIMING SUMMARY", "=" * 70]
+    if "model_load" in stages:
+        lines.append(_row("model load", stages["model_load"]["total_s"]))
+    lines.append(_row("plan load", stages["plan_load"]["total_s"]))
+
+    ex = stages.get("extraction")
+    if ex:
+        s = ex["steps"]
+        lines.append("-" * 70)
+        lines.append(
+            f"Extraction               total {ex['total_s']:8.2f} s   "
+            f"({ex['ms_per_beamlet']:8.3f} ms/beamlet)  [{ex['n_spots']} spots]"
+        )
+        lines.append(_row("rotation (per field)", s["rotation"]["total_s"]))
+        lines.append(_row("CT cropping", s["ct_cropping"]["total_s"], s["ct_cropping"]["ms_per_beamlet"]))
+        lines.append(_row("flux projection", s["flux_projection"]["total_s"], s["flux_projection"]["ms_per_beamlet"]))
+        lines.append(_row("save beamlets to disk", s["save_beamlets"]["total_s"], s["save_beamlets"]["ms_per_beamlet"]))
+
+    inf = stages.get("inference")
+    if inf:
+        s = inf["steps"]
+        lines.append("-" * 70)
+        lines.append(
+            f"ADoTA inference          total {inf['total_s']:8.2f} s   "
+            f"({inf['ms_per_beamlet']:8.3f} ms/beamlet)  "
+            f"[{inf['n_spots']} spots, {inf['n_batches']} batches of {inf['batch_size']}]"
+        )
+        lines.append(_row("record load (trilinear)", s["record_load"]["total_s"], s["record_load"]["ms_per_beamlet"]))
+        lines.append(_row("ADoTA forward", s["forward"]["total_s"], s["forward"]["ms_per_beamlet"]))
+        lines.append(_row("save predictions", s["save_predictions"]["total_s"], s["save_predictions"]["ms_per_beamlet"]))
+
+    ac = stages.get("accumulation")
+    if ac:
+        s = ac["steps"]
+        lines.append("-" * 70)
+        lines.append(
+            f"Dose accumulation        total {ac['total_s']:8.2f} s   "
+            f"({ac['ms_per_beamlet']:8.3f} ms/beamlet)  [{ac['n_fields']} fields]"
+        )
+        lines.append(_row("deposit", s["deposit"]["total_s"]))
+        lines.append(_row("de-rotate (per field)", s["derotate"]["total_s"]))
+        if "write" in s:
+            lines.append(_row("write Dose_ADoTA.mhd", s["write"]["total_s"]))
+
+    if "comparison_figures" in stages:
+        lines.append("-" * 70)
+        lines.append(_row("comparison figure", stages["comparison_figures"]["total_s"]))
+
+    lines.append("-" * 70)
+    lines.append(f"  {'TOTAL':<24}: {report['total_s']:8.2f} s")
+    lines.append("=" * 70)
+    return "\n".join(lines)
+
+
 @app.command()
 def main(
     plan_dir: Annotated[
@@ -111,6 +273,23 @@ def main(
     max_control_points: Annotated[
         Optional[int],
         typer.Option(help="Control points to expand per field in preview."),
+    ] = None,
+    stages: Annotated[
+        Optional[str],
+        typer.Option(help="Comma-separated pipeline stages (default: extract)."),
+    ] = None,
+    n_spots: Annotated[
+        Optional[int], typer.Option(help="Extract only the first N spots (subset).")
+    ] = None,
+    beams: Annotated[
+        Optional[str],
+        typer.Option(help="Comma-separated beam (field) indices to extract."),
+    ] = None,
+    overwrite: Annotated[
+        Optional[bool], typer.Option(help="Allow writing into a non-empty output dir.")
+    ] = None,
+    no_overlays: Annotated[
+        Optional[bool], typer.Option(help="Skip per-field overlay PNGs.")
     ] = None,
     verbose: Annotated[
         Optional[bool], typer.Option(help="Enable verbose/debug logging.")
@@ -144,14 +323,36 @@ def main(
         if max_control_points is not None
         else yaml_config.get("max_control_points", 3)
     )
+    stages_raw = stages if stages is not None else yaml_config.get("stages", "extract")
+    n_spots = n_spots if n_spots is not None else yaml_config.get("n_spots")
+    beams_raw = beams if beams is not None else yaml_config.get("beams")
+    overwrite = (
+        overwrite if overwrite is not None else yaml_config.get("overwrite", False)
+    )
+    no_overlays = (
+        no_overlays if no_overlays is not None else yaml_config.get("no_overlays", False)
+    )
     verbose = verbose if verbose is not None else yaml_config.get("verbose", False)
+
+    # Parse the stage / beam lists.
+    stage_list = [s.strip() for s in str(stages_raw).split(",") if s.strip()]
+    unknown = [s for s in stage_list if s not in ALL_STAGES]
+    if unknown:
+        raise typer.BadParameter(
+            f"Unknown stage(s) {unknown}; valid stages are {list(ALL_STAGES)}"
+        )
+    beam_list = (
+        [int(b) for b in str(beams_raw).split(",") if str(b).strip() != ""]
+        if beams_raw not in (None, "")
+        else None
+    )
 
     # Validate required arguments.
     if plan_dir is None:
         raise typer.BadParameter("PLAN_DIR is required (via --plan-dir or YAML config)")
-    if model_name is None:
+    if "infer" in stage_list and model_name is None:
         raise typer.BadParameter(
-            "MODEL_NAME is required (via --model-name or YAML config)"
+            "MODEL_NAME is required for the infer stage (via --model-name or YAML)"
         )
 
     plan_dir = Path(plan_dir)
@@ -172,34 +373,150 @@ def main(
     logger.info("Run directory : %s", run_dir)
     logger.info("Log file      : %s", log_file)
     logger.info("Plan directory: %s", plan_dir)
-
-    # --- Stage 0a: load the model into memory --------------------------------
-    model_hub = PROJECT_ROOT / "models"
-    model_path = model_hub / model_name / model_fname
-    hyperparams_path = model_hub / model_name / "hyperparams.json"
+    logger.info("Stages        : %s", stage_list)
 
     device = resolve_device(device_index)
     logger.info("Device        : %s", device)
-    logger.info("Loading model : %s", model_path)
-    model = load_model(model_path, hyperparams_path, device)
-    n_params = sum(p.numel() for p in model.parameters())
-    logger.info(
-        "Model loaded  : %s (%s parameters)", type(model).__name__, f"{n_params:,}"
-    )
 
-    # --- Stage 0b: load + parse the plan directory ---------------------------
+    pipeline_start = perf_counter()
+    extraction_summary = None
+    inference_summary = None
+    accumulation_summary = None
+    figure_s = 0.0
+
+    # --- Load the model into memory (only when inference is requested) --------
+    model = None
+    model_load_s = 0.0
+    if "infer" in stage_list:
+        model_hub = PROJECT_ROOT / "models"
+        model_path = model_hub / model_name / model_fname
+        hyperparams_path = model_hub / model_name / "hyperparams.json"
+        logger.info("Loading model : %s", model_path)
+        load_t = perf_counter()
+        model = load_model(model_path, hyperparams_path, device)
+        model_load_s = perf_counter() - load_t
+        n_params = sum(p.numel() for p in model.parameters())
+        logger.info(
+            "Model loaded  : %s (%s parameters)", type(model).__name__, f"{n_params:,}"
+        )
+
+    # --- Load + parse the plan directory -------------------------------------
     logger.info("Loading plan directory ...")
+    plan_load_t = perf_counter()
     plan_directory = load_plan_directory(plan_dir, bdl_path=bdl_path)
+    plan_load_s = perf_counter() - plan_load_t
 
-    # --- Stage 0c: preview ---------------------------------------------------
     preview = plan_directory.summary(
         max_fields=max_fields, max_control_points=max_control_points
     )
     logger.info("\n%s\n%s\n%s", "-" * 70, preview, "-" * 70)
 
-    logger.info("=" * 70)
-    logger.info("Plan loaded and parsed. Downstream stages not yet implemented.")
-    logger.info("=" * 70)
+    # --- Stage: extract ------------------------------------------------------
+    if "extract" in stage_list:
+        output_dir = plan_dir / BEAMLET_SUBDIR
+        logger.info("=" * 70)
+        logger.info("Stage: extract -> %s", output_dir)
+        logger.info("=" * 70)
+        extraction_config = ExtractionConfig(
+            n_spots=n_spots,
+            beams=beam_list,
+            overwrite=overwrite,
+            save_overlays=not no_overlays,
+            bdl_path=bdl_path,
+        )
+        extraction_summary = run_extraction(plan_directory, output_dir, extraction_config)
+
+    # --- Stage: infer --------------------------------------------------------
+    if "infer" in stage_list:
+        beamlets_dir = plan_dir / BEAMLET_SUBDIR
+        logger.info("=" * 70)
+        logger.info("Stage: infer %s", beamlets_dir)
+        logger.info("=" * 70)
+        inference_config = InferenceConfig(
+            batch_size=yaml_config.get("batch_size", 56),
+        )
+        inference_summary = run_inference(beamlets_dir, model, device, inference_config)
+
+    # --- Stage: accumulate ---------------------------------------------------
+    if "accumulate" in stage_list:
+        beamlets_dir = plan_dir / BEAMLET_SUBDIR
+        dose_path = plan_dir / ADOTA_DOSE_NAME
+        # When inference ran, the predicted dose exists; default to it.
+        default_source = "prediction" if "infer" in stage_list else "flux"
+        dose_source = yaml_config.get("dose_source") or default_source
+        logger.info("=" * 70)
+        logger.info("Stage: accumulate %s -> %s (source=%s)", beamlets_dir, dose_path, dose_source)
+        logger.info("=" * 70)
+        accumulation_config = AccumulationConfig(dose_source=dose_source)
+        accumulation_summary = run_accumulation(
+            plan_directory, beamlets_dir, dose_path, accumulation_config
+        )
+
+        # Auto-generate the ADoTA vs MCsquare comparison figure (png/pdf/svg).
+        if plan_directory.mc_dose_path is not None:
+            logger.info("Generating ADoTA vs MCsquare comparison figure (Gy) ...")
+            figure_t = perf_counter()
+            bdl = BeamDataLibrary.from_file(plan_directory.bdl_path)
+            ct_arr = sitk.GetArrayFromImage(plan_directory.ct)
+            dose_adota = sitk.GetArrayFromImage(
+                load_dose_gy(dose_path, plan_directory.plan, bdl)
+            )
+            dose_mc = sitk.GetArrayFromImage(
+                load_dose_gy(plan_directory.mc_dose_path, plan_directory.plan, bdl)
+            )
+            fig_paths = plan_dose_comparison(
+                ct_arr,
+                dose_adota,  # dose_a = ADoTA (Gy)
+                dose_mc,  # dose_b = MCsquare reference (Gy)
+                str(plan_dir / "dose_comparison"),
+                labels=("ADoTA", "MCsquare"),
+                dose_unit="Gy",
+            )
+            for fig_path in fig_paths:
+                logger.info("  comparison figure: %s", fig_path)
+
+            # DVH comparison (structures oriented onto the dose grid).
+            try:
+                structures, _flips = load_oriented_structures(plan_directory)
+                spacing = plan_directory.ct.GetSpacing()
+                dvh_paths = dvh_comparison_figure(
+                    structures, dose_adota, dose_mc, spacing,
+                    str(plan_dir / "dvh_comparison"), labels=("ADoTA", "MCsquare"),
+                )
+                write_dvh_metrics_json(
+                    plan_dir / "dvh_metrics.json", structures, dose_adota, dose_mc,
+                    spacing, labels=("ADoTA", "MCsquare"),
+                )
+                for dvh_path in dvh_paths:
+                    logger.info("  DVH figure: %s", dvh_path)
+                logger.info("  DVH metrics: %s", plan_dir / "dvh_metrics.json")
+            except ValueError as exc:
+                logger.warning("Skipping DVH comparison: %s", exc)
+            figure_s = perf_counter() - figure_t
+        else:
+            logger.warning(
+                "No MC Dose.mhd in the plan dir; skipping comparison figure."
+            )
+
+    remaining = [s for s in stage_list if s not in ("extract", "accumulate")]
+    if remaining:
+        logger.info("Stages not yet implemented, skipped: %s", remaining)
+
+    timing_report = _build_timing_report(
+        total_s=perf_counter() - pipeline_start,
+        model_load_s=model_load_s,
+        plan_load_s=plan_load_s,
+        extraction=extraction_summary,
+        inference=inference_summary,
+        accumulation=accumulation_summary,
+        figure_s=figure_s,
+    )
+    logger.info("\n%s", _format_timing_report(timing_report))
+    timing_path = plan_dir / "pipeline_timing.json"
+    timing_path.write_text(json.dumps(timing_report, indent=2) + "\n")
+    logger.info("Timing written to %s", timing_path)
+
+    logger.info("Done.")
 
 
 if __name__ == "__main__":
