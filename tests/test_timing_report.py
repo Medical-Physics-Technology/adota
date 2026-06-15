@@ -27,8 +27,12 @@ def _extraction():
 def _inference():
     return {
         "n_spots": 100, "elapsed_s": 6.0, "n_batches": 2, "batch_size": 56, "device": "cpu",
-        "load_s": 4.0, "forward_s": 1.0, "save_s": 1.0,
-        "ms_per_spot_load": 40.0, "ms_per_spot_forward": 10.0, "ms_per_spot_save": 10.0,
+        "load_s": 4.0, "read_s": 1.5, "downsample_s": 2.5,
+        "forward_s": 1.0,
+        "save_s": 1.0, "upsample_s": 0.3, "save_write_s": 0.7,
+        "ms_per_spot_load": 40.0, "ms_per_spot_read": 15.0, "ms_per_spot_downsample": 25.0,
+        "ms_per_spot_forward": 10.0,
+        "ms_per_spot_save": 10.0, "ms_per_spot_upsample": 3.0, "ms_per_spot_save_write": 7.0,
     }
 
 
@@ -46,7 +50,13 @@ def test_build_report_aggregates_and_is_json_serializable() -> None:
     ex = rep["stages"]["extraction"]
     assert ex["steps"]["flux_projection"]["total_s"] == 16.0  # 8 + 8
     assert ex["ms_per_beamlet"] == 200.0  # 20 s / 100 * 1000
-    assert rep["stages"]["inference"]["steps"]["forward"]["ms_per_beamlet"] == 10.0
+    inf_steps = rep["stages"]["inference"]["steps"]
+    assert inf_steps["forward"]["ms_per_beamlet"] == 10.0
+    # load is split into file read vs downsample-to-grid; save into upsample vs write.
+    assert inf_steps["record_load"]["ms_per_beamlet"] == 15.0
+    assert inf_steps["downsample"]["ms_per_beamlet"] == 25.0
+    assert inf_steps["upsample"]["total_s"] == 0.3
+    assert inf_steps["save_write"]["total_s"] == 0.7
     assert "write" in rep["stages"]["accumulation"]["steps"]
     assert rep["stages"]["comparison_figures"]["total_s"] == 2.0
     json.dumps(rep)  # must not raise
@@ -60,7 +70,11 @@ def test_format_report_table() -> None:
     table = rpo._format_timing_report(rep)
     assert "TIMING SUMMARY" in table
     assert "flux projection" in table
+    assert "record load (file read)" in table
+    assert "downsample (CT -> ADoTA grid)" in table
     assert "ADoTA forward" in table
+    assert "upsample (ADoTA -> ROI grid)" in table
+    assert "save predictions to disk" in table
     assert "TOTAL" in table
 
 

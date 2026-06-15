@@ -35,6 +35,7 @@ import SimpleITK as sitk
 
 from src.beamlets import ROI_SIZE
 from src.beamlets.cropping import clip_axis_window
+from src.beamlets.isocenter import isocenter_physical
 from src.beamlets.rotation import rotate_ct_around_isocenter
 from src.loaders.plan_directory import PlanDirectory
 
@@ -133,13 +134,17 @@ def accumulate_dose(
     n_spots = 0
 
     for beam, records in grouped.items():
-        angle = records[0]["gantry_angle"]
-        iso_index = records[0]["simulation_log"]["isocenter"]
-        isocenter_physical = ct.TransformContinuousIndexToPhysicalPoint(
-            [float(c) for c in iso_index]
-        )
+        rec0 = records[0]
+        angle = rec0["gantry_angle"]
+        iso_index = rec0["simulation_log"]["isocenter"]
+        # Plan isocenter x is flipped relative to the CT (S3) -- same correction
+        # as extraction so the de-rotation pivots on the true target.
+        iso_phys = isocenter_physical(iso_index, ct)
 
-        rotated_grid = np.zeros(ref_arr.shape, dtype=np.float32)
+        # Rebuild the field's EXPANDED rotated grid (the frame the crops live in;
+        # geometry stored per field in sim_res), so crp indices land correctly.
+        ex_nx, ex_ny, ex_nz = rec0["image_size"]  # sitk (x, y, z) order
+        rotated_grid = np.zeros((ex_nz, ex_ny, ex_nx), dtype=np.float32)  # (z, y, x)
         deposit_t = perf_counter()
         for record in records:
             arr = _load_beamlet_array(
@@ -155,13 +160,17 @@ def accumulate_dose(
             n_spots += 1
         deposit_s += perf_counter() - deposit_t
 
-        # De-rotate the field's deposited grid back into the patient frame --
-        # the exact inverse of the extraction rotation around the isocenter.
+        # De-rotate the field's deposited (expanded) grid back into the patient
+        # frame AND crop to the original CT grid in one step: resample with the
+        # CT as the reference. This is the exact inverse of the extraction
+        # rotation around the isocenter, with the output at the original size.
         derotate_t = perf_counter()
         rotated_image = sitk.GetImageFromArray(rotated_grid)
-        rotated_image.CopyInformation(ct)
+        rotated_image.SetOrigin(tuple(rec0["image_origin"]))
+        rotated_image.SetSpacing(tuple(rec0["image_spacing"]))
+        rotated_image.SetDirection(ct.GetDirection())
         derotated = rotate_ct_around_isocenter(
-            rotated_image, -angle, isocenter_physical, default_value=0.0
+            rotated_image, -angle, iso_phys, reference=ct, default_value=0.0
         )
         total += sitk.GetArrayFromImage(derotated)
         derotate_s += perf_counter() - derotate_t

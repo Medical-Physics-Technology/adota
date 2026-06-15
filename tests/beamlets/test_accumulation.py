@@ -167,3 +167,43 @@ def test_prediction_source_moveaxis_and_deposit(plan_directory, tmp_path: Path) 
     arr = sitk.GetArrayFromImage(dose_image)
     assert float(arr.max()) > 0.0  # the (moveaxis'd) prediction was deposited
     assert dose_image.GetSize() == plan_directory.ct.GetSize()
+
+
+def test_accumulate_oblique_field_outputs_original_size(tmp_path: Path) -> None:
+    """An oblique field grows the expanded grid; accumulation returns to CT size.
+
+    Phase 3: extraction rotates into an expanded grid (here genuinely larger),
+    and accumulation rebuilds that grid, deposits, and de-rotates back into the
+    original CT grid so the dose is exactly the CT size.
+    """
+    import json
+
+    arr = np.random.default_rng(2).uniform(-200, 200, size=(10, 20, 20)).astype(np.float32)
+    ct = sitk.GetImageFromArray(arr)
+    ct.SetOrigin((-5.0, -5.0, 2.0))
+    ct.SetSpacing((1.0, 1.0, 1.0))
+    bdl_path = tmp_path / "bdl.txt"
+    bdl_path.write_text(_BDL)
+
+    # Single oblique field: gantry 60 -> adjusted angle 30 deg, off-centre iso.
+    iso = (15.0, 10.0, 5.0)
+    fld = Field(1, 0.0, 60.0, 0.0, iso, "", "", [_cp(2, 100.0)])
+    plan = Plan("obl", 10.0, [Fraction(1, [1], [fld])])
+    pd = PlanDirectory(
+        plan_dir=tmp_path, plan=plan, ct=ct, contours={}, config={},
+        bdl_path=bdl_path, bdl_text=_BDL, mc_dose_path=None,
+    )
+
+    beamlets = tmp_path / "adota_beamlets"
+    run_extraction(pd, beamlets, ExtractionConfig(roi_size=ROI, save_overlays=False))
+
+    # The expanded rotated grid stored per spot is larger than the CT.
+    meta = json.loads(next(beamlets.glob("*_sim_res.json")).read_text())
+    assert (
+        meta["image_size"][0] > ct.GetSize()[0]
+        or meta["image_size"][1] > ct.GetSize()[1]
+    )
+
+    dose_image, _ = accumulate_dose(pd, beamlets, AccumulationConfig(dose_source="flux"))
+    assert dose_image.GetSize() == ct.GetSize()  # back to the original CT size
+    assert float(sitk.GetArrayFromImage(dose_image).max()) > 0.0

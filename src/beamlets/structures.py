@@ -19,8 +19,8 @@ from typing import Dict, Optional, Tuple
 import numpy as np
 import SimpleITK as sitk
 
+from src.beamlets.isocenter import isocenter_index_zyx
 from src.loaders.plan_directory import PlanDirectory
-from src.loaders.plan_parser import Plan
 
 logger = logging.getLogger(__name__)
 
@@ -36,15 +36,6 @@ __all__ = [
 _ISO_DIST_WARN = 40.0
 
 Flip = Tuple[bool, bool, bool]
-
-
-def isocenter_index_zyx(plan: Plan) -> Tuple[float, float, float]:
-    """Return the plan isocenter as a continuous voxel index in ``(z, y, x)``.
-
-    The plan isocenter is stored as a continuous voxel index in ``(x, y, z)``.
-    """
-    iso = plan.fractions[0].fields[0].isocenter
-    return (iso[2], iso[1], iso[0])
 
 
 def apply_flip(mask: np.ndarray, flips: Flip) -> np.ndarray:
@@ -115,7 +106,7 @@ def load_oriented_structures(
             f"No target contour (containing {target_keyword!r}) among {list(raw)}"
         )
 
-    iso = isocenter_index_zyx(plan_directory.plan)
+    iso = isocenter_index_zyx(plan_directory.plan, plan_directory.ct)
     flips, dist = detect_target_flip(raw[target_name], iso)
     if dist > _ISO_DIST_WARN:
         logger.warning(

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
 from time import perf_counter
@@ -31,6 +32,7 @@ from src.beamlets import ROI_SIZE
 from src.beamlets.bdl import BeamDataLibrary, spot_position_to_angles
 from src.beamlets.cropping import extract_beamlet_roi
 from src.beamlets.flux import flux_projection, flux_spatial_spread
+from src.beamlets.isocenter import isocenter_physical
 from src.beamlets.plan_spots import expand_plan_to_spots, group_by_field
 from src.beamlets.rotation import rotate_ct_around_isocenter
 from src.loaders.plan_directory import PlanDirectory
@@ -126,9 +128,9 @@ def run_extraction(
 
         iso_index = field_spots[0]["simulation_log"]["isocenter"]
         adjusted_angle = field_spots[0]["simulation_log"]["gantry_angle"]
-        isocenter_physical = ct.TransformContinuousIndexToPhysicalPoint(
-            [float(c) for c in iso_index]
-        )
+        # The plan isocenter x is flipped relative to the CT (S3); this lands the
+        # rotation pivot on the true target.
+        iso_phys = isocenter_physical(iso_index, ct)
 
         logger.info(
             "Field beam=%d: %d spots, gantry(adj)=%.1f deg, iso_index=%s -> phys=%s",
@@ -136,11 +138,17 @@ def run_extraction(
             len(field_spots),
             adjusted_angle,
             tuple(round(float(c), 2) for c in iso_index),
-            tuple(round(float(c), 2) for c in isocenter_physical),
+            tuple(round(float(c), 2) for c in iso_phys),
         )
 
+        # Rotate into an EXPANDED grid so the off-isocenter rotation clips no
+        # patient information (Phase 1/2). The crop and the stored geometry then
+        # live in this expanded frame; accumulation de-rotates back to the
+        # original CT grid.
         rot_t = perf_counter()
-        rotated_ct = rotate_ct_around_isocenter(ct, adjusted_angle, isocenter_physical)
+        rotated_ct = rotate_ct_around_isocenter(
+            ct, adjusted_angle, iso_phys, expand=True
+        )
         timing.rotation_s = perf_counter() - rot_t
 
         # Copy the rotated grid to numpy once per field (not once per spot): the
@@ -163,7 +171,7 @@ def run_extraction(
                 d_smx,
                 d_smy,
                 spot_position,
-                isocenter_physical,
+                iso_phys,
                 config.roi_size,
                 ct_array=rotated_ct_array,
             )
@@ -202,7 +210,7 @@ def run_extraction(
                 beam,
                 rotated_ct,
                 field_spots,
-                isocenter_physical,
+                iso_phys,
                 bdl,
                 config.roi_size,
             )
@@ -233,12 +241,20 @@ def run_extraction(
 
 
 def _prepare_output_dir(output_dir: Path, overwrite: bool) -> None:
-    """Create the output dir, refusing a non-empty one unless overwrite is set."""
-    if output_dir.exists() and any(output_dir.iterdir()) and not overwrite:
-        raise FileExistsError(
-            f"Output directory {output_dir} is not empty; pass overwrite=True "
-            "to extract into it anyway."
-        )
+    """Create the output dir; on overwrite WIPE it first so no stale files survive.
+
+    Accumulation reads every ``*_sim_res.json`` in the directory, so per-spot
+    files left over from a previous run (e.g. a different grid / spot subset)
+    must be removed -- not just written over -- or they would be mixed into the
+    accumulated dose.
+    """
+    if output_dir.exists() and any(output_dir.iterdir()):
+        if not overwrite:
+            raise FileExistsError(
+                f"Output directory {output_dir} is not empty; pass overwrite=True "
+                "to extract into it anyway."
+            )
+        shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
 

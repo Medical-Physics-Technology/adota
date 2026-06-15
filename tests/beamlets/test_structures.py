@@ -43,10 +43,12 @@ def test_detect_target_flip_y() -> None:
     assert dist == pytest.approx(0.0, abs=0.5)
 
 
-def test_isocenter_index_zyx() -> None:
+def test_isocenter_index_zyx_flips_x() -> None:
+    """(x, y, z) plan index -> (z, y, x) CT index with x flipped: Nx-1-x."""
     fld = Field(1, 0.0, 90.0, 0.0, (5.0, 7.0, 9.0), "", "", [])
     plan = Plan("t", 1.0, [Fraction(1, [1], [fld])])
-    assert isocenter_index_zyx(plan) == (9.0, 7.0, 5.0)  # (z, y, x) from (x, y, z)
+    ct = _img(np.zeros((11, 11, 21)))  # nx = 21
+    assert isocenter_index_zyx(plan, ct) == (9.0, 7.0, 15.0)  # x: 21-1-5 = 15
 
 
 def test_load_oriented_structures_applies_detected_flip(tmp_path: Path) -> None:
@@ -68,6 +70,25 @@ def test_load_oriented_structures_applies_detected_flip(tmp_path: Path) -> None:
     np.testing.assert_allclose(centroid, [5, 7, 5], atol=0.5)
     # The same flip is applied to the OAR.
     assert "OAR_1" in oriented
+
+
+def test_load_oriented_structures_detects_flip_xy(tmp_path: Path) -> None:
+    """An off-centre isocenter exposes the x-flip: target needs flip-x AND flip-y."""
+    shape = (11, 11, 11)
+    # Plan iso (x=3, y=3, z=5) -> CT-frame iso (z, y, x) = (5, 3, 11-1-3 = 7).
+    target = _blob(shape, (5, 7, 3))  # flip-y+x -> (5, 3, 7) = CT-frame iso
+    contours = {"target": _img(target)}
+    fld = Field(1, 0.0, 90.0, 0.0, (3.0, 3.0, 5.0), "", "", [])
+    plan = Plan("t", 1.0, [Fraction(1, [1], [fld])])
+    pd = PlanDirectory(
+        plan_dir=tmp_path, plan=plan, ct=_img(np.zeros(shape)), contours=contours,
+        config={}, bdl_path=None, bdl_text="", mc_dose_path=None,
+    )
+
+    oriented, flips = load_oriented_structures(pd)
+    assert flips == (False, True, True)  # (flip_z, flip_y, flip_x)
+    centroid = np.argwhere(oriented["target"]).mean(axis=0)
+    np.testing.assert_allclose(centroid, [5, 3, 7], atol=0.5)
 
 
 def test_no_target_raises(tmp_path: Path) -> None:

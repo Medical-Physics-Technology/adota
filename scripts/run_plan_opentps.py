@@ -42,18 +42,27 @@ from src.beamlets.bdl import BeamDataLibrary
 from src.beamlets.dose_scaling import load_dose_gy
 from src.beamlets.extraction import ExtractionConfig, run_extraction
 from src.beamlets.inference import InferenceConfig, run_inference
+from src.beamlets.isocenter import isocenter_index_zyx
 from src.beamlets.structures import load_oriented_structures
 from src.dcm.load_data import list_all_files
 from src.evaluation.cli import resolve_device
 from src.figures.dvh_comparison import dvh_comparison_figure, write_dvh_metrics_json
+from src.figures.gamma_comparison import plan_gamma_figure
 from src.figures.plan_comparison import plan_dose_comparison
 from src.loaders.plan_directory import load_plan_directory
+from src.metrics.plan_gamma import parse_criteria, plan_gamma
+from src.metrics.plan_metrics import plan_dose_metrics
 
-# Pipeline stages, in execution order. "extract" and "accumulate" are
-# implemented; "infer"/"compare" are added in later tasks.
-ALL_STAGES = ("extract", "infer", "accumulate", "compare")
+# Pipeline stages, in execution order. "extract", "infer", "accumulate" and
+# "gamma" are implemented; "compare" is reserved for a later task.
+ALL_STAGES = ("extract", "infer", "accumulate", "gamma", "compare")
 BEAMLET_SUBDIR = "adota_beamlets"
 ADOTA_DOSE_NAME = "Dose_ADoTA.mhd"
+
+# Default gamma criteria as [dose%, distance_mm, dose_cutoff%]; extra pymedphys
+# params merge {"interp_fraction": 5} over DEFAULT_GAMMA_PARAMS (faster on full grids).
+DEFAULT_GAMMA_CRITERIA = [[1, 1, 10], [2, 2, 10], [3, 3, 10], [1, 2, 3], [1, 3, 0.1]]
+DEFAULT_GAMMA_EXTRA = {"interp_fraction": 5}
 
 logger = logging.getLogger(__name__)
 
@@ -161,9 +170,11 @@ def _build_timing_report(
             "batch_size": inference["batch_size"],
             "device": inference.get("device"),
             "steps": {
-                "record_load": _step(inference["load_s"], inference["ms_per_spot_load"]),
+                "record_load": _step(inference["read_s"], inference["ms_per_spot_read"]),
+                "downsample": _step(inference["downsample_s"], inference["ms_per_spot_downsample"]),
                 "forward": _step(inference["forward_s"], inference["ms_per_spot_forward"]),
-                "save_predictions": _step(inference["save_s"], inference["ms_per_spot_save"]),
+                "upsample": _step(inference["upsample_s"], inference["ms_per_spot_upsample"]),
+                "save_write": _step(inference["save_write_s"], inference["ms_per_spot_save_write"]),
             },
         }
 
@@ -217,9 +228,11 @@ def _format_timing_report(report: dict) -> str:
             f"({inf['ms_per_beamlet']:8.3f} ms/beamlet)  "
             f"[{inf['n_spots']} spots, {inf['n_batches']} batches of {inf['batch_size']}]"
         )
-        lines.append(_row("record load (trilinear)", s["record_load"]["total_s"], s["record_load"]["ms_per_beamlet"]))
+        lines.append(_row("record load (file read)", s["record_load"]["total_s"], s["record_load"]["ms_per_beamlet"]))
+        lines.append(_row("downsample (CT -> ADoTA grid)", s["downsample"]["total_s"], s["downsample"]["ms_per_beamlet"]))
         lines.append(_row("ADoTA forward", s["forward"]["total_s"], s["forward"]["ms_per_beamlet"]))
-        lines.append(_row("save predictions", s["save_predictions"]["total_s"], s["save_predictions"]["ms_per_beamlet"]))
+        lines.append(_row("upsample (ADoTA -> ROI grid)", s["upsample"]["total_s"], s["upsample"]["ms_per_beamlet"]))
+        lines.append(_row("save predictions to disk", s["save_write"]["total_s"], s["save_write"]["ms_per_beamlet"]))
 
     ac = stages.get("accumulation")
     if ac:
@@ -498,7 +511,9 @@ def main(
                 "No MC Dose.mhd in the plan dir; skipping comparison figure."
             )
 
-    remaining = [s for s in stage_list if s not in ("extract", "accumulate")]
+    remaining = [
+        s for s in stage_list if s not in ("extract", "accumulate", "infer", "gamma")
+    ]
     if remaining:
         logger.info("Stages not yet implemented, skipped: %s", remaining)
 
@@ -516,7 +531,86 @@ def main(
     timing_path.write_text(json.dumps(timing_report, indent=2) + "\n")
     logger.info("Timing written to %s", timing_path)
 
+    # --- Stage: gamma (after timing; opt-in via stages) ----------------------
+    if "gamma" in stage_list:
+        _run_gamma_stage(plan_directory, plan_dir, yaml_config)
+
     logger.info("Done.")
+
+
+def _run_gamma_stage(plan_directory, plan_dir: Path, yaml_config: dict) -> None:
+    """Plan-level gamma pass rate + error metrics + gamma-map figure.
+
+    Reuses the accumulated ``Dose_ADoTA.mhd`` (from this run or a prior
+    ``accumulate``) and the MCsquare ``Dose.mhd``, both converted to Gy. Writes a
+    ``gamma_comparison.*`` figure (3 views x N criteria, sliced at the isocenter)
+    and a ``gamma_metrics.json`` next to the plan, and logs a results table.
+    """
+    dose_path = plan_dir / ADOTA_DOSE_NAME
+    if not dose_path.exists():
+        logger.warning(
+            "Gamma stage: %s not found (run the accumulate stage first); skipping.",
+            dose_path,
+        )
+        return
+    if plan_directory.mc_dose_path is None:
+        logger.warning("Gamma stage: no MC Dose.mhd in the plan dir; skipping.")
+        return
+
+    logger.info("=" * 70)
+    logger.info("Stage: gamma (plan pass rate + metrics)")
+    logger.info("=" * 70)
+
+    bdl = BeamDataLibrary.from_file(plan_directory.bdl_path)
+    ct_arr = sitk.GetArrayFromImage(plan_directory.ct)
+    dose_adota = sitk.GetArrayFromImage(load_dose_gy(dose_path, plan_directory.plan, bdl))
+    dose_mc = sitk.GetArrayFromImage(
+        load_dose_gy(plan_directory.mc_dose_path, plan_directory.plan, bdl)
+    )
+    spacing_zyx = tuple(float(s) for s in plan_directory.ct.GetSpacing()[::-1])
+    slice_zyx = isocenter_index_zyx(plan_directory.plan, plan_directory.ct)
+    slice_zyx = tuple(int(round(c)) for c in slice_zyx)
+
+    criteria = parse_criteria(yaml_config.get("gamma_criteria", DEFAULT_GAMMA_CRITERIA))
+    extra = {**DEFAULT_GAMMA_EXTRA, **(yaml_config.get("gamma_params") or {})}
+
+    gamma_t = perf_counter()
+    results = plan_gamma(dose_adota, dose_mc, spacing_zyx, criteria, extra)
+    gamma_s = perf_counter() - gamma_t
+
+    fig_paths = plan_gamma_figure(
+        ct_arr, results, slice_zyx, str(plan_dir / "gamma_comparison")
+    )
+    for fig_path in fig_paths:
+        logger.info("  gamma figure: %s", fig_path)
+
+    metrics = plan_dose_metrics(dose_adota, dose_mc)
+
+    # Log a compact results table.
+    lines = ["", "=" * 60, "GAMMA PASS RATE (ADoTA vs MCsquare)", "=" * 60]
+    for res in results:
+        lines.append(f"  {res['label']:<16}: {res['pass_rate_pct']:6.2f} %")
+    lines.append("-" * 60)
+    lines.append(f"  MAPE (high-dose)      : {metrics['mape_pct']:6.2f} %")
+    lines.append(f"  RMSE (high-dose)      : {metrics['rmse_gy']:.4g} Gy")
+    lines.append(f"  Relative dose error   : {metrics['relative_dose_error_pct']:6.3f} %")
+    lines.append("=" * 60)
+    logger.info("\n".join(lines))
+
+    out = {
+        "criteria": [
+            {"label": r["label"], "criterion": list(r["criterion"]),
+             "pass_rate_pct": r["pass_rate_pct"]}
+            for r in results
+        ],
+        "metrics": metrics,
+        "slice_zyx": list(slice_zyx),
+        "gamma_params_base": extra,
+        "elapsed_s": gamma_s,
+    }
+    gamma_json = plan_dir / "gamma_metrics.json"
+    gamma_json.write_text(json.dumps(out, indent=2) + "\n")
+    logger.info("Gamma metrics written to %s", gamma_json)
 
 
 if __name__ == "__main__":

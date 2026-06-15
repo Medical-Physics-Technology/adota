@@ -113,6 +113,21 @@ def test_overwrite_guard(plan_directory, tmp_path: Path) -> None:
         run_extraction(plan_directory, out, ExtractionConfig(roi_size=ROI, save_overlays=False))
 
 
+def test_overwrite_clears_stale_files(plan_directory, tmp_path: Path) -> None:
+    """overwrite=True wipes the dir so a stale spot from a prior run cannot survive."""
+    out = tmp_path / "adota_beamlets"
+    run_extraction(plan_directory, out, ExtractionConfig(roi_size=ROI, save_overlays=False))
+    stale = out / "bZZ_l999_s9999_sim_res.json"
+    stale.write_text("{}")
+    assert stale.exists()
+
+    run_extraction(
+        plan_directory, out, ExtractionConfig(roi_size=ROI, overwrite=True, save_overlays=False)
+    )
+    assert not stale.exists()  # the stale file was removed
+    assert (out / "manifest.json").is_file()  # the fresh run still wrote its outputs
+
+
 def test_subset_n_spots_and_beams(plan_directory, tmp_path: Path) -> None:
     out = tmp_path / "adota_beamlets"
     manifest = run_extraction(
