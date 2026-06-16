@@ -128,6 +128,27 @@ def test_accumulate_end_to_end(plan_directory, tmp_path: Path) -> None:
     assert float(arr.max()) > 0.0  # flux was deposited somewhere
 
 
+def test_calibration_factor_scales_dose_and_default_is_noop(plan_directory, tmp_path: Path) -> None:
+    """calibration_factor multiplies the dose exactly; default 1.0 is bit-identical."""
+    beamlets = tmp_path / "adota_beamlets"
+    run_extraction(plan_directory, beamlets, ExtractionConfig(roi_size=ROI, save_overlays=False))
+
+    base_img, base_sum = accumulate_dose(
+        plan_directory, beamlets, AccumulationConfig(dose_source="flux")
+    )
+    cal_img, cal_sum = accumulate_dose(
+        plan_directory, beamlets, AccumulationConfig(dose_source="flux", calibration_factor=1.029)
+    )
+    base = sitk.GetArrayFromImage(base_img)
+    cal = sitk.GetArrayFromImage(cal_img)
+
+    # Default factor recorded as 1.0 and is a true no-op; explicit factor scales exactly.
+    assert base_sum["calibration_factor"] == 1.0
+    assert cal_sum["calibration_factor"] == 1.029
+    np.testing.assert_allclose(cal, base * np.float32(1.029), rtol=1e-6)
+    assert cal_sum["dose_sum"] == pytest.approx(base_sum["dose_sum"] * 1.029, rel=1e-5)
+
+
 def test_run_accumulation_writes_dose_adota(plan_directory, tmp_path: Path) -> None:
     beamlets = tmp_path / "adota_beamlets"
     run_extraction(plan_directory, beamlets, ExtractionConfig(roi_size=ROI, save_overlays=False))

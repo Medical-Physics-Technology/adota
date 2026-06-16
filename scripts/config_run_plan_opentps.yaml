@@ -12,7 +12,7 @@
 
 # OpenTPS plan directory: CT.mhd, PlanPencil.txt, bdl.txt, config.txt,
 # structure masks (target.mhd / OAR_*.mhd), and the MC reference Dose.mhd.
-plan_dir: /scratch/mstryja/opentps_plans/Prostate-AEC-002_Publication_Prostate-AEC-002_100MperBeam
+plan_dir: /scratch/mstryja/opentps_plans/LUNG1-221_LUNG1-221_3beams_positive
 
 # Model directory name under models/.
 model_name: DoTA_v3_grid_search_v11
@@ -68,6 +68,15 @@ batch_size: 56
 # infer stage runs, otherwise "flux" (the constructed flux projection stand-in).
 # Set explicitly to "flux" or "prediction" to force.
 dose_source: null
+
+# Dose calibration (optional). The model systematically under-predicts each
+# beamlet's integral by ~2.8% (measured on held-out beamlets, std <1%), which
+# accumulates into a ~2.8% plan-level target underdosage. When enabled, the
+# accumulated dose is multiplied by dose_calibration_factor before Dose_ADoTA.mhd
+# is written, so the figure, DVH and gamma all use the calibrated dose.
+# Disabled by default -> the pipeline is unchanged. ~1.029 = 1 / 0.972.
+dose_calibration_enabled: false
+dose_calibration_factor: 1.029
 
 # --- Gamma stage ---
 

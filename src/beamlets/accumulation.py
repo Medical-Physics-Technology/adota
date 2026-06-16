@@ -57,11 +57,18 @@ class AccumulationConfig:
             the inference stage).
         clip_negative: Clip negative values to zero after summing.
         output_name: Output filename written at the plan-dir level.
+        calibration_factor: Multiplicative dose calibration applied to the final
+            accumulated dose before writing. Defaults to ``1.0`` (no-op, the
+            pipeline is unaffected). A value > 1 corrects the model's systematic
+            per-beamlet under-prediction (~2.8% measured on held-out beamlets), so
+            the written ``Dose_ADoTA.mhd`` and every downstream consumer (figure,
+            DVH, gamma) use the calibrated dose consistently.
     """
 
     dose_source: str = "flux"
     clip_negative: bool = True
     output_name: str = "Dose_ADoTA.mhd"
+    calibration_factor: float = 1.0
 
 
 def deposit_crop(
@@ -184,6 +191,12 @@ def accumulate_dose(
     if config.clip_negative:
         total = np.clip(total, 0.0, None)
 
+    # Optional dose calibration (default 1.0 = no-op, bit-identical to before).
+    # A pure multiplicative scalar, so it commutes with the Gy conversion applied
+    # downstream; guarded so the factor-1.0 path leaves ``total`` untouched.
+    if config.calibration_factor != 1.0:
+        total *= np.float32(config.calibration_factor)
+
     dose_image = sitk.GetImageFromArray(total)
     dose_image.CopyInformation(ct)
 
@@ -191,6 +204,7 @@ def accumulate_dose(
         "n_spots": n_spots,
         "n_fields": len(grouped),
         "dose_source": config.dose_source,
+        "calibration_factor": float(config.calibration_factor),
         "dose_max": float(total.max()),
         "dose_sum": float(total.sum()),
         "grid_size": list(ct.GetSize()),

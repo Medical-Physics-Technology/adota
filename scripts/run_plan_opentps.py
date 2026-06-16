@@ -457,10 +457,20 @@ def main(
         # When inference ran, the predicted dose exists; default to it.
         default_source = "prediction" if "infer" in stage_list else "flux"
         dose_source = yaml_config.get("dose_source") or default_source
+        # Optional dose calibration: off by default (factor 1.0 = unchanged).
+        calibration_factor = (
+            float(yaml_config.get("dose_calibration_factor", 1.0))
+            if yaml_config.get("dose_calibration_enabled", False)
+            else 1.0
+        )
         logger.info("=" * 70)
         logger.info("Stage: accumulate %s -> %s (source=%s)", beamlets_dir, dose_path, dose_source)
+        if calibration_factor != 1.0:
+            logger.info("Dose calibration ENABLED: scaling accumulated dose by %.4f", calibration_factor)
         logger.info("=" * 70)
-        accumulation_config = AccumulationConfig(dose_source=dose_source)
+        accumulation_config = AccumulationConfig(
+            dose_source=dose_source, calibration_factor=calibration_factor
+        )
         accumulation_summary = run_accumulation(
             plan_directory, beamlets_dir, dose_path, accumulation_config
         )
