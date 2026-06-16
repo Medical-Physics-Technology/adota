@@ -24,7 +24,6 @@ PLANS=(
   "/scratch/mstryja/opentps_plans/Prostate-AEC-006_Publication_Prostate-AEC-006_100MperBeam"
   "/scratch/mstryja/opentps_plans/Prostate-AEC-007_Publication_Prostate-AEC-007_100MperBeam"
   "/scratch/mstryja/opentps_plans/Prostate-AEC-008_Publication_Prostate-AEC-008_100MperBeam"
-  "/scratch/mstryja/opentps_plans/Prostate-AEC-010_Publication_Prostate-AEC-010_100MperBeam"
 )
 
 cd "${PROJECT_ROOT}" || exit 1
