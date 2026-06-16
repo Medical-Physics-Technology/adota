@@ -12,7 +12,7 @@
 
 # OpenTPS plan directory: CT.mhd, PlanPencil.txt, bdl.txt, config.txt,
 # structure masks (target.mhd / OAR_*.mhd), and the MC reference Dose.mhd.
-plan_dir: /scratch/mstryja/opentps_plans/LUNG1-221_LUNG1-221_3beams_positive
+plan_dir: /scratch/mstryja/opentps_plans/Prostate-AEC-004_Publication_Prostate-AEC-004_100MperBeam
 
 # Model directory name under models/.
 model_name: DoTA_v3_grid_search_v11
@@ -27,7 +27,7 @@ model_fname: best_model.pth
 bdl_path: null
 
 # CUDA device index (-1 for CPU).
-device_index: 0
+device_index: 1
 
 # Base directory for run outputs (kept on /scratch, never under /home).
 runs_dir: /scratch/mstryja/tmp_adota/runs
@@ -46,7 +46,7 @@ max_control_points: 10000
 #             gamma_comparison figure; runs after the timing table, reusing
 #             Dose_ADoTA.mhd (can run standalone if accumulate already ran).
 # ("compare" against the MC Dose.mhd is a later stage.)
-stages: extract,infer,accumulate,gamma
+stages: extract,infer,accumulate #,gamma
 
 # Subset controls for cheap runs (null = all).
 # n_spots: extract only the first N spots (global order).
@@ -58,7 +58,19 @@ beams: null
 overwrite: true
 
 # Skip the per-field overlay PNGs (visual sanity check).
-no_overlays: false
+no_overlays: true
+
+# Extraction: compute the per-spot flux projection on the GPU (flux_projection_gpu)
+# instead of NumPy. Numerically identical (float64; proven by tests/beamlets/
+# test_flux_gpu.py); purely a speed option. Uses the device from device_index.
+flux_on_gpu: true
+
+# Extraction parallelism. false -> run_extraction (serial reference, kept for
+# comparison). true -> run_extraction_pooled (thread pool over each field's spots;
+# bit-identical output, proven by tests/beamlets/test_extraction_pooled.py).
+# extraction_workers: thread count (0 = auto, min(32, os.cpu_count())).
+extraction_parallel: true
+extraction_workers: 0
 
 # Inference: spots per forward pass (batched on the GPU).
 batch_size: 56

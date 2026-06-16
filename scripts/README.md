@@ -117,6 +117,101 @@ The training loop honours SIGINT / SIGTERM (graceful shutdown after the current 
 
 ---
 
+## run_plan_opentps.py
+
+The **end-to-end plan-level dose pipeline**. Given an OpenTPS plan directory it
+extracts per-spot ADoTA inputs, runs batched inference, accumulates the predicted
+beamlets into a full-grid dose, and validates that dose against the MCsquare
+reference with comparison figures, DVHs, and a gamma analysis. It is the bridge
+from the per-beamlet model to a clinically meaningful **plan** dose.
+
+The script is **config-driven** (like `train_adota.py`): point it at a YAML config
+and override individual fields from the CLI.
+
+### Pipeline stages (`stages:`)
+
+Run any comma-separated subset, in order:
+
+| Stage | Does | Writes (in the plan dir) |
+|---|---|---|
+| `extract` | Rotate the CT around each field's isocenter; per spot, crop the BEV CT and build the flux projection | `adota_beamlets/{id}_ct.npy`, `_flux.npy`, `_sim_res.json` |
+| `infer` | Batched ADoTA inference over the beamlets | `adota_beamlets/{id}_ds_pred.npy` |
+| `accumulate` | Deposit predicted beamlets back onto the full CT grid (de-rotating each field); auto-generates the dose-comparison + DVH figures | `Dose_ADoTA.mhd`, `dose_comparison.*`, `dvh_comparison.*`, `dvh_metrics.json` |
+| `gamma` | Plan gamma pass rate per criterion + MAPE / RMSE / RDE metrics + gamma-map figure (runs after the timing table; reuses `Dose_ADoTA.mhd`, so it can run standalone) | `gamma_comparison.*`, `gamma_metrics.json` |
+
+### Usage
+
+```bash
+# Full pipeline from the YAML config
+uv run python scripts/run_plan_opentps.py --config scripts/config_run_plan_opentps.yaml
+
+# A specific plan, GPU 0, extract+infer+accumulate only
+uv run python scripts/run_plan_opentps.py --config scripts/config_run_plan_opentps.yaml \
+    --plan-dir /scratch/mstryja/opentps_plans/<PLAN> \
+    --stages extract,infer,accumulate --device-index 0 --overwrite
+
+# Gamma only, reusing an already-accumulated Dose_ADoTA.mhd
+uv run python scripts/run_plan_opentps.py --config scripts/config_run_plan_opentps.yaml \
+    --stages gamma
+```
+
+### Key config options
+
+All settings live in `scripts/config_run_plan_opentps.yaml`. Highlights:
+
+| Key | Default | Description |
+|---|---|---|
+| `plan_dir` | – | OpenTPS plan directory (`CT.mhd`, `PlanPencil.txt`, `bdl.txt`, structure masks, MC `Dose.mhd`) |
+| `model_name` | – | Model directory under `models/` (required for `infer`) |
+| `stages` | `extract` | Comma-separated stage list (see table above) |
+| `device_index` | `0` | CUDA device index (`-1` for CPU) |
+| `flux_on_gpu` | `false` | Compute the flux projection on the GPU (`flux_projection_gpu`); numerically identical to NumPy, purely a speed option |
+| `extraction_parallel` | `false` | `false` → serial `run_extraction`; `true` → thread-pooled `run_extraction_pooled` (bit-identical output) |
+| `extraction_workers` | `0` | Thread count when parallel (`0` = auto, `min(32, os.cpu_count())`) |
+| `batch_size` | `56` | Spots per GPU forward pass (inference) |
+| `dose_source` | `null` | `prediction` (model dose) or `flux` (stand-in); auto-selected when `infer` ran |
+| `dose_calibration_enabled` / `dose_calibration_factor` | `false` / `1.029` | Optional multiplicative dose calibration applied at accumulation (off by default) |
+| `gamma_criteria` | 5 criteria | List of `[dose%, distance_mm, dose_cutoff%]` for the gamma stage |
+| `gamma_params` | `interp_fraction: 5, ...` | Extra pymedphys gamma parameters |
+| `n_spots` / `beams` | `null` | Subset controls for cheap runs |
+| `overwrite` | `false` | Allow (re)writing into a non-empty `adota_beamlets/` |
+
+**Precedence order:** CLI arguments > YAML config > built-in defaults.
+
+### Performance notes
+
+- `flux_on_gpu: true` + `extraction_parallel: true` is the fastest extraction
+  configuration (the flux runs on the GPU while the thread pool overlaps the CT
+  crop and the per-spot disk writes).
+- The inference down-sample (to the `160x30x30` ADoTA grid) and up-sample (back to
+  the `320x60x60` ROI) both run on the GPU.
+- The timing summary (printed and written to `pipeline_timing.json`) reports real
+  wall-clock time per step; under the thread pool the per-step rows are the union
+  of concurrent intervals (real active wall time), not a thread-sum.
+
+### Output
+
+Artifacts are written **next to the plan** (the plan dirs live on `/scratch`):
+
+```
+<plan_dir>/
+├── adota_beamlets/            # per-spot CT crops, flux, predictions, manifest (removable)
+├── Dose_ADoTA.mhd / .raw      # accumulated ADoTA plan dose (same grid as Dose.mhd)
+├── dose_comparison.{png,pdf,svg}      # ADoTA vs MCsquare (axial/coronal/sagittal + IDD)
+├── dvh_comparison.{png,pdf,svg}       # DVH overlay; dvh_metrics.json (Dmean/D95/D98/...)
+├── gamma_comparison.{png,pdf,svg}     # gamma maps (3 views x N criteria at isocenter)
+├── gamma_metrics.json         # per-criterion GPR + MAPE/RMSE/RDE
+└── pipeline_timing.json       # per-stage timing report
+```
+
+### Requirements
+
+- An OpenTPS plan directory with `CT.mhd`, `PlanPencil.txt`, a plan-local `bdl.txt`,
+  structure masks (`target.mhd` / `OAR_*.mhd`), and the MCsquare reference `Dose.mhd`.
+- A model directory under `models/` with weights + `hyperparams.json` (for `infer`).
+
+---
+
 ## run_model.py
 
 A command-line tool for running DoTA model inference on dose prediction tasks.

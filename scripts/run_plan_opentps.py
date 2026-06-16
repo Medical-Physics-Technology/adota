@@ -40,7 +40,11 @@ from src.adota.utils import load_model
 from src.beamlets.accumulation import AccumulationConfig, run_accumulation
 from src.beamlets.bdl import BeamDataLibrary
 from src.beamlets.dose_scaling import load_dose_gy
-from src.beamlets.extraction import ExtractionConfig, run_extraction
+from src.beamlets.extraction import (
+    ExtractionConfig,
+    run_extraction,
+    run_extraction_pooled,
+)
 from src.beamlets.inference import InferenceConfig, run_inference
 from src.beamlets.isocenter import isocenter_index_zyx
 from src.beamlets.structures import load_oriented_structures
@@ -153,6 +157,8 @@ def _build_timing_report(
         stages["extraction"] = {
             **_step(extraction["elapsed_s"], extraction["elapsed_s"] / n * 1000),
             "n_spots": n,
+            "parallel": bool(extraction.get("parallel", False)),
+            "workers": int(extraction.get("workers", 0)),
             "steps": {
                 "rotation": _step(rotation),
                 "ct_cropping": _step(crop, crop / n * 1000),
@@ -210,10 +216,22 @@ def _format_timing_report(report: dict) -> str:
     if ex:
         s = ex["steps"]
         lines.append("-" * 70)
+        mode = (
+            f"pooled x{ex['workers']} threads" if ex.get("parallel") else "serial"
+        )
         lines.append(
             f"Extraction               total {ex['total_s']:8.2f} s   "
-            f"({ex['ms_per_beamlet']:8.3f} ms/beamlet)  [{ex['n_spots']} spots]"
+            f"({ex['ms_per_beamlet']:8.3f} ms/beamlet)  [{ex['n_spots']} spots, {mode}]"
         )
+        if ex.get("parallel"):
+            # Sub-steps are the real wall-clock time each step was active (union of
+            # the concurrent per-spot intervals). Different steps still run in
+            # parallel across threads, so they can overlap each other and need not
+            # sum to the stage wall total above.
+            lines.append(
+                "  (sub-steps are real wall-time each step was active; they run "
+                "concurrently, so they can overlap)"
+            )
         lines.append(_row("rotation (per field)", s["rotation"]["total_s"]))
         lines.append(_row("CT cropping", s["ct_cropping"]["total_s"], s["ct_cropping"]["ms_per_beamlet"]))
         lines.append(_row("flux projection", s["flux_projection"]["total_s"], s["flux_projection"]["ms_per_beamlet"]))
@@ -430,14 +448,34 @@ def main(
         logger.info("=" * 70)
         logger.info("Stage: extract -> %s", output_dir)
         logger.info("=" * 70)
+        flux_on_gpu = bool(yaml_config.get("flux_on_gpu", False))
+        if flux_on_gpu:
+            logger.info("Flux projection: GPU path on %s", device)
         extraction_config = ExtractionConfig(
             n_spots=n_spots,
             beams=beam_list,
             overwrite=overwrite,
             save_overlays=not no_overlays,
             bdl_path=bdl_path,
+            flux_on_gpu=flux_on_gpu,
+            flux_device=str(device),
         )
-        extraction_summary = run_extraction(plan_directory, output_dir, extraction_config)
+        # Serial reference (run_extraction) vs thread-pooled twin; both
+        # bit-identical. Selected by config so the serial path stays comparable.
+        extraction_parallel = bool(yaml_config.get("extraction_parallel", False))
+        extraction_workers = int(yaml_config.get("extraction_workers", 0))
+        if extraction_parallel:
+            logger.info(
+                "Extraction: parallel (thread pool, workers=%s)",
+                extraction_workers or "auto",
+            )
+            extraction_summary = run_extraction_pooled(
+                plan_directory, output_dir, extraction_config, workers=extraction_workers
+            )
+        else:
+            extraction_summary = run_extraction(
+                plan_directory, output_dir, extraction_config
+            )
 
     # --- Stage: infer --------------------------------------------------------
     if "infer" in stage_list:

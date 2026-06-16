@@ -116,6 +116,7 @@ def get_single_record_no_gt(
     normalize_flux: bool = True,
     downsampling_method: str = "interpolation",
     timing: Optional[dict] = None,
+    device: Optional["torch.device"] = None,
 ) -> Tuple[torch.Tensor]:
     """Load and prepare a single inference record.
 
@@ -123,6 +124,11 @@ def get_single_record_no_gt(
     seconds spent reading the per-spot files are accumulated under ``"read"`` and
     the seconds spent down-sampling to the ADoTA grid under ``"downsample"``. It
     does not affect the returned tensors (the training/eval path passes no dict).
+
+    ``device`` (default ``None`` = CPU, unchanged) moves the CT/flux tensors onto
+    the given Torch device right after loading, so the normalization and the
+    trilinear down-sampling run there (e.g. on the GPU). The returned tensors live
+    on that device.
     """
     scale = DEFAULT_SCALE if scale is None else scale
 
@@ -136,10 +142,11 @@ def get_single_record_no_gt(
         timing["read"] = timing.get("read", 0.0) + (perf_counter() - read_t)
 
     energy = meta["simulation_log"]["energy"][0]
-    # Convert numpy arrays to PyTorch tensors
-    ct_grid = torch.tensor(x, dtype=torch.float32)
+    # Convert numpy arrays to PyTorch tensors (on ``device`` when given, so the
+    # normalization + trilinear resize below run there).
+    ct_grid = torch.tensor(x, dtype=torch.float32, device=device)
     # dose_grid = torch.tensor(y, dtype=torch.float32)
-    flux_grid = torch.tensor(flux, dtype=torch.float32)
+    flux_grid = torch.tensor(flux, dtype=torch.float32, device=device)
     e = energy
 
     ct_grid = (ct_grid - scale["min_ct"]) / (scale["max_ct"] - scale["min_ct"])
@@ -183,6 +190,10 @@ def get_single_record_no_gt(
             align_corners=False,
         ).squeeze(0)
     if timing is not None:
+        # Sync so the async GPU resize is attributed here, not to a later op
+        # (measurement-only; the normal path is untouched).
+        if ct_grid.is_cuda:
+            torch.cuda.synchronize(ct_grid.device)
         timing["downsample"] = timing.get("downsample", 0.0) + (perf_counter() - interp_t)
 
     # Concatente flux and ct grid

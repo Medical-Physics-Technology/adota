@@ -19,8 +19,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field as dataclass_field
+from functools import partial
 from pathlib import Path
 from time import perf_counter
 from typing import Dict, List, Optional
@@ -31,7 +34,7 @@ import SimpleITK as sitk
 from src.beamlets import ROI_SIZE
 from src.beamlets.bdl import BeamDataLibrary, spot_position_to_angles
 from src.beamlets.cropping import extract_beamlet_roi
-from src.beamlets.flux import flux_projection, flux_spatial_spread
+from src.beamlets.flux import flux_projection, flux_projection_gpu, flux_spatial_spread
 from src.beamlets.isocenter import isocenter_physical
 from src.beamlets.plan_spots import expand_plan_to_spots, group_by_field
 from src.beamlets.rotation import rotate_ct_around_isocenter
@@ -40,7 +43,7 @@ from src.utils.serialization import NumpyEncoder
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ExtractionConfig", "run_extraction"]
+__all__ = ["ExtractionConfig", "run_extraction", "run_extraction_pooled"]
 
 
 @dataclass
@@ -55,6 +58,11 @@ class ExtractionConfig:
         overwrite: Allow writing into a non-empty output directory.
         save_overlays: Save a per-field visual sanity-check PNG.
         bdl_path: Override the beam data library path (default: plan-local).
+        flux_on_gpu: Compute the per-spot flux projection on ``flux_device`` via
+            :func:`src.beamlets.flux.flux_projection_gpu` instead of NumPy. The
+            result is numerically identical (float64, verified by tests); this is
+            purely a speed option. Default ``False`` (the NumPy path, unchanged).
+        flux_device: Torch device used when ``flux_on_gpu`` is set.
     """
 
     roi_size: tuple = ROI_SIZE
@@ -63,14 +71,47 @@ class ExtractionConfig:
     overwrite: bool = False
     save_overlays: bool = True
     bdl_path: Optional[Path] = None
+    flux_on_gpu: bool = False
+    flux_device: str = "cuda"
 
 
 @dataclass
 class _FieldTiming:
+    """Per-field timing as absolute ``(start, end)`` intervals per step.
+
+    Storing intervals (not durations) lets us report the **real wall-clock time**
+    each step was active under the thread pool via :func:`_union_seconds` -- the
+    union collapses overlapping concurrent intervals instead of summing them. In
+    the serial path the intervals are disjoint, so the union equals the plain sum
+    (the numbers are unchanged).
+    """
+
     rotation_s: float = 0.0
-    crop_s: List[float] = dataclass_field(default_factory=list)
-    flux_s: List[float] = dataclass_field(default_factory=list)
-    save_s: List[float] = dataclass_field(default_factory=list)
+    crop_iv: List[tuple] = dataclass_field(default_factory=list)
+    flux_iv: List[tuple] = dataclass_field(default_factory=list)
+    save_iv: List[tuple] = dataclass_field(default_factory=list)
+
+
+def _union_seconds(intervals: List[tuple]) -> float:
+    """Total wall-clock length covered by a set of ``(start, end)`` intervals.
+
+    Overlapping intervals (concurrent threads) are merged, so the result is the
+    real time during which the step was active -- never more than the elapsed
+    wall time -- rather than the inflated sum of per-thread durations.
+    """
+    if not intervals:
+        return 0.0
+    ordered = sorted(intervals)
+    total = 0.0
+    cur_start, cur_end = ordered[0]
+    for start, end in ordered[1:]:
+        if start > cur_end:
+            total += cur_end - cur_start
+            cur_start, cur_end = start, end
+        else:
+            cur_end = max(cur_end, end)
+    total += cur_end - cur_start
+    return total
 
 
 def run_extraction(
@@ -78,7 +119,12 @@ def run_extraction(
     output_dir: Path,
     config: Optional[ExtractionConfig] = None,
 ) -> dict:
-    """Extract per-spot ADoTA inputs for a whole plan.
+    """Extract per-spot ADoTA inputs for a whole plan (sequential reference).
+
+    This is the serial implementation kept as the trusted reference;
+    :func:`run_extraction_pooled` is the thread-pooled twin producing
+    **bit-identical** output. Both share the same orchestration and per-spot
+    worker (:func:`_process_spot`), differing only in serial vs concurrent spots.
 
     Args:
         plan_directory: The loaded plan directory (CT, parsed plan, BDL path).
@@ -91,6 +137,46 @@ def run_extraction(
     Raises:
         FileExistsError: If ``output_dir`` is non-empty and ``overwrite`` is off.
     """
+    return _extract_impl(plan_directory, output_dir, config, parallel=False, workers=0)
+
+
+def run_extraction_pooled(
+    plan_directory: PlanDirectory,
+    output_dir: Path,
+    config: Optional[ExtractionConfig] = None,
+    workers: int = 0,
+) -> dict:
+    """Thread-pooled twin of :func:`run_extraction` (bit-identical output).
+
+    Processes each field's spots concurrently with a thread pool. The per-spot
+    work (SimpleITK crop, flux projection, ``np.save``) releases the GIL, so the
+    threads overlap it while sharing the rotated CT array and the CUDA context
+    zero-copy. Because both paths call the same :func:`_process_spot` and each spot
+    writes only its own files, the output matches the serial path exactly.
+
+    Args:
+        plan_directory: The loaded plan directory.
+        output_dir: Destination directory.
+        config: Extraction options.
+        workers: Thread count (``0`` = auto: ``min(32, os.cpu_count())``).
+
+    Returns:
+        The manifest dict.
+    """
+    return _extract_impl(
+        plan_directory, output_dir, config, parallel=True, workers=workers
+    )
+
+
+def _extract_impl(
+    plan_directory: PlanDirectory,
+    output_dir: Path,
+    config: Optional[ExtractionConfig],
+    *,
+    parallel: bool,
+    workers: int,
+) -> dict:
+    """Shared extraction core; ``parallel`` selects serial vs thread-pool spots."""
     config = config or ExtractionConfig()
     output_dir = Path(output_dir)
     _prepare_output_dir(output_dir, config.overwrite)
@@ -117,6 +203,10 @@ def run_extraction(
     overlays_dir = output_dir / "overlays"
     if config.save_overlays:
         overlays_dir.mkdir(exist_ok=True)
+
+    effective_workers = (
+        (workers or min(32, (os.cpu_count() or 4))) if parallel else 0
+    )
 
     started = perf_counter()
     timings: Dict[int, _FieldTiming] = {}
@@ -159,50 +249,35 @@ def run_extraction(
         image_spacing = rotated_ct.GetSpacing()
         image_size = rotated_ct.GetSize()
 
-        for record in field_spots:
-            sim_log = record["simulation_log"]
-            spot_position = sim_log["bixelgrid_shifts_xy"][0]
-            energy = sim_log["energy"][0]
+        # The per-spot work is independent (each writes its own files; the rotated
+        # CT is read-only), so the serial and pooled paths are bit-identical.
+        worker = partial(
+            _process_spot,
+            rotated_ct=rotated_ct,
+            rotated_ct_array=rotated_ct_array,
+            iso_phys=iso_phys,
+            d_nozzle=d_nozzle,
+            d_smx=d_smx,
+            d_smy=d_smy,
+            bdl=bdl,
+            image_origin=image_origin,
+            image_spacing=image_spacing,
+            image_size=image_size,
+            config=config,
+            output_dir=output_dir,
+        )
+        if parallel:
+            with ThreadPoolExecutor(max_workers=effective_workers) as pool:
+                results = list(pool.map(worker, field_spots))
+        else:
+            results = [worker(record) for record in field_spots]
 
-            crop_t = perf_counter()
-            cropped_ct, entrance, crp, oob = extract_beamlet_roi(
-                rotated_ct,
-                d_nozzle,
-                d_smx,
-                d_smy,
-                spot_position,
-                iso_phys,
-                config.roi_size,
-                ct_array=rotated_ct_array,
-            )
-            timing.crop_s.append(perf_counter() - crop_t)
-            oob_count += int(oob)
-
-            flux_t = perf_counter()
-            beamlet_angles = spot_position_to_angles(
-                spot_position[0], spot_position[1], d_smx, d_smy
-            )
-            sigmas = flux_spatial_spread(bdl, energy)
-            re_proj = [entrance[1], entrance[2], entrance[0]]
-            flux = flux_projection(re_proj, beamlet_angles, sigmas, cropped_ct.shape)
-            timing.flux_s.append(perf_counter() - flux_t)
-
-            sim_res = _build_sim_res(
-                record,
-                beamlet_angles,
-                entrance,
-                re_proj,
-                crp,
-                oob,
-                image_origin,
-                image_spacing,
-                image_size,
-                config.roi_size,
-            )
-
-            save_t = perf_counter()
-            _save_spot(output_dir, record["id"], cropped_ct, flux, sim_res)
-            timing.save_s.append(perf_counter() - save_t)
+        # Collect per-spot (start, end) intervals; unioned later for real wall time.
+        for res in results:
+            timing.crop_iv.append(res["crop"])
+            timing.flux_iv.append(res["flux"])
+            timing.save_iv.append(res["save"])
+            oob_count += res["oob"]
 
         if config.save_overlays:
             _save_field_overlay(
@@ -226,6 +301,8 @@ def run_extraction(
         timings,
         oob_count,
         elapsed,
+        parallel=parallel,
+        workers=effective_workers,
     )
     (output_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2, cls=NumpyEncoder)
@@ -238,6 +315,88 @@ def run_extraction(
         output_dir,
     )
     return manifest
+
+
+def _process_spot(
+    record: dict,
+    *,
+    rotated_ct: sitk.Image,
+    rotated_ct_array: np.ndarray,
+    iso_phys: tuple,
+    d_nozzle: float,
+    d_smx: float,
+    d_smy: float,
+    bdl: BeamDataLibrary,
+    image_origin: tuple,
+    image_spacing: tuple,
+    image_size: tuple,
+    config: ExtractionConfig,
+    output_dir: Path,
+) -> dict:
+    """Crop + flux + save one spot; return its per-step timings and ``oob`` flag.
+
+    This is the single per-spot implementation shared by the serial
+    (:func:`run_extraction`) and pooled (:func:`run_extraction_pooled`) paths, so
+    both produce byte-identical outputs. It reads the shared ``rotated_ct`` /
+    ``rotated_ct_array`` (read-only) and writes only this spot's own files, so it
+    is safe to run concurrently across spots.
+    """
+    sim_log = record["simulation_log"]
+    spot_position = sim_log["bixelgrid_shifts_xy"][0]
+    energy = sim_log["energy"][0]
+
+    crop_t0 = perf_counter()
+    cropped_ct, entrance, crp, oob = extract_beamlet_roi(
+        rotated_ct,
+        d_nozzle,
+        d_smx,
+        d_smy,
+        spot_position,
+        iso_phys,
+        config.roi_size,
+        ct_array=rotated_ct_array,
+    )
+    crop_t1 = perf_counter()
+
+    flux_t0 = perf_counter()
+    beamlet_angles = spot_position_to_angles(
+        spot_position[0], spot_position[1], d_smx, d_smy
+    )
+    sigmas = flux_spatial_spread(bdl, energy)
+    re_proj = [entrance[1], entrance[2], entrance[0]]
+    if config.flux_on_gpu:
+        flux = flux_projection_gpu(
+            re_proj, beamlet_angles, sigmas, cropped_ct.shape, device=config.flux_device
+        )
+    else:
+        flux = flux_projection(re_proj, beamlet_angles, sigmas, cropped_ct.shape)
+    flux_t1 = perf_counter()
+
+    sim_res = _build_sim_res(
+        record,
+        beamlet_angles,
+        entrance,
+        re_proj,
+        crp,
+        oob,
+        image_origin,
+        image_spacing,
+        image_size,
+        config.roi_size,
+    )
+
+    save_t0 = perf_counter()
+    _save_spot(output_dir, record["id"], cropped_ct, flux, sim_res)
+    save_t1 = perf_counter()
+
+    # Absolute (start, end) timestamps so concurrent intervals can be unioned
+    # into real wall-clock per-step times (see _union_seconds).
+    return {
+        "crop": (crop_t0, crop_t1),
+        "flux": (flux_t0, flux_t1),
+        "save": (save_t0, save_t1),
+        "oob": int(oob),
+    }
 
 
 def _prepare_output_dir(output_dir: Path, overwrite: bool) -> None:
@@ -319,6 +478,8 @@ def _build_manifest(
     timings: Dict[int, _FieldTiming],
     oob_count: int,
     elapsed: float,
+    parallel: bool = False,
+    workers: int = 0,
 ) -> dict:
     """Assemble the run manifest."""
     return {
@@ -336,12 +497,16 @@ def _build_manifest(
         "spots_per_field": {beam: len(s) for beam, s in grouped.items()},
         "oob_crops": oob_count,
         "elapsed_s": elapsed,
+        "parallel": parallel,
+        "workers": workers,
+        # Real wall-clock time each step was active (union of concurrent
+        # intervals); equals the plain sum in the serial path.
         "timing_per_field": {
             beam: {
                 "rotation_s": t.rotation_s,
-                "crop_s_total": float(np.sum(t.crop_s)),
-                "flux_s_total": float(np.sum(t.flux_s)),
-                "save_s_total": float(np.sum(t.save_s)),
+                "crop_s_total": _union_seconds(t.crop_iv),
+                "flux_s_total": _union_seconds(t.flux_iv),
+                "save_s_total": _union_seconds(t.save_iv),
             }
             for beam, t in timings.items()
         },

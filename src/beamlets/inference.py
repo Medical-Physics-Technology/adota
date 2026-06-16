@@ -153,6 +153,7 @@ def run_inference(
                 normalize_flux=config.normalize_flux,
                 downsampling_method=config.downsampling_method,
                 timing=load_timing,
+                device=device,  # CT/flux moved to the device -> resize runs there
             )
             for spot_id in batch
         ]

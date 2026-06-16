@@ -2,6 +2,15 @@
 
 ADoTA is a deep-learning framework for per-beamlet proton dose prediction using a 3D U-Net architecture augmented with transformer attention. Given a CT volume and an analytical flux projection for a single pencil beam, the model predicts the Monte Carlo dose distribution directly, enabling fast and accurate dose estimation for proton therapy treatment planning.
 
+Beyond single beamlets, ADoTA assembles these per-spot predictions into a **full treatment-plan dose**: [scripts/run_plan_opentps.py](scripts/run_plan_opentps.py) takes an OpenTPS plan directory, extracts per-spot inputs, runs inference, accumulates the dose on the patient grid, and validates it against the MCsquare reference with DVH and gamma analysis (see [Plan-level dose pipeline](#plan-level-dose-pipeline)).
+
+## What this repo offers
+
+- **Train** the per-beamlet dose model on an HDF5 dataset ([Training](#training)).
+- **Infer** single-beamlet doses from an HDF5 dataset or a directory of numpy arrays ([Inference](#inference)).
+- **Predict whole-plan doses** end to end from an OpenTPS plan and validate them against MCsquare (DVH, gamma) ([Plan-level dose pipeline](#plan-level-dose-pipeline)).
+- **Analyse** model behaviour vs CT texture / tissue interfaces, and benchmark preprocessing ([Analysis Scripts](#analysis-scripts)).
+
 ## Overview
 
 | Component | Description |
@@ -12,6 +21,7 @@ ADoTA is a deep-learning framework for per-beamlet proton dose prediction using 
 | Dataset | HDF5 dataset of beamlet records (pelvis, downsampled to 160x30x30 mm grid) |
 | Training losses | Normalised MSE (`LMSE`) + Integral Depth Dose (`LPS`), balanced adaptively |
 | Validation metrics | RMSE, MAPE, RDE, Gamma Pass Rate (2%/2mm), per-energy breakdowns |
+| Plan pipeline | `scripts/run_plan_opentps.py` (`src/beamlets/`) -- OpenTPS plan to accumulated ADoTA dose + DVH / gamma vs MCsquare |
 
 ---
 
@@ -30,6 +40,8 @@ adota/
 ├── scripts/
 │   ├── train_adota.py              # Main training entry point
 │   ├── config_train_adota.yaml     # Production training config
+│   ├── run_plan_opentps.py         # End-to-end plan-level dose pipeline
+│   ├── config_run_plan_opentps.yaml
 │   ├── run_ablation.sh             # Full 2x2 ablation study launcher
 │   │
 │   ├── ablation/                   # Ablation study configs and aggregation
@@ -55,8 +67,21 @@ adota/
 │   │   ├── config.py               # Shared constants, device setup, logging
 │   │   └── utils.py
 │   │
+│   ├── beamlets/                  # Plan-level pipeline: OpenTPS plan -> ADoTA dose
+│   │   ├── extraction.py           # Per-spot BEV CT crop + flux (serial + pooled)
+│   │   ├── rotation.py             # CT rotation around the isocenter (grid-expanding)
+│   │   ├── isocenter.py            # Plan->CT isocenter convention (x-flip)
+│   │   ├── cropping.py             # Air-padded depth-from-entrance ROI crop
+│   │   ├── flux.py                 # Analytical flux projection (NumPy + GPU twin)
+│   │   ├── inference.py            # Batched ADoTA inference over extracted beamlets
+│   │   ├── accumulation.py         # Deposit + de-rotate beamlets -> full-grid dose
+│   │   ├── dose_scaling.py         # MCsquare/ADoTA dose -> Gy conversion
+│   │   └── structures.py / dvh.py  # Oriented structure masks + DVH
+│   │
 │   ├── loaders/
-│   │   └── generator.py            # H5PYGenerator -- PyTorch Dataset for HDF5
+│   │   ├── generator.py            # H5PYGenerator -- PyTorch Dataset for HDF5
+│   │   ├── dir_based.py            # Per-spot record loader/saver (inference path)
+│   │   └── plan_directory.py       # OpenTPS plan-directory loader/parser
 │   │
 │   ├── training/
 │   │   ├── losses.py               # LMSE, LPS, LossLPD, TwoObjectiveBalancer
@@ -67,6 +92,8 @@ adota/
 │   ├── metrics/
 │   │   ├── classic.py              # RMSE, MAPE, RDE implementations
 │   │   ├── gamma_pass_rate.py      # GPR wrapper around pymedphys
+│   │   ├── plan_gamma.py           # Plan gamma over multiple criteria
+│   │   ├── plan_metrics.py         # Plan MAPE/RMSE (high-dose mask) + RDE
 │   │   └── sobel.py                # Flux-weighted Sobel edge metrics
 │   │
 │   ├── processing/
@@ -221,6 +248,32 @@ uv run python scripts/run_model.py \
 ```
 
 Each sample is identified by a UUID and expects `{uuid}_ct.npy`, `{uuid}_flux.npy` files. See [data/example_inputs/](data/example_inputs/) for the format.
+
+---
+
+## Plan-level dose pipeline
+
+[scripts/run_plan_opentps.py](scripts/run_plan_opentps.py) turns an OpenTPS plan
+directory into a full **ADoTA plan dose** and validates it against MCsquare. It
+runs as comma-separated stages:
+
+`extract` (per-spot BEV CT crop + flux, rotating the CT around each field's
+isocenter) → `infer` (batched ADoTA inference) → `accumulate` (deposit and
+de-rotate the predicted beamlets onto the patient grid → `Dose_ADoTA.mhd`, plus
+dose-comparison and DVH figures) → `gamma` (plan gamma pass rate per criterion +
+MAPE/RMSE/RDE + gamma-map figure).
+
+```bash
+uv run python scripts/run_plan_opentps.py --config scripts/config_run_plan_opentps.yaml
+```
+
+Optional speed and quality switches (all opt-in, defaults preserve the reference
+behaviour): GPU flux projection (`flux_on_gpu`), thread-pooled extraction
+(`extraction_parallel`), and a measured dose calibration (`dose_calibration_*`).
+The model code is unchanged — this is a wrapper around it.
+
+Full details (stages, config keys, outputs, performance notes):
+[scripts/README.md → run_plan_opentps.py](scripts/README.md#run_plan_opentpspy).
 
 ---
 

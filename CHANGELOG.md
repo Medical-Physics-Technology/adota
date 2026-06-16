@@ -3,6 +3,72 @@
 All notable changes to this project are documented in this file. This project
 adheres to [Semantic Versioning](https://semver.org).
 
+## [1.2.0] - 2026-06-16
+
+Plan-level dose pipeline: a new `src/beamlets/` package and
+`scripts/run_plan_opentps.py` take an OpenTPS plan directory all the way to an
+accumulated ADoTA plan dose, validated against the MCsquare reference with
+comparison figures, DVHs, and a gamma analysis. The per-beamlet model code is
+**unchanged** — this is a wrapper around it — and every new speed/quality switch
+is opt-in with defaults that preserve the reference behavior.
+
+### New
+- **`scripts/run_plan_opentps.py`** — end-to-end, config-driven plan pipeline with
+  comma-separated stages `extract,infer,accumulate,gamma`. Writes `Dose_ADoTA.mhd`
+  (on the original CT/dose grid), `dose_comparison.*`, `dvh_comparison.*` +
+  `dvh_metrics.json`, `gamma_comparison.*` + `gamma_metrics.json`, and
+  `pipeline_timing.json`, all next to the plan.
+- **`src/beamlets/` package** — `extraction`, `rotation`, `isocenter`, `cropping`,
+  `flux`, `inference`, `accumulation`, `dose_scaling`, `structures`, `dvh`,
+  `plan_spots`, `bdl`, `geometry`; plus `src/loaders/plan_directory.py` for the
+  OpenTPS plan loader/parser.
+- **Geometry-correct extraction/accumulation** — the CT is rotated around the
+  physical isocenter into a **grid-expanded** frame so the off-isocenter rotation
+  clips no patient tissue, with the plan→CT isocenter x-flip handled in one place
+  (`src/beamlets/isocenter.py`); accumulation de-rotates each field back onto the
+  original grid, so the output matches `Dose.mhd` size exactly (required for DVH).
+- **Plan gamma stage** — `src/metrics/plan_gamma.py` (gamma pass rate over several
+  `[dose%, distance_mm, cutoff%]` criteria, reusing the per-beamlet `gamma_index`)
+  and `src/figures/gamma_comparison.py` (3 views × N criteria gamma maps at the
+  isocenter).
+- **Plan dose metrics** — `src/metrics/plan_metrics.py`: MAPE and RMSE over a
+  high-dose mask (voxels > 10% of the dose's 99th percentile) plus whole-grid
+  relative dose error.
+
+### Performance (opt-in; defaults unchanged)
+- **GPU flux projection** — `flux_projection_gpu`, a Torch twin of the NumPy
+  `flux_projection` (float64, numerically identical — proven bit-identical at the
+  stored float32 precision by `tests/beamlets/test_flux_gpu.py`). Enabled via
+  `flux_on_gpu`.
+- **Parallel extraction** — `run_extraction_pooled`, a thread-pooled twin of
+  `run_extraction` that overlaps the per-spot crop / flux / disk-write while
+  sharing the rotated CT and CUDA context zero-copy. Output is **byte-identical**
+  to the serial reference; selected via `extraction_parallel` / `extraction_workers`.
+- **Inference down-sample on the GPU** — `get_single_record_no_gt` takes a
+  `device` so the CT/flux resize to the `160x30x30` ADoTA grid runs on the GPU
+  (the up-sample already did); default `device=None` keeps every other caller on CPU.
+- **Honest timing report** — the inference breakdown splits the old combined
+  "record load (trilinear)" into file-read / down-sample / up-sample / write; the
+  extraction breakdown reports the **real wall-clock time** each step was active
+  (union of concurrent intervals) instead of a thread-sum, so pooled runs are no
+  longer misread.
+
+### Quality (opt-in)
+- **Dose calibration** — `AccumulationConfig.calibration_factor` multiplies the
+  accumulated dose before writing (`dose_calibration_enabled` /
+  `dose_calibration_factor`, default off / `1.0`), to correct the model's measured
+  ~2.8% systematic per-beamlet under-prediction.
+
+### Tests
+- New beamlet/plan tests: flux CPU-vs-GPU equivalence, serial-vs-pooled extraction
+  byte-identity (`_union_seconds` included), plan gamma, plan metrics, gamma figure,
+  and accumulation calibration; plus the inference timing-split report tests.
+
+### Docs
+- Added a `run_plan_opentps.py` section to `scripts/README.md` (stages, config
+  keys, outputs, performance notes) and linked the plan pipeline from the main
+  `README.md` (overview, repo structure, a dedicated section).
+
 ## [1.1.0] - 2026-06-11
 
 Scripts refactor (part 1): the duplicated inference-evaluation pipeline is moved
