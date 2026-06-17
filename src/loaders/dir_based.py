@@ -109,61 +109,57 @@ def get_single_record(
     return x, initial_energy, dose_grid
 
 
-def get_single_record_no_gt(
-    id: str,
-    storage_path: str,
+def prepare_input_from_arrays(
+    ct_crop: np.ndarray,
+    flux_crop: np.ndarray,
+    initial_energy_mev: float,
     scale: dict = None,
     normalize_flux: bool = True,
     downsampling_method: str = "interpolation",
-    timing: Optional[dict] = None,
     device: Optional["torch.device"] = None,
-) -> Tuple[torch.Tensor]:
-    """Load and prepare a single inference record.
+    timing: Optional[dict] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Build the 2-channel ADoTA model input from in-memory CT/flux crops.
 
-    ``timing`` is an optional measurement-only hook: when a dict is passed, the
-    seconds spent reading the per-spot files are accumulated under ``"read"`` and
-    the seconds spent down-sampling to the ADoTA grid under ``"downsample"``. It
-    does not affect the returned tensors (the training/eval path passes no dict).
+    This is the array-level core shared by the disk loader
+    (:func:`get_single_record_no_gt`) and the streaming pipeline
+    (:mod:`src.beamlets.streaming`), so both produce numerically identical inputs.
+    It converts the ``(60, 60, 320)`` CT/flux crops to tensors (on ``device`` when
+    given, so the normalization + trilinear down-sample to ``(160, 30, 30)`` run
+    there), normalizes, and concatenates them with the normalized energy.
 
-    ``device`` (default ``None`` = CPU, unchanged) moves the CT/flux tensors onto
-    the given Torch device right after loading, so the normalization and the
-    trilinear down-sampling run there (e.g. on the GPU). The returned tensors live
-    on that device.
+    Args:
+        ct_crop: BEV CT crop ``(60, 60, 320)`` (z, y, x) in HU.
+        flux_crop: Flux projection, same shape.
+        initial_energy_mev: Beam energy in MeV (normalized with the energy scale).
+        scale: Min-max scaling dict (defaults to :data:`DEFAULT_SCALE`).
+        normalize_flux: Min-max normalize the flux channel per crop.
+        downsampling_method: ``"interpolation"`` (trilinear) or ``"avg_pooling"``.
+        device: Torch device for the tensors / resize (``None`` = CPU).
+        timing: Optional measurement hook; accumulates the resize seconds under
+            ``"downsample"``.
+
+    Returns:
+        ``(x, energy)`` where ``x`` is ``(2, 160, 30, 30)`` and ``energy`` is the
+        normalized scalar energy ``(1,)``, both on ``device``.
     """
     scale = DEFAULT_SCALE if scale is None else scale
 
-    read_t = perf_counter()
-    x = np.load(os.path.join(storage_path, f"{id}_ct.npy"))
-    flux = np.load(os.path.join(storage_path, f"{id}_flux.npy"))
-    # y = np.load(os.path.join(storage_path, f"{id}_ds.npy"))
-    with open(os.path.join(storage_path, f"{id}_sim_res.json"), "r") as f:
-        meta = json.load(f)
-    if timing is not None:
-        timing["read"] = timing.get("read", 0.0) + (perf_counter() - read_t)
-
-    energy = meta["simulation_log"]["energy"][0]
     # Convert numpy arrays to PyTorch tensors (on ``device`` when given, so the
     # normalization + trilinear resize below run there).
-    ct_grid = torch.tensor(x, dtype=torch.float32, device=device)
-    # dose_grid = torch.tensor(y, dtype=torch.float32)
-    flux_grid = torch.tensor(flux, dtype=torch.float32, device=device)
-    e = energy
+    ct_grid = torch.tensor(ct_crop, dtype=torch.float32, device=device)
+    flux_grid = torch.tensor(flux_crop, dtype=torch.float32, device=device)
 
     ct_grid = (ct_grid - scale["min_ct"]) / (scale["max_ct"] - scale["min_ct"])
-    # dose_grid = (dose_grid - scale["min_ds"]) / (
-    #     scale["max_ds"] - scale["min_ds"]
-    # )
-    e = (meta["initial_energy"] - scale["min_energy"]) / (
+    e = (initial_energy_mev - scale["min_energy"]) / (
         scale["max_energy"] - scale["min_energy"]
     )
 
     # Permute dimensions to (D, H, W)
     ct_grid = ct_grid.permute(2, 0, 1)
-    # dose_grid = dose_grid.permute(2, 0, 1)
     flux_grid = flux_grid.permute(2, 0, 1)
     # Apply channel dimension
     ct_grid = ct_grid.unsqueeze(0)
-    # dose_grid = dose_grid.unsqueeze(0)
     flux_grid = flux_grid.unsqueeze(0)
 
     if normalize_flux:
@@ -173,7 +169,6 @@ def get_single_record_no_gt(
     # Perform Avarage Pooling on dimension physical dimensions
     if downsampling_method == "avg_pooling":
         ct_grid = F.avg_pool3d(ct_grid, kernel_size=2, stride=2)
-        # dose_grid = F.avg_pool3d(dose_grid, kernel_size=2, stride=2)
         flux_grid = F.avg_pool3d(flux_grid, kernel_size=2, stride=2)
 
     if downsampling_method == "interpolation":
@@ -201,28 +196,75 @@ def get_single_record_no_gt(
     initial_energy = torch.tensor(e, dtype=torch.float32)
     initial_energy = initial_energy.unsqueeze(0)
 
-    return x, initial_energy  # , # dose_grid
+    return x, initial_energy
 
 
-def save_prediction(
-    pred: torch.Tensor,
+def get_single_record_no_gt(
     id: str,
-    path: str,
+    storage_path: str,
     scale: dict = None,
-    logging: bool = False,
+    normalize_flux: bool = True,
+    downsampling_method: str = "interpolation",
     timing: Optional[dict] = None,
-) -> None:
-    """Upsample, de-normalize and write a single prediction.
+    device: Optional["torch.device"] = None,
+) -> Tuple[torch.Tensor]:
+    """Load and prepare a single inference record (reads files, then delegates).
 
-    The trilinear upsampling here goes back to the **beamlet ROI grid**
-    ``(320, 60, 60)`` (the extraction resolution), not the plan grid -- the
-    resampling onto the plan grid happens later in the accumulation stage. When a
-    ``timing`` dict is passed (measurement-only), the seconds spent on that
-    up-sampling are accumulated under ``"upsample"`` and the seconds spent
-    de-normalizing and writing the ``.npy`` under ``"write"``.
+    ``timing`` is an optional measurement-only hook: when a dict is passed, the
+    seconds spent reading the per-spot files are accumulated under ``"read"`` and
+    the seconds spent down-sampling to the ADoTA grid under ``"downsample"``. It
+    does not affect the returned tensors (the training/eval path passes no dict).
+
+    ``device`` (default ``None`` = CPU, unchanged) moves the CT/flux tensors onto
+    the given Torch device, so the normalization + trilinear down-sampling run
+    there. The file read + preprocessing is identical to before; the preprocessing
+    now lives in :func:`prepare_input_from_arrays` (shared with the streaming path).
     """
     scale = DEFAULT_SCALE if scale is None else scale
-    # print(pred.min(), pred.max())
+
+    read_t = perf_counter()
+    x = np.load(os.path.join(storage_path, f"{id}_ct.npy"))
+    flux = np.load(os.path.join(storage_path, f"{id}_flux.npy"))
+    with open(os.path.join(storage_path, f"{id}_sim_res.json"), "r") as f:
+        meta = json.load(f)
+    if timing is not None:
+        timing["read"] = timing.get("read", 0.0) + (perf_counter() - read_t)
+
+    return prepare_input_from_arrays(
+        x,
+        flux,
+        meta["initial_energy"],
+        scale=scale,
+        normalize_flux=normalize_flux,
+        downsampling_method=downsampling_method,
+        device=device,
+        timing=timing,
+    )
+
+
+def postprocess_prediction(
+    pred: torch.Tensor,
+    scale: dict = None,
+    timing: Optional[dict] = None,
+) -> np.ndarray:
+    """Up-sample a model prediction to the ROI grid and de-normalize to dose.
+
+    The array-level core shared by the disk saver (:func:`save_prediction`) and the
+    streaming pipeline (:mod:`src.beamlets.streaming`). The trilinear up-sampling
+    goes back to the **beamlet ROI grid** ``(320, 60, 60)`` (the extraction
+    resolution), not the plan grid -- the resampling onto the plan grid happens
+    later in accumulation/de-rotation. When ``timing`` is passed, the up-sample
+    seconds are accumulated under ``"upsample"``.
+
+    Args:
+        pred: Model output ``(1, 1, 160, 30, 30)`` on any device.
+        scale: Min-max scaling dict (defaults to :data:`DEFAULT_SCALE`).
+        timing: Optional measurement hook.
+
+    Returns:
+        The de-normalized dose as a NumPy array ``(1, 1, 320, 60, 60)``.
+    """
+    scale = DEFAULT_SCALE if scale is None else scale
     interp_t = perf_counter()
     pred_upsampled = F.interpolate(
         pred, size=(320, 60, 60), mode="trilinear", align_corners=False
@@ -233,15 +275,28 @@ def save_prediction(
         if pred_upsampled.is_cuda:
             torch.cuda.synchronize(pred_upsampled.device)
         timing["upsample"] = timing.get("upsample", 0.0) + (perf_counter() - interp_t)
-    # print(pred_upsampled.min(), pred_upsampled.max())
-    write_t = perf_counter()
     pred_upsampled_np = pred_upsampled.detach().cpu().numpy()
-    pred_upsampled_np = inverse_minmax(
-        pred_upsampled_np, scale["min_ds"], scale["max_ds"]
-    )
-    # print(pred_upsampled_np.min(), pred_upsampled_np.max())
+    return inverse_minmax(pred_upsampled_np, scale["min_ds"], scale["max_ds"])
+
+
+def save_prediction(
+    pred: torch.Tensor,
+    id: str,
+    path: str,
+    scale: dict = None,
+    logging: bool = False,
+    timing: Optional[dict] = None,
+) -> None:
+    """Up-sample, de-normalize (via :func:`postprocess_prediction`) and write.
+
+    Writes ``{id}_ds_pred.npy``. When ``timing`` is passed, the disk-write seconds
+    are accumulated under ``"write"`` (the up-sample is timed under ``"upsample"``
+    inside :func:`postprocess_prediction`).
+    """
+    scale = DEFAULT_SCALE if scale is None else scale
+    pred_upsampled_np = postprocess_prediction(pred, scale, timing)
+    write_t = perf_counter()
     save_path = os.path.join(path, f"{id}_ds_pred.npy")
     np.save(save_path, pred_upsampled_np)
     if timing is not None:
         timing["write"] = timing.get("write", 0.0) + (perf_counter() - write_t)
-    # print(f"Prediction saved to: {save_path}")

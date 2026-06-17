@@ -45,6 +45,11 @@ max_control_points: 10000
 # gamma    -> plan gamma pass rate (per criterion) + MAPE/RMSE/RDE metrics +
 #             gamma_comparison figure; runs after the timing table, reusing
 #             Dose_ADoTA.mhd (can run standalone if accumulate already ran).
+# stream   -> FUSED, disk-free alternative to extract+infer+accumulate: streams
+#             each field's spots through crop -> flux -> infer -> deposit in one
+#             pass, never writing beamlets (bounded memory, ~2x faster). Produces
+#             the same Dose_ADoTA.mhd + comparison/DVH figures. Use e.g.
+#             `stages: stream,gamma`. The staged path stays available for research.
 # ("compare" against the MC Dose.mhd is a later stage.)
 stages: extract,infer,accumulate # ,gamma
 
@@ -73,7 +78,7 @@ extraction_parallel: true
 extraction_workers: 0
 
 # Inference: spots per forward pass (batched on the GPU).
-batch_size: 56
+batch_size: 120
 
 # Accumulation: which per-spot array to deposit as "dose".
 # Leave null to auto-select: "prediction" (the ADoTA model output) when the

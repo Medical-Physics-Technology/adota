@@ -47,6 +47,7 @@ from src.beamlets.extraction import (
 )
 from src.beamlets.inference import InferenceConfig, run_inference
 from src.beamlets.isocenter import isocenter_index_zyx
+from src.beamlets.streaming import StreamingConfig, run_streaming_pipeline
 from src.beamlets.structures import load_oriented_structures
 from src.dcm.load_data import list_all_files
 from src.evaluation.cli import resolve_device
@@ -57,9 +58,10 @@ from src.loaders.plan_directory import load_plan_directory
 from src.metrics.plan_gamma import parse_criteria, plan_gamma
 from src.metrics.plan_metrics import plan_dose_metrics
 
-# Pipeline stages, in execution order. "extract", "infer", "accumulate" and
-# "gamma" are implemented; "compare" is reserved for a later task.
-ALL_STAGES = ("extract", "infer", "accumulate", "gamma", "compare")
+# Pipeline stages, in execution order. "extract", "infer", "accumulate", "gamma"
+# and "stream" are implemented; "compare" is reserved for a later task. "stream"
+# is the fused, disk-free alternative to extract+infer+accumulate.
+ALL_STAGES = ("extract", "infer", "accumulate", "stream", "gamma", "compare")
 BEAMLET_SUBDIR = "adota_beamlets"
 ADOTA_DOSE_NAME = "Dose_ADoTA.mhd"
 
@@ -137,6 +139,7 @@ def _build_timing_report(
     inference: Optional[dict],
     accumulation: Optional[dict],
     figure_s: float,
+    streaming: Optional[dict] = None,
 ) -> dict:
     """Assemble the structured per-stage timing report (single source of truth)."""
     report: dict = {"total_s": round(float(total_s), 3), "stages": {}}
@@ -145,6 +148,17 @@ def _build_timing_report(
     if model_load_s > 0:
         stages["model_load"] = _step(model_load_s)
     stages["plan_load"] = _step(plan_load_s)
+
+    if streaming is not None:
+        n = max(int(streaming["n_spots"]), 1)
+        report["n_spots"] = int(streaming["n_spots"])
+        t = streaming["timing"]
+        stages["streaming"] = {
+            **_step(streaming["elapsed_s"], streaming["elapsed_s"] / n * 1000),
+            "n_spots": n,
+            "n_fields": streaming["n_fields"],
+            "steps": {k: _step(v) for k, v in t.items()},
+        }
 
     if extraction is not None:
         n = max(int(extraction["n_spots"]), 1)
@@ -234,6 +248,25 @@ def _format_timing_report(report: dict) -> str:
     if "model_load" in stages:
         lines.append(_row("model load", stages["model_load"]["total_s"]))
     lines.append(_row("plan load", stages["plan_load"]["total_s"]))
+
+    st = stages.get("streaming")
+    if st:
+        s = st["steps"]
+        lines.append("-" * 70)
+        lines.append(
+            f"Streaming (fused)        total {st['total_s']:8.2f} s   "
+            f"({st['ms_per_beamlet']:8.3f} ms/beamlet)  "
+            f"[{st['n_spots']} spots, {st['n_fields']} fields, no disk]"
+        )
+        for label, key in (
+            ("rotation (per field)", "rotation"), ("CT cropping", "crop"),
+            ("flux projection", "flux"), ("input prep (downsample)", "prep"),
+            ("ADoTA forward", "forward"), ("postprocess (upsample)", "post"),
+            ("deposit", "deposit"), ("de-rotate (per field)", "derotate"),
+            ("write Dose_ADoTA.mhd", "write"),
+        ):
+            if key in s:
+                lines.append(_row(label, s[key]["total_s"]))
 
     ex = stages.get("extraction")
     if ex:
@@ -404,9 +437,9 @@ def main(
     # Validate required arguments.
     if plan_dir is None:
         raise typer.BadParameter("PLAN_DIR is required (via --plan-dir or YAML config)")
-    if "infer" in stage_list and model_name is None:
+    if ("infer" in stage_list or "stream" in stage_list) and model_name is None:
         raise typer.BadParameter(
-            "MODEL_NAME is required for the infer stage (via --model-name or YAML)"
+            "MODEL_NAME is required for the infer/stream stage (via --model-name or YAML)"
         )
 
     plan_dir = Path(plan_dir)
@@ -436,12 +469,13 @@ def main(
     extraction_summary = None
     inference_summary = None
     accumulation_summary = None
+    streaming_summary = None
     figure_s = 0.0
 
     # --- Load the model into memory (only when inference is requested) --------
     model = None
     model_load_s = 0.0
-    if "infer" in stage_list:
+    if "infer" in stage_list or "stream" in stage_list:
         model_hub = PROJECT_ROOT / "models"
         model_path = model_hub / model_name / model_fname
         hyperparams_path = model_hub / model_name / "hyperparams.json"
@@ -535,55 +569,42 @@ def main(
         accumulation_summary = run_accumulation(
             plan_directory, beamlets_dir, dose_path, accumulation_config
         )
+        # Auto-generate the ADoTA vs MCsquare comparison + DVH figures.
+        figure_s = _generate_comparison_figures(plan_directory, plan_dir, dose_path)
 
-        # Auto-generate the ADoTA vs MCsquare comparison figure (png/pdf/svg).
-        if plan_directory.mc_dose_path is not None:
-            logger.info("Generating ADoTA vs MCsquare comparison figure (Gy) ...")
-            figure_t = perf_counter()
-            bdl = BeamDataLibrary.from_file(plan_directory.bdl_path)
-            ct_arr = sitk.GetArrayFromImage(plan_directory.ct)
-            dose_adota = sitk.GetArrayFromImage(
-                load_dose_gy(dose_path, plan_directory.plan, bdl)
-            )
-            dose_mc = sitk.GetArrayFromImage(
-                load_dose_gy(plan_directory.mc_dose_path, plan_directory.plan, bdl)
-            )
-            fig_paths = plan_dose_comparison(
-                ct_arr,
-                dose_adota,  # dose_a = ADoTA (Gy)
-                dose_mc,  # dose_b = MCsquare reference (Gy)
-                str(plan_dir / "dose_comparison"),
-                labels=("ADoTA", "MCsquare"),
-                dose_unit="Gy",
-            )
-            for fig_path in fig_paths:
-                logger.info("  comparison figure: %s", fig_path)
-
-            # DVH comparison (structures oriented onto the dose grid).
-            try:
-                structures, _flips = load_oriented_structures(plan_directory)
-                spacing = plan_directory.ct.GetSpacing()
-                dvh_paths = dvh_comparison_figure(
-                    structures, dose_adota, dose_mc, spacing,
-                    str(plan_dir / "dvh_comparison"), labels=("ADoTA", "MCsquare"),
-                )
-                write_dvh_metrics_json(
-                    plan_dir / "dvh_metrics.json", structures, dose_adota, dose_mc,
-                    spacing, labels=("ADoTA", "MCsquare"),
-                )
-                for dvh_path in dvh_paths:
-                    logger.info("  DVH figure: %s", dvh_path)
-                logger.info("  DVH metrics: %s", plan_dir / "dvh_metrics.json")
-            except ValueError as exc:
-                logger.warning("Skipping DVH comparison: %s", exc)
-            figure_s = perf_counter() - figure_t
-        else:
-            logger.warning(
-                "No MC Dose.mhd in the plan dir; skipping comparison figure."
-            )
+    # --- Stage: stream (fused, disk-free alternative to extract+infer+accumulate) -
+    if "stream" in stage_list:
+        dose_path = plan_dir / ADOTA_DOSE_NAME
+        calibration_factor = (
+            float(yaml_config.get("dose_calibration_factor", 1.0))
+            if yaml_config.get("dose_calibration_enabled", False)
+            else 1.0
+        )
+        flux_on_gpu = bool(yaml_config.get("flux_on_gpu", False))
+        logger.info("=" * 70)
+        logger.info("Stage: stream -> %s (fused, no per-beamlet disk I/O)", dose_path)
+        if calibration_factor != 1.0:
+            logger.info("Dose calibration ENABLED: scaling dose by %.4f", calibration_factor)
+        logger.info("=" * 70)
+        streaming_config = StreamingConfig(
+            n_spots=n_spots,
+            beams=beam_list,
+            bdl_path=bdl_path,
+            batch_size=yaml_config.get("batch_size", 56),
+            flux_on_gpu=flux_on_gpu,
+            flux_device=str(device),
+            calibration_factor=calibration_factor,
+        )
+        streaming_summary = run_streaming_pipeline(
+            plan_directory, model, device, dose_path, streaming_config
+        )
+        # Same comparison + DVH figures as the accumulate stage (quality investigation).
+        figure_s = _generate_comparison_figures(plan_directory, plan_dir, dose_path)
 
     remaining = [
-        s for s in stage_list if s not in ("extract", "accumulate", "infer", "gamma")
+        s
+        for s in stage_list
+        if s not in ("extract", "accumulate", "infer", "stream", "gamma")
     ]
     if remaining:
         logger.info("Stages not yet implemented, skipped: %s", remaining)
@@ -596,6 +617,7 @@ def main(
         inference=inference_summary,
         accumulation=accumulation_summary,
         figure_s=figure_s,
+        streaming=streaming_summary,
     )
     timing_path = plan_dir / "pipeline_timing.json"
     if timing_path.exists():
@@ -618,6 +640,57 @@ def main(
         _run_gamma_stage(plan_directory, plan_dir, yaml_config)
 
     logger.info("Done.")
+
+
+def _generate_comparison_figures(plan_directory, plan_dir: Path, dose_path: Path) -> float:
+    """Generate the ADoTA vs MCsquare dose-comparison + DVH figures/metrics.
+
+    Reads the just-written ``Dose_ADoTA.mhd`` and the MC ``Dose.mhd`` (both in Gy),
+    writes ``dose_comparison.*``, ``dvh_comparison.*`` and ``dvh_metrics.json`` next
+    to the plan, and returns the seconds spent. Shared by the ``accumulate`` and
+    ``stream`` stages so both produce the same quality-investigation figures.
+    """
+    if plan_directory.mc_dose_path is None:
+        logger.warning("No MC Dose.mhd in the plan dir; skipping comparison figure.")
+        return 0.0
+
+    logger.info("Generating ADoTA vs MCsquare comparison figure (Gy) ...")
+    figure_t = perf_counter()
+    bdl = BeamDataLibrary.from_file(plan_directory.bdl_path)
+    ct_arr = sitk.GetArrayFromImage(plan_directory.ct)
+    dose_adota = sitk.GetArrayFromImage(load_dose_gy(dose_path, plan_directory.plan, bdl))
+    dose_mc = sitk.GetArrayFromImage(
+        load_dose_gy(plan_directory.mc_dose_path, plan_directory.plan, bdl)
+    )
+    fig_paths = plan_dose_comparison(
+        ct_arr,
+        dose_adota,  # dose_a = ADoTA (Gy)
+        dose_mc,  # dose_b = MCsquare reference (Gy)
+        str(plan_dir / "dose_comparison"),
+        labels=("ADoTA", "MCsquare"),
+        dose_unit="Gy",
+    )
+    for fig_path in fig_paths:
+        logger.info("  comparison figure: %s", fig_path)
+
+    # DVH comparison (structures oriented onto the dose grid).
+    try:
+        structures, _flips = load_oriented_structures(plan_directory)
+        spacing = plan_directory.ct.GetSpacing()
+        dvh_paths = dvh_comparison_figure(
+            structures, dose_adota, dose_mc, spacing,
+            str(plan_dir / "dvh_comparison"), labels=("ADoTA", "MCsquare"),
+        )
+        write_dvh_metrics_json(
+            plan_dir / "dvh_metrics.json", structures, dose_adota, dose_mc,
+            spacing, labels=("ADoTA", "MCsquare"),
+        )
+        for dvh_path in dvh_paths:
+            logger.info("  DVH figure: %s", dvh_path)
+        logger.info("  DVH metrics: %s", plan_dir / "dvh_metrics.json")
+    except ValueError as exc:
+        logger.warning("Skipping DVH comparison: %s", exc)
+    return perf_counter() - figure_t
 
 
 def _run_gamma_stage(plan_directory, plan_dir: Path, yaml_config: dict) -> None:
