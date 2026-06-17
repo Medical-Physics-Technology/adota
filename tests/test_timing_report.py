@@ -78,6 +78,33 @@ def test_format_report_table() -> None:
     assert "TOTAL" in table
 
 
+def test_merge_preserves_prior_stages() -> None:
+    full = rpo._build_timing_report(
+        total_s=30.0, model_load_s=0.3, plan_load_s=0.5,
+        extraction=_extraction(), inference=_inference(), accumulation=_accumulation(), figure_s=2.0,
+    )
+    # A later partial run (e.g. gamma only) produces a sparse report.
+    partial = rpo._build_timing_report(
+        total_s=1.0, model_load_s=0.0, plan_load_s=0.4,
+        extraction=None, inference=None, accumulation=None, figure_s=0.0,
+    )
+    merged = rpo._merge_timing_report(full, partial)
+    stages = merged["stages"]
+    # Prior heavy stages survive ...
+    assert "extraction" in stages
+    assert "inference" in stages
+    assert "accumulation" in stages
+    # ... while the re-run stage is refreshed with the new value.
+    assert stages["plan_load"]["total_s"] == 0.4
+    # total_s stays the per-run wall-clock of this (latest) invocation.
+    assert merged["total_s"] == 1.0
+    # aggregate_total_s is the cumulative sum of merged stage totals.
+    assert merged["aggregate_total_s"] == round(
+        sum(s["total_s"] for s in stages.values()), 3
+    )
+    json.dumps(merged)  # must not raise
+
+
 def test_partial_stages_omitted() -> None:
     rep = rpo._build_timing_report(
         total_s=10.0, model_load_s=0.0, plan_load_s=0.5,

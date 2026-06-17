@@ -204,6 +204,29 @@ def _build_timing_report(
     return report
 
 
+def _merge_timing_report(existing: dict, new: dict) -> dict:
+    """Merge a freshly built timing report into a previously saved one.
+
+    Stages that ran in this invocation overwrite their matching entry; stages
+    recorded by earlier runs (but not re-run now) are kept, so running a single
+    stage later never discards previously measured timings. ``total_s`` keeps
+    its per-run meaning (the wall-clock of this invocation), while
+    ``aggregate_total_s`` is the sum of the merged top-level stage totals, i.e.
+    the cumulative measured work across every run that touched this plan.
+    """
+    merged = dict(existing)
+    stages = dict(existing.get("stages", {}))
+    stages.update(new.get("stages", {}))
+    merged["stages"] = stages
+    if "n_spots" in new:
+        merged["n_spots"] = new["n_spots"]
+    merged["total_s"] = new.get("total_s", existing.get("total_s"))
+    merged["aggregate_total_s"] = round(
+        sum(float(s.get("total_s", 0.0)) for s in stages.values()), 3
+    )
+    return merged
+
+
 def _format_timing_report(report: dict) -> str:
     """Render the timing report as the human-readable summary table."""
     stages = report["stages"]
@@ -574,8 +597,19 @@ def main(
         accumulation=accumulation_summary,
         figure_s=figure_s,
     )
-    logger.info("\n%s", _format_timing_report(timing_report))
     timing_path = plan_dir / "pipeline_timing.json"
+    if timing_path.exists():
+        try:
+            prior = json.loads(timing_path.read_text())
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning(
+                "Could not read existing %s (%s); writing fresh report.",
+                timing_path, exc,
+            )
+            prior = None
+        if isinstance(prior, dict) and prior:
+            timing_report = _merge_timing_report(prior, timing_report)
+    logger.info("\n%s", _format_timing_report(timing_report))
     timing_path.write_text(json.dumps(timing_report, indent=2) + "\n")
     logger.info("Timing written to %s", timing_path)
 

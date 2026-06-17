@@ -12,7 +12,7 @@
 
 # OpenTPS plan directory: CT.mhd, PlanPencil.txt, bdl.txt, config.txt,
 # structure masks (target.mhd / OAR_*.mhd), and the MC reference Dose.mhd.
-plan_dir: /scratch/mstryja/opentps_plans/Prostate-AEC-004_4mm_target_margin
+plan_dir: /scratch/mstryja/opentps_plans/Prostate-AEC-069_3-5mm_target_margin_dij_test
 
 # Model directory name under models/.
 model_name: DoTA_v3_grid_search_v11
@@ -46,7 +46,7 @@ max_control_points: 10000
 #             gamma_comparison figure; runs after the timing table, reusing
 #             Dose_ADoTA.mhd (can run standalone if accumulate already ran).
 # ("compare" against the MC Dose.mhd is a later stage.)
-stages: extract,infer,accumulate #,gamma
+stages: extract,infer,accumulate # ,gamma
 
 # Subset controls for cheap runs (null = all).
 # n_spots: extract only the first N spots (global order).
