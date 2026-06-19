@@ -31,7 +31,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import SimpleITK as sitk
 
-from src.beamlets import ROI_SIZE
+from src.beamlets import ROI_SIZE, roi_for_factor
 from src.beamlets.bdl import BeamDataLibrary, spot_position_to_angles
 from src.beamlets.cropping import extract_beamlet_roi
 from src.beamlets.flux import flux_projection, flux_projection_gpu, flux_spatial_spread
@@ -73,6 +73,11 @@ class ExtractionConfig:
     bdl_path: Optional[Path] = None
     flux_on_gpu: bool = False
     flux_device: str = "cuda"
+    grid_factor: int = 1
+    """Field-level resampling factor (1 = current 1mm path, byte-identical; 2 =
+    rotate/crop/flux on the 2mm grid so each crop is already the model grid). The
+    per-spot ``roi_size``/geometry written to ``sim_res`` reflect the factor, so
+    accumulation de-rotates back to the 1mm CT grid with no extra configuration."""
 
 
 @dataclass
@@ -208,6 +213,14 @@ def _extract_impl(
         (workers or min(32, (os.cpu_count() or 4))) if parallel else 0
     )
 
+    # Field-level resampling factor. gf=1 keeps every operation byte-identical;
+    # gf=2 rotates/crops/fluxes on the 2mm grid. roi/flux-spacing are derived from
+    # gf once (constant across fields); ``[1,1,1]`` (float32) is exactly the flux
+    # default so gf=1 stays byte-identical.
+    gf = config.grid_factor
+    roi = config.roi_size if gf == 1 else roi_for_factor(gf)
+    flux_spacing = np.asarray([gf, gf, gf], dtype=np.float32)
+
     started = perf_counter()
     timings: Dict[int, _FieldTiming] = {}
     oob_count = 0
@@ -237,7 +250,7 @@ def _extract_impl(
         # original CT grid.
         rot_t = perf_counter()
         rotated_ct = rotate_ct_around_isocenter(
-            ct, adjusted_angle, iso_phys, expand=True
+            ct, adjusted_angle, iso_phys, expand=True, out_spacing_factor=gf
         )
         timing.rotation_s = perf_counter() - rot_t
 
@@ -265,6 +278,8 @@ def _extract_impl(
             image_size=image_size,
             config=config,
             output_dir=output_dir,
+            roi=roi,
+            flux_spacing=flux_spacing,
         )
         if parallel:
             with ThreadPoolExecutor(max_workers=effective_workers) as pool:
@@ -287,7 +302,7 @@ def _extract_impl(
                 field_spots,
                 iso_phys,
                 bdl,
-                config.roi_size,
+                roi,
             )
 
     elapsed = perf_counter() - started
@@ -332,6 +347,8 @@ def _process_spot(
     image_size: tuple,
     config: ExtractionConfig,
     output_dir: Path,
+    roi: tuple = ROI_SIZE,
+    flux_spacing: Optional[np.ndarray] = None,
 ) -> dict:
     """Crop + flux + save one spot; return its per-step timings and ``oob`` flag.
 
@@ -339,8 +356,13 @@ def _process_spot(
     (:func:`run_extraction`) and pooled (:func:`run_extraction_pooled`) paths, so
     both produce byte-identical outputs. It reads the shared ``rotated_ct`` /
     ``rotated_ct_array`` (read-only) and writes only this spot's own files, so it
-    is safe to run concurrently across spots.
+    is safe to run concurrently across spots. ``roi`` and ``flux_spacing`` come
+    from the field-level resampling factor (``(60,60,320)`` + ``[1,1,1]`` at gf=1;
+    ``(30,30,160)`` + ``[2,2,2]`` at gf=2) -- the crop and flux are then built on
+    the same grid the model consumes.
     """
+    if flux_spacing is None:
+        flux_spacing = np.asarray([1, 1, 1], dtype=np.float32)
     sim_log = record["simulation_log"]
     spot_position = sim_log["bixelgrid_shifts_xy"][0]
     energy = sim_log["energy"][0]
@@ -353,7 +375,7 @@ def _process_spot(
         d_smy,
         spot_position,
         iso_phys,
-        config.roi_size,
+        roi,
         ct_array=rotated_ct_array,
     )
     crop_t1 = perf_counter()
@@ -366,10 +388,13 @@ def _process_spot(
     re_proj = [entrance[1], entrance[2], entrance[0]]
     if config.flux_on_gpu:
         flux = flux_projection_gpu(
-            re_proj, beamlet_angles, sigmas, cropped_ct.shape, device=config.flux_device
+            re_proj, beamlet_angles, sigmas, cropped_ct.shape,
+            spacing=flux_spacing, device=config.flux_device,
         )
     else:
-        flux = flux_projection(re_proj, beamlet_angles, sigmas, cropped_ct.shape)
+        flux = flux_projection(
+            re_proj, beamlet_angles, sigmas, cropped_ct.shape, spacing=flux_spacing
+        )
     flux_t1 = perf_counter()
 
     sim_res = _build_sim_res(
@@ -382,7 +407,7 @@ def _process_spot(
         image_origin,
         image_spacing,
         image_size,
-        config.roi_size,
+        roi,
     )
 
     save_t0 = perf_counter()

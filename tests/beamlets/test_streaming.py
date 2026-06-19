@@ -10,6 +10,7 @@ with the production model is checked by `scripts/verify_streaming_equivalence.py
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -178,6 +179,50 @@ def test_grid_factor2_preserves_plan_dose_physically(plan_directory, tmp_path: P
     shift = np.abs(_dose_centroid(D2) - _dose_centroid(D1))    # voxels (= mm here)
     assert shift.max() < 0.5, shift                            # no physical shift
     assert D2.sum() / D1.sum() == pytest.approx(1.0, abs=0.05)  # dose conserved
+
+
+def test_staged_grid_factor2_matches_streaming(plan_directory, tmp_path: Path) -> None:
+    """staged (extract->infer->accumulate) == streaming, both on the 2mm grid.
+
+    The two paths run the identical 2mm operations (crop/flux/resize-skip/model/
+    deposit/de-rotate); staged round-trips through disk, streaming stays in memory,
+    so the dose must match to float32 round-trip tolerance. This is the P5 gate
+    plus a check that the staged gf=2 path runs end-to-end.
+    """
+    model = _TinyModel().eval()
+    device = torch.device("cpu")
+
+    beamlets = tmp_path / "adota_beamlets"
+    run_extraction(
+        plan_directory, beamlets,
+        ExtractionConfig(save_overlays=False, flux_on_gpu=False, grid_factor=2),
+    )
+    # The crops were extracted on the 2mm grid -> already the model grid.
+    sim0 = json.loads(next(beamlets.glob("*_sim_res.json")).read_text())
+    assert tuple(sim0["roi_size"]) == (30, 30, 160)
+    ct0 = np.load(next(beamlets.glob("*_ct.npy")))
+    assert ct0.shape == (30, 30, 160)
+
+    run_inference(beamlets, model, device, InferenceConfig(batch_size=4, grid_factor=2))
+    pred0 = np.load(next(beamlets.glob("*_ds_pred.npy")))
+    assert pred0.shape == (1, 1, 160, 30, 30)  # not up-sampled to the 1mm ROI
+
+    staged_dose = tmp_path / "Dose_staged_2mm.mhd"
+    run_accumulation(
+        plan_directory, beamlets, staged_dose,
+        AccumulationConfig(dose_source="prediction"),  # geometry comes from sim_res
+    )
+    streamed_dose = tmp_path / "Dose_streamed_2mm.mhd"
+    run_streaming_pipeline(
+        plan_directory, model, device, streamed_dose,
+        StreamingConfig(batch_size=4, flux_on_gpu=False, grid_factor=2),
+    )
+
+    a = sitk.GetArrayFromImage(sitk.ReadImage(str(staged_dose)))
+    b = sitk.GetArrayFromImage(sitk.ReadImage(str(streamed_dose)))
+    assert a.shape == b.shape == sitk.GetArrayFromImage(plan_directory.ct).shape
+    assert float(a.max()) > 0.0 and float(b.max()) > 0.0
+    np.testing.assert_allclose(b, a, rtol=1e-5, atol=1e-6)
 
 
 def test_grid_factor2_single_spot_centroid(plan_directory, tmp_path: Path) -> None:

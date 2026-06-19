@@ -217,6 +217,7 @@ def get_single_record_no_gt(
     downsampling_method: str = "interpolation",
     timing: Optional[dict] = None,
     device: Optional["torch.device"] = None,
+    resize: bool = True,
 ) -> Tuple[torch.Tensor]:
     """Load and prepare a single inference record (reads files, then delegates).
 
@@ -249,6 +250,7 @@ def get_single_record_no_gt(
         downsampling_method=downsampling_method,
         device=device,
         timing=timing,
+        resize=resize,
     )
 
 
@@ -307,15 +309,18 @@ def save_prediction(
     scale: dict = None,
     logging: bool = False,
     timing: Optional[dict] = None,
+    upsample: bool = True,
 ) -> None:
     """Up-sample, de-normalize (via :func:`postprocess_prediction`) and write.
 
     Writes ``{id}_ds_pred.npy``. When ``timing`` is passed, the disk-write seconds
     are accumulated under ``"write"`` (the up-sample is timed under ``"upsample"``
-    inside :func:`postprocess_prediction`).
+    inside :func:`postprocess_prediction`). ``upsample=False`` (the ``grid_factor=2``
+    path) keeps the prediction on the ``(160, 30, 30)`` model grid -- accumulation
+    deposits it on the 2mm field grid and the per-field de-rotation up-samples once.
     """
     scale = DEFAULT_SCALE if scale is None else scale
-    pred_upsampled_np = postprocess_prediction(pred, scale, timing)
+    pred_upsampled_np = postprocess_prediction(pred, scale, timing, upsample=upsample)
     write_t = perf_counter()
     save_path = os.path.join(path, f"{id}_ds_pred.npy")
     np.save(save_path, pred_upsampled_np)

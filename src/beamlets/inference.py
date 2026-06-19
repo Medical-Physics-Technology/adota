@@ -55,6 +55,12 @@ class InferenceConfig:
     normalize_flux: bool = True
     downsampling_method: str = "interpolation"
     scale: dict = field(default_factory=lambda: dict(DEFAULT_SCALE))
+    grid_factor: int = 1
+    """Field-level resampling factor; must match the extraction. 1 = the crop is
+    1mm ``(60,60,320)`` and is resized to the model grid, then the prediction is
+    up-sampled to the ROI for deposit (byte-identical). 2 = the crop is already the
+    2mm model grid, so the input resize and the prediction up-sample are skipped
+    (the prediction is saved at ``(160,30,30)`` for the 2mm deposit/de-rotate)."""
 
 
 def discover_spot_ids(beamlets_dir: Path) -> List[str]:
@@ -133,6 +139,7 @@ def run_inference(
     )
 
     model.eval()
+    resize = config.grid_factor == 1  # gf=2 crops are already the model grid
     storage = str(beamlets_dir)
     read_s = 0.0
     downsample_s = 0.0
@@ -154,6 +161,7 @@ def run_inference(
                 downsampling_method=config.downsampling_method,
                 timing=load_timing,
                 device=device,  # CT/flux moved to the device -> resize runs there
+                resize=resize,
             )
             for spot_id in batch
         ]
@@ -181,6 +189,7 @@ def run_inference(
                 storage,
                 scale=config.scale,
                 timing=save_timing,
+                upsample=resize,  # gf=2 keeps (160,30,30) for the 2mm deposit
             )
         upsample_s += save_timing.get("upsample", 0.0)
         save_write_s += save_timing.get("write", 0.0)

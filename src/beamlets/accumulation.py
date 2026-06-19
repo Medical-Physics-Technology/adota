@@ -259,13 +259,14 @@ def run_accumulation(
 
 
 def _load_beamlet_array(beamlets_dir: Path, spot_id: str, dose_source: str) -> np.ndarray:
-    """Load a spot's array as ``(z, y, x) = (60, 60, 320)`` ready for deposit.
+    """Load a spot's array as ``(z, y, x)`` crop order, ready for deposit.
 
     ``flux`` is already saved in ``(z, y, x)`` crop order. The ADoTA
-    ``prediction`` is the model output ``{id}_ds_pred.npy`` of shape
-    ``(1, 1, 320, 60, 60)`` (depth-first, matching the network's permuted input),
-    so it is squeezed to ``(320, 60, 60)`` and ``moveaxis(0, -1)`` brings the
-    depth axis back to ``x`` -> ``(60, 60, 320)``.
+    ``prediction`` is the model output ``{id}_ds_pred.npy``, depth-first
+    ``(1, 1, D, H, W)`` (matching the network's permuted input), so it is squeezed
+    and ``moveaxis(0, -1)`` brings the depth axis back to ``x``. The shape follows
+    the extraction's ``grid_factor``: ``(1,1,320,60,60) -> (60,60,320)`` at gf=1,
+    ``(1,1,160,30,30) -> (30,30,160)`` at gf=2 (deposited on the 2mm field grid).
     """
     arr = np.load(
         Path(beamlets_dir) / f"{spot_id}{DOSE_SUFFIX[dose_source]}"

@@ -525,8 +525,14 @@ def main(
         logger.info("Stage: extract -> %s", output_dir)
         logger.info("=" * 70)
         flux_on_gpu = bool(yaml_config.get("flux_on_gpu", False))
+        grid_factor = int(yaml_config.get("grid_factor", 1))
         if flux_on_gpu:
             logger.info("Flux projection: GPU path on %s", device)
+        if grid_factor != 1:
+            logger.info(
+                "Field-level resampling ENABLED: grid_factor=%d (%dmm crops)",
+                grid_factor, grid_factor,
+            )
         extraction_config = ExtractionConfig(
             n_spots=n_spots,
             beams=beam_list,
@@ -535,6 +541,7 @@ def main(
             bdl_path=bdl_path,
             flux_on_gpu=flux_on_gpu,
             flux_device=str(device),
+            grid_factor=grid_factor,
         )
         # Serial reference (run_extraction) vs thread-pooled twin; both
         # bit-identical. Selected by config so the serial path stays comparable.
@@ -561,6 +568,7 @@ def main(
         logger.info("=" * 70)
         inference_config = InferenceConfig(
             batch_size=yaml_config.get("batch_size", 56),
+            grid_factor=int(yaml_config.get("grid_factor", 1)),
         )
         inference_summary = run_inference(beamlets_dir, model, device, inference_config)
 
