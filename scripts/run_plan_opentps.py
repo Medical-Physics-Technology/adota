@@ -1,23 +1,26 @@
-"""End-to-end ADoTA plan pipeline CLI (skeleton).
+"""End-to-end ADoTA plan pipeline CLI.
 
-Given an OpenTPS plan directory this script will eventually extract per-spot
+Given an OpenTPS plan directory this script will extract per-spot
 ADoTA inputs, run inference, accumulate the predicted dose, and compare it
-against the MCsquare reference (see ``docs/beamlet_extraction_integration_plan.md``).
+against the MCsquare reference.
 
 This first iteration wires up the foundation only:
 
 1. load the ADoTA model into memory,
-2. load the plan directory (CT grid + contours via SimpleITK, ``PlanPencil.txt``,
-   beam data library, ``config.txt``, MC reference dose path),
-3. parse the plan, and
-4. print a preview of everything that was loaded.
+2. Load .mhd file with CT and MCsquare dose,
+3. Parse PlanPencil.txt file and extract beams and beamlets.
+4. Perform the extraction stage (per-spot CT crop + flux projection),
+5. Run inference on the extracted beamlets (ADoTA forward pass),
+6. Accumulate the predicted dose into a single 3D dose grid (Dose_ADoTA.mhd),
+7. Generate comparison figures (plan dose comparison, DVH comparison, gamma map) and metrics. 
 
-The downstream stages (``--stages extract,infer,accumulate,compare``) are added
-in later tasks; for now the script stops after the preview.
+Different running modes supported: stream, extract+infer+accumulate, or any subset of the stages. The streaming mode fuses all three stages into a single pass, avoiding disk I/O and saving time.
 
 Usage:
     uv run python scripts/run_plan_opentps.py \\
         --config scripts/config_run_plan_opentps.yaml
+        
+For detailed usage, see the ./scripts/README.md and the --help output.
 """
 
 import json
@@ -398,7 +401,7 @@ def main(
                           "2 = 2mm field grid)."),
     ] = None,
 ) -> None:
-    """Load the model + plan directory, parse the plan, and print a preview.
+    """Main CLI entry point for the ADoTA plan pipeline.
 
     Configurable via CLI flags, a YAML config (``--config``), or both. CLI
     flags take precedence over YAML values.
