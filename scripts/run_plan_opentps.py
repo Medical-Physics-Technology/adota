@@ -393,8 +393,9 @@ def main(
     ] = None,
     grid_factor: Annotated[
         Optional[int],
-        typer.Option(help="Field-level resampling factor for the stream stage "
-                          "(1 = 1mm per-beamlet; 2 = 2mm field grid)."),
+        typer.Option(help="Field-level resampling factor for the extract/infer/"
+                          "accumulate and stream stages (1 = 1mm per-beamlet; "
+                          "2 = 2mm field grid)."),
     ] = None,
 ) -> None:
     """Load the model + plan directory, parse the plan, and print a preview.

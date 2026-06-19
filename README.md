@@ -261,19 +261,25 @@ runs as comma-separated stages:
 isocenter) → `infer` (batched ADoTA inference) → `accumulate` (deposit and
 de-rotate the predicted beamlets onto the patient grid → `Dose_ADoTA.mhd`, plus
 dose-comparison and DVH figures) → `gamma` (plan gamma pass rate per criterion +
-MAPE/RMSE/RDE + gamma-map figure).
+MAPE/RMSE/RDE + gamma-map figure). It also runs **fused and disk-free** (`stream`,
+~2× faster, identical dose), optionally on a **2 mm field grid** (`grid_factor: 2`,
+~2.6× faster with the dose preserved).
 
 ```bash
-uv run python scripts/run_plan_opentps.py --config scripts/config_run_plan_opentps.yaml
+uv run python scripts/run_plan_opentps.py --config scripts/config_run_plan_opentps.yaml \
+    --plan-dir /path/to/your/plan --stages stream,gamma --overwrite
 ```
 
 Optional speed and quality switches (all opt-in, defaults preserve the reference
 behaviour): GPU flux projection (`flux_on_gpu`), thread-pooled extraction
-(`extraction_parallel`), and a measured dose calibration (`dose_calibration_*`).
-The model code is unchanged — this is a wrapper around it.
+(`extraction_parallel`), field-level 2 mm resampling (`grid_factor`), and a measured
+dose calibration (`dose_calibration_*`). The model code is unchanged — this is a
+wrapper around it.
 
-Full details (stages, config keys, outputs, performance notes):
-[scripts/README.md → run_plan_opentps.py](scripts/README.md#run_plan_opentpspy).
+**Full guide** — what plan data you need and where to put it (DICOM reader planned),
+the execution modes, the `grid_factor` 2 mm mode, the complete config/CLI reference,
+outputs, and batch helpers:
+[scripts/docs/run_plan_opentps.md](scripts/docs/run_plan_opentps.md).
 
 ---
 
