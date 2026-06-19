@@ -34,19 +34,23 @@ def expanded_reference_grid(
     image: sitk.Image,
     angle_deg: float,
     isocenter_physical: Sequence[float],
+    out_spacing_factor: int = 1,
 ) -> sitk.Image:
     """Build an empty grid that fully contains ``image`` rotated about the isocenter.
 
     Rotating around an off-centre isocenter with a fixed grid clips the content
-    that leaves the grid. This returns a reference grid (same spacing/direction,
-    larger/shifted in the axial ``x``-``y`` plane, ``z`` unchanged) sized to the
-    bounding box of the rotated input corners, so a subsequent resample loses no
-    information.
+    that leaves the grid. This returns a reference grid (same direction,
+    larger/shifted in the axial ``x``-``y`` plane) sized to the bounding box of the
+    rotated input corners, so a subsequent resample loses no information.
 
     Args:
         image: The image to be rotated.
         angle_deg: The (content) rotation angle in degrees.
         isocenter_physical: The physical rotation centre ``(x, y, z)``.
+        out_spacing_factor: Output voxel size multiplier (default ``1`` = the input
+            spacing, the original behaviour). ``2`` builds a 2x-coarser grid on all
+            three axes (the field-level down-sample); the rotate resample then
+            rotates **and** down-samples in one pass.
 
     Returns:
         An empty :class:`SimpleITK.Image` to use as the resample reference.
@@ -68,13 +72,37 @@ def expanded_reference_grid(
 
     min_x, max_x = min(xs), max(xs)
     min_y, max_y = min(ys), max(ys)
-    out_nx = int(math.ceil((max_x - min_x) / sx)) + 1
-    out_ny = int(math.ceil((max_y - min_y) / sy)) + 1
 
-    reference = sitk.Image(out_nx, out_ny, nz, image.GetPixelID())
-    reference.SetSpacing(image.GetSpacing())
+    if out_spacing_factor == 1:
+        # Original behaviour, kept byte-identical (z size/spacing unchanged).
+        out_nx = int(math.ceil((max_x - min_x) / sx)) + 1
+        out_ny = int(math.ceil((max_y - min_y) / sy)) + 1
+        reference = sitk.Image(out_nx, out_ny, nz, image.GetPixelID())
+        reference.SetSpacing(image.GetSpacing())
+        reference.SetDirection(image.GetDirection())
+        reference.SetOrigin((min_x, min_y, image.GetOrigin()[2]))
+        return reference
+
+    f = int(out_spacing_factor)
+    in_spacing = image.GetSpacing()
+    out_spacing = tuple(s * f for s in in_spacing)
+    out_nx = int(math.ceil((max_x - min_x) / out_spacing[0])) + 1
+    out_ny = int(math.ceil((max_y - min_y) / out_spacing[1])) + 1
+    out_nz = (nz + f - 1) // f
+    # Cell-center alignment: a factor-f trilinear down-sample with
+    # ``align_corners=False`` samples coarse voxel j at fine position
+    # ``f*j + (f-1)/2``, i.e. the fine cell-centres. Offsetting the origin by
+    # ``+(f-1)/2 * fine_spacing`` on every axis makes the coarse voxel centres
+    # land on those cell-centres, so the model -- trained on the
+    # ``align_corners=False`` down-sample -- sees no sub-voxel shift. (The half-
+    # voxel air sliver this trims at the grid corners is outside the patient.)
+    half = tuple((f - 1) / 2.0 * s for s in in_spacing)
+    reference = sitk.Image(out_nx, out_ny, out_nz, image.GetPixelID())
+    reference.SetSpacing(out_spacing)
     reference.SetDirection(image.GetDirection())
-    reference.SetOrigin((min_x, min_y, image.GetOrigin()[2]))
+    reference.SetOrigin(
+        (min_x + half[0], min_y + half[1], image.GetOrigin()[2] + half[2])
+    )
     return reference
 
 
@@ -86,6 +114,7 @@ def rotate_ct_around_isocenter(
     expand: bool = False,
     interpolator: int = sitk.sitkLinear,
     default_value: float = float(AIR_HU),
+    out_spacing_factor: int = 1,
 ) -> sitk.Image:
     """Rotate a CT image in the axial plane around the physical isocenter.
 
@@ -104,6 +133,10 @@ def rotate_ct_around_isocenter(
             behaviour.
         interpolator: SimpleITK interpolator (default linear).
         default_value: Fill value for out-of-bounds voxels (default air HU).
+        out_spacing_factor: Output voxel-size multiplier for the expanded grid
+            (default ``1`` = input spacing, unchanged). ``2`` rotates into a
+            2x-coarser (2mm) grid -- the field-level down-sample. Only used when
+            ``reference is None and expand``.
 
     Returns:
         A new SimpleITK image with the content rotated, on ``reference`` (if
@@ -119,7 +152,9 @@ def rotate_ct_around_isocenter(
 
     if reference is None:
         reference = (
-            expanded_reference_grid(image, angle_deg, isocenter_physical)
+            expanded_reference_grid(
+                image, angle_deg, isocenter_physical, out_spacing_factor
+            )
             if expand
             else image
         )

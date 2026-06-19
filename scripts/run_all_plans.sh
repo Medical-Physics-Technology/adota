@@ -1,29 +1,37 @@
 #!/usr/bin/env bash
-# Run the full ADoTA plan pipeline (extract,infer,accumulate,gamma) over a list of
-# OpenTPS plans, sequentially. After each plan finishes, the per-spot beamlets under
-# <plan>/adota_beamlets are deleted to avoid running out of scratch storage.
+# Run the FUSED STREAM pipeline on the 2x2x2 (field-level, grid_factor=2) grid
+# followed by GAMMA over a list of OpenTPS plans, sequentially. Streaming writes
+# no per-beamlet files, so there is nothing to clean up between plans; each plan
+# leaves its Dose_ADoTA.mhd, gamma_metrics.json, pipeline_timing.json and the
+# gamma figure in place.
 #
 # Each plan's full stdout/stderr is written to run_logs/<PlanName>.out.
 # Run detached:
 #   nohup bash scripts/run_all_plans.sh > run_logs/run_all_plans.out 2>&1 &
 #
-# Not using `set -e`: one failing plan must not abort the rest, and its beamlets
-# should still be cleaned up.
+# Not using `set -e`: one failing plan must not abort the rest.
 set -u
 
 PROJECT_ROOT="/home/mstryja/projects/adota"
 PY="${PROJECT_ROOT}/.venv/bin/python"
 CONFIG="scripts/config_run_plan_opentps.yaml"
-STAGES="extract,infer,accumulate,gamma"
+STAGES="stream,gamma"
+GRID_FACTOR=2
 LOG_DIR="${PROJECT_ROOT}/run_logs"
 
 PLANS=(
+  "/scratch/mstryja/opentps_plans/LUNG1-195_lung1-195_1beam_neg90gantry"
+  "/scratch/mstryja/opentps_plans/LUNG1-193_lung1-193_3beams"
+  "/scratch/mstryja/opentps_plans/LUNG1-041_lung1-041_1beam_neg90gantry"
+  "/scratch/mstryja/opentps_plans/Prostate-AEC-001_Publication_Prostate-AEC-001_100MperBeam"
+  "/scratch/mstryja/opentps_plans/Prostate-AEC-002_Publication_Prostate-AEC-002_100MperBeam"
   "/scratch/mstryja/opentps_plans/Prostate-AEC-003_Publication_Prostate-AEC-003_100MperBeam"
-  "/scratch/mstryja/opentps_plans/Prostate-AEC-004_Publication_Prostate-AEC-004_100MperBeam"
+  "/scratch/mstryja/opentps_plans/Prostate-AEC-004_Prostate-AEC-004_1e9Primaries_per_beam"
   "/scratch/mstryja/opentps_plans/Prostate-AEC-005_Publication_Prostate-AEC-005_100MperBeam"
   "/scratch/mstryja/opentps_plans/Prostate-AEC-006_Publication_Prostate-AEC-006_100MperBeam"
   "/scratch/mstryja/opentps_plans/Prostate-AEC-007_Publication_Prostate-AEC-007_100MperBeam"
   "/scratch/mstryja/opentps_plans/Prostate-AEC-008_Publication_Prostate-AEC-008_100MperBeam"
+  "/scratch/mstryja/opentps_plans/Prostate-AEC-069_3-5mm_target_margin_dij_test"
 )
 
 cd "${PROJECT_ROOT}" || exit 1
@@ -31,23 +39,18 @@ mkdir -p "${LOG_DIR}"
 
 for P in "${PLANS[@]}"; do
   PLAN_NAME="$(basename "${P}")"
-  LOG="${LOG_DIR}/${PLAN_NAME}.out"
-  echo "[$(date '+%F %T')] START ${PLAN_NAME} -> ${LOG}"
+  LOG="${LOG_DIR}/${PLAN_NAME}_field_level_${GRID_FACTOR}.out"
+  echo "[$(date '+%F %T')] START ${PLAN_NAME} (stream gf=${GRID_FACTOR}) -> ${LOG}"
 
   "${PY}" scripts/run_plan_opentps.py \
     --config "${CONFIG}" \
     --plan-dir "${P}" \
     --stages "${STAGES}" \
+    --grid-factor "${GRID_FACTOR}" \
     --overwrite \
     > "${LOG}" 2>&1
   STATUS=$?
   echo "[$(date '+%F %T')] FINISHED ${PLAN_NAME} (exit ${STATUS})"
-
-  # Free scratch storage: drop the per-spot beamlets (Dose_ADoTA.mhd is kept).
-  if [ -d "${P}/adota_beamlets" ]; then
-    rm -rf "${P}/adota_beamlets"
-    echo "[$(date '+%F %T')] removed ${P}/adota_beamlets"
-  fi
 done
 
 echo "[$(date '+%F %T')] ALL PLANS DONE"

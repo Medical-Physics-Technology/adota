@@ -129,3 +129,67 @@ def test_streaming_calibration_scales(plan_directory, tmp_path: Path) -> None:
         StreamingConfig(batch_size=8, flux_on_gpu=False, calibration_factor=1.05),
     )
     assert cal["dose_sum"] == pytest.approx(base["dose_sum"] * 1.05, rel=1e-4)
+
+
+# --- Field-level 2mm resampling (grid_factor=2) -------------------------------
+
+def _dose_centroid(D: np.ndarray) -> np.ndarray:
+    idx = np.indices(D.shape)
+    w = D / D.sum()
+    return np.array([(idx[k] * w).sum() for k in range(3)])
+
+
+def test_streaming_grid_factor2_runs_and_labels(plan_directory, tmp_path: Path) -> None:
+    """grid_factor=2 streams end-to-end: same grid, dose deposited, labelled, no disk."""
+    model = _TinyModel().eval()
+    out = tmp_path / "Dose_ADoTA_2mm.mhd"
+    summary = run_streaming_pipeline(
+        plan_directory, model, torch.device("cpu"), out,
+        StreamingConfig(batch_size=4, flux_on_gpu=False, grid_factor=2),
+    )
+    D = sitk.GetArrayFromImage(sitk.ReadImage(str(out)))
+    assert D.shape == sitk.GetArrayFromImage(plan_directory.ct).shape  # on the CT grid
+    assert float(D.max()) > 0.0
+    assert summary["grid_factor"] == 2 and summary["grid_mode"] == "2mm_field"
+    assert summary["n_spots"] == 10
+    assert not (tmp_path / "adota_beamlets").exists()  # still disk-free
+
+
+def test_grid_factor2_preserves_plan_dose_physically(plan_directory, tmp_path: Path) -> None:
+    """The 2mm-field plan dose matches the 1mm per-beamlet dose on the CT grid.
+
+    This is the physically meaningful check (test (5)/(4)): both doses are de-rotated
+    onto the same CT grid, so a genuine spatial shift would show as a centroid shift
+    -- not the crop-window index offset that confounds an array-index comparison.
+    Thresholds are loose because the synthetic CT is pure noise; the real-model gate
+    is P6. (1mm path is the reference; gf=1 stays byte-identical, guarded above.)
+    """
+    model = _TinyModel().eval()
+    cfg = dict(batch_size=8, flux_on_gpu=False)
+    run_streaming_pipeline(plan_directory, model, torch.device("cpu"),
+                           tmp_path / "d1.mhd", StreamingConfig(grid_factor=1, **cfg))
+    run_streaming_pipeline(plan_directory, model, torch.device("cpu"),
+                           tmp_path / "d2.mhd", StreamingConfig(grid_factor=2, **cfg))
+    D1 = sitk.GetArrayFromImage(sitk.ReadImage(str(tmp_path / "d1.mhd")))
+    D2 = sitk.GetArrayFromImage(sitk.ReadImage(str(tmp_path / "d2.mhd")))
+
+    m = D1 > 0.1 * D1.max()
+    assert float(np.corrcoef(D1[m], D2[m])[0, 1]) > 0.90       # shape preserved
+    shift = np.abs(_dose_centroid(D2) - _dose_centroid(D1))    # voxels (= mm here)
+    assert shift.max() < 0.5, shift                            # no physical shift
+    assert D2.sum() / D1.sum() == pytest.approx(1.0, abs=0.05)  # dose conserved
+
+
+def test_grid_factor2_single_spot_centroid(plan_directory, tmp_path: Path) -> None:
+    """A single beamlet lands at the same physical centroid at 2mm and 1mm."""
+    model = _TinyModel().eval()
+    cfg = dict(batch_size=1, flux_on_gpu=False, beams=[1], n_spots=1)
+    run_streaming_pipeline(plan_directory, model, torch.device("cpu"),
+                           tmp_path / "s1.mhd", StreamingConfig(grid_factor=1, **cfg))
+    run_streaming_pipeline(plan_directory, model, torch.device("cpu"),
+                           tmp_path / "s2.mhd", StreamingConfig(grid_factor=2, **cfg))
+    D1 = sitk.GetArrayFromImage(sitk.ReadImage(str(tmp_path / "s1.mhd")))
+    D2 = sitk.GetArrayFromImage(sitk.ReadImage(str(tmp_path / "s2.mhd")))
+    assert float(D1.max()) > 0.0 and float(D2.max()) > 0.0
+    shift = np.abs(_dose_centroid(D2) - _dose_centroid(D1))
+    assert shift.max() < 0.6, shift  # sub-voxel; single spot is noisier than the plan

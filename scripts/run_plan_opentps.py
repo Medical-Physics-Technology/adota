@@ -157,6 +157,8 @@ def _build_timing_report(
             **_step(streaming["elapsed_s"], streaming["elapsed_s"] / n * 1000),
             "n_spots": n,
             "n_fields": streaming["n_fields"],
+            "grid_factor": streaming.get("grid_factor", 1),
+            "grid_mode": streaming.get("grid_mode", "1mm"),
             "steps": {k: _step(v) for k, v in t.items()},
         }
 
@@ -252,16 +254,24 @@ def _format_timing_report(report: dict) -> str:
     st = stages.get("streaming")
     if st:
         s = st["steps"]
+        # Distinct mode label: 1mm per-beamlet vs 2mm field-level resampling. At
+        # gf=2 the crop/flux/prep/post/deposit run on the 2mm grid (the per-field
+        # rotate/de-rotate carry the single resize), so those rows shrink.
+        gf = st.get("grid_factor", 1)
+        mode = "fused, 1mm" if gf == 1 else f"fused, {gf}mm field"
         lines.append("-" * 70)
         lines.append(
-            f"Streaming (fused)        total {st['total_s']:8.2f} s   "
+            f"Streaming ({mode})".ljust(29)
+            + f"total {st['total_s']:8.2f} s   "
             f"({st['ms_per_beamlet']:8.3f} ms/beamlet)  "
             f"[{st['n_spots']} spots, {st['n_fields']} fields, no disk]"
         )
+        prep_lbl = "input prep (downsample)" if gf == 1 else "input prep (no resize)"
+        post_lbl = "postprocess (upsample)" if gf == 1 else "postprocess (no resize)"
         for label, key in (
             ("rotation (per field)", "rotation"), ("CT cropping", "crop"),
-            ("flux projection", "flux"), ("input prep (downsample)", "prep"),
-            ("ADoTA forward", "forward"), ("postprocess (upsample)", "post"),
+            ("flux projection", "flux"), (prep_lbl, "prep"),
+            ("ADoTA forward", "forward"), (post_lbl, "post"),
             ("deposit", "deposit"), ("de-rotate (per field)", "derotate"),
             ("write Dose_ADoTA.mhd", "write"),
         ):
@@ -381,6 +391,11 @@ def main(
     verbose: Annotated[
         Optional[bool], typer.Option(help="Enable verbose/debug logging.")
     ] = None,
+    grid_factor: Annotated[
+        Optional[int],
+        typer.Option(help="Field-level resampling factor for the stream stage "
+                          "(1 = 1mm per-beamlet; 2 = 2mm field grid)."),
+    ] = None,
 ) -> None:
     """Load the model + plan directory, parse the plan, and print a preview.
 
@@ -411,6 +426,10 @@ def main(
         else yaml_config.get("max_control_points", 3)
     )
     stages_raw = stages if stages is not None else yaml_config.get("stages", "extract")
+    # CLI grid_factor overrides YAML; write it back so the stream stage reads it.
+    yaml_config["grid_factor"] = (
+        grid_factor if grid_factor is not None else int(yaml_config.get("grid_factor", 1))
+    )
     n_spots = n_spots if n_spots is not None else yaml_config.get("n_spots")
     beams_raw = beams if beams is not None else yaml_config.get("beams")
     overwrite = (
@@ -581,8 +600,14 @@ def main(
             else 1.0
         )
         flux_on_gpu = bool(yaml_config.get("flux_on_gpu", False))
+        grid_factor = int(yaml_config.get("grid_factor", 1))
         logger.info("=" * 70)
         logger.info("Stage: stream -> %s (fused, no per-beamlet disk I/O)", dose_path)
+        if grid_factor != 1:
+            logger.info(
+                "Field-level resampling ENABLED: grid_factor=%d (%dmm field grid)",
+                grid_factor, grid_factor,
+            )
         if calibration_factor != 1.0:
             logger.info("Dose calibration ENABLED: scaling dose by %.4f", calibration_factor)
         logger.info("=" * 70)
@@ -594,6 +619,7 @@ def main(
             flux_on_gpu=flux_on_gpu,
             flux_device=str(device),
             calibration_factor=calibration_factor,
+            grid_factor=grid_factor,
         )
         streaming_summary = run_streaming_pipeline(
             plan_directory, model, device, dose_path, streaming_config

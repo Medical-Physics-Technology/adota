@@ -33,3 +33,24 @@ Coordinate conventions (fixed once, cited by every module here)
 AIR_HU: int = -1024
 ROI_SIZE: tuple[int, int, int] = (60, 60, 320)
 """Default ROI size as ``[H, W, D]`` (lateral y, lateral x/z, depth)."""
+
+# Field-level resampling option (optional; off by default). At ``grid_factor=1``
+# the pipeline crops/fluxes on the native 1mm grid (the ROI above) and resizes
+# per beamlet; at ``grid_factor=2`` the rotated CT is built on a 2x2x2 (2mm) grid
+# so a crop is already the model grid ``(160, 30, 30)`` (after permute) -- no
+# per-beamlet resize. See the field-resampling plan + ``roi_for_factor``.
+ROI_SIZE_COARSE: tuple[int, int, int] = (30, 30, 160)
+"""ROI size at ``grid_factor=2`` (the 2mm grid); permutes to the model grid."""
+
+
+def roi_for_factor(grid_factor: int) -> tuple[int, int, int]:
+    """Return the crop ROI ``[H, W, D]`` for a given ``grid_factor`` (1 or 2).
+
+    ``grid_factor=1`` -> :data:`ROI_SIZE` (1mm, ``(60, 60, 320)``);
+    ``grid_factor=2`` -> :data:`ROI_SIZE_COARSE` (2mm, ``(30, 30, 160)``).
+    """
+    if grid_factor == 1:
+        return ROI_SIZE
+    if grid_factor == 2:
+        return ROI_SIZE_COARSE
+    raise ValueError(f"grid_factor must be 1 or 2, got {grid_factor!r}")

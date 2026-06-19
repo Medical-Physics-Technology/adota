@@ -80,6 +80,16 @@ extraction_workers: 0
 # Inference: spots per forward pass (batched on the GPU).
 batch_size: 120
 
+# Field-level resampling factor (optional; stream stage). Default 1 = the current
+# per-beamlet 1mm path (byte-identical). 2 = rotate/crop/flux/deposit on a 2x2x2
+# (2mm) grid so the per-beamlet down/up-sample is replaced by a single per-field
+# rotate/de-rotate -- ~2.6x faster streaming with the dose preserved (voxel
+# correlation >0.999, dose-weighted centroid shift <0.1mm, integral within ~0.3%
+# vs the 1mm path on LUNG1-221). Surfaced as a distinct mode ("Nmm field") in
+# pipeline_timing.json. Validated per-plan before adoption (see the grid_factor
+# A/B harness); leave at 1 unless explicitly running the 2mm comparison.
+grid_factor: 1
+
 # Accumulation: which per-spot array to deposit as "dose".
 # Leave null to auto-select: "prediction" (the ADoTA model output) when the
 # infer stage runs, otherwise "flux" (the constructed flux projection stand-in).

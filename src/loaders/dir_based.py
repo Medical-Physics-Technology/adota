@@ -118,18 +118,23 @@ def prepare_input_from_arrays(
     downsampling_method: str = "interpolation",
     device: Optional["torch.device"] = None,
     timing: Optional[dict] = None,
+    resize: bool = True,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Build the 2-channel ADoTA model input from in-memory CT/flux crops.
 
     This is the array-level core shared by the disk loader
     (:func:`get_single_record_no_gt`) and the streaming pipeline
     (:mod:`src.beamlets.streaming`), so both produce numerically identical inputs.
-    It converts the ``(60, 60, 320)`` CT/flux crops to tensors (on ``device`` when
-    given, so the normalization + trilinear down-sample to ``(160, 30, 30)`` run
-    there), normalizes, and concatenates them with the normalized energy.
+    It converts the CT/flux crops to tensors (on ``device`` when given, so the
+    normalization + trilinear down-sample run there), normalizes, and concatenates
+    them with the normalized energy. The model always consumes the ``(160, 30, 30)``
+    grid; what differs between the two extraction paths is only whether a resize is
+    needed to reach it.
 
     Args:
-        ct_crop: BEV CT crop ``(60, 60, 320)`` (z, y, x) in HU.
+        ct_crop: BEV CT crop ``(z, y, x)`` in HU -- ``(60, 60, 320)`` on the 1mm
+            grid (``grid_factor=1``) or ``(30, 30, 160)`` on the 2mm grid
+            (``grid_factor=2``).
         flux_crop: Flux projection, same shape.
         initial_energy_mev: Beam energy in MeV (normalized with the energy scale).
         scale: Min-max scaling dict (defaults to :data:`DEFAULT_SCALE`).
@@ -138,6 +143,11 @@ def prepare_input_from_arrays(
         device: Torch device for the tensors / resize (``None`` = CPU).
         timing: Optional measurement hook; accumulates the resize seconds under
             ``"downsample"``.
+        resize: When ``True`` (default, ``grid_factor=1``) the permuted 1mm crop
+            ``(320, 60, 60)`` is trilinearly resized to the ``(160, 30, 30)`` model
+            grid exactly as before. When ``False`` (``grid_factor=2``) the crop was
+            already cropped on the 2mm grid and permutes straight to ``(160, 30, 30)``
+            so the resize -- which would be a no-op resize-to-self -- is skipped.
 
     Returns:
         ``(x, energy)`` where ``x`` is ``(2, 160, 30, 30)`` and ``energy`` is the
@@ -171,7 +181,7 @@ def prepare_input_from_arrays(
         ct_grid = F.avg_pool3d(ct_grid, kernel_size=2, stride=2)
         flux_grid = F.avg_pool3d(flux_grid, kernel_size=2, stride=2)
 
-    if downsampling_method == "interpolation":
+    if downsampling_method == "interpolation" and resize:
         ct_grid = F.interpolate(
             ct_grid.unsqueeze(0),
             size=(160, 30, 30),
@@ -246,6 +256,7 @@ def postprocess_prediction(
     pred: torch.Tensor,
     scale: dict = None,
     timing: Optional[dict] = None,
+    upsample: bool = True,
 ) -> np.ndarray:
     """Up-sample a model prediction to the ROI grid and de-normalize to dose.
 
@@ -260,15 +271,25 @@ def postprocess_prediction(
         pred: Model output ``(1, 1, 160, 30, 30)`` on any device.
         scale: Min-max scaling dict (defaults to :data:`DEFAULT_SCALE`).
         timing: Optional measurement hook.
+        upsample: When ``True`` (default, ``grid_factor=1``) the prediction is
+            trilinearly up-sampled to the 1mm beamlet ROI grid ``(320, 60, 60)`` as
+            before. When ``False`` (``grid_factor=2``) the prediction is kept at
+            ``(160, 30, 30)`` -- it will be deposited directly on the 2mm field grid
+            and the de-rotation back to the 1mm CT grid does the up-sampling once per
+            field -- so the per-beamlet up-sample is skipped.
 
     Returns:
-        The de-normalized dose as a NumPy array ``(1, 1, 320, 60, 60)``.
+        The de-normalized dose as a NumPy array: ``(1, 1, 320, 60, 60)`` when
+        ``upsample`` (1mm ROI), else ``(1, 1, 160, 30, 30)`` (the 2mm field grid).
     """
     scale = DEFAULT_SCALE if scale is None else scale
     interp_t = perf_counter()
-    pred_upsampled = F.interpolate(
-        pred, size=(320, 60, 60), mode="trilinear", align_corners=False
-    )
+    if upsample:
+        pred_upsampled = F.interpolate(
+            pred, size=(320, 60, 60), mode="trilinear", align_corners=False
+        )
+    else:
+        pred_upsampled = pred
     if timing is not None:
         # Sync so the async GPU interpolate is fully attributed here, not to the
         # following .cpu() copy (only when measuring; the normal path is untouched).

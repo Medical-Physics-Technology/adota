@@ -31,7 +31,7 @@ import SimpleITK as sitk
 import torch
 
 from src.adota.config import DEFAULT_SCALE
-from src.beamlets import ROI_SIZE
+from src.beamlets import ROI_SIZE, roi_for_factor
 from src.beamlets.accumulation import deposit_crop
 from src.beamlets.bdl import BeamDataLibrary, spot_position_to_angles
 from src.beamlets.cropping import extract_beamlet_roi
@@ -67,6 +67,10 @@ class StreamingConfig:
     scale: dict = field(default_factory=lambda: dict(DEFAULT_SCALE))
     calibration_factor: float = 1.0
     clip_negative: bool = True
+    grid_factor: int = 1
+    """Field-level resampling factor (1 = current 1mm per-beamlet path, byte-
+    identical; 2 = rotate/crop/flux/deposit on the 2mm grid -- the resize is done
+    once per field by the rotate/de-rotate instead of per beamlet)."""
 
 
 def run_streaming_pipeline(
@@ -120,6 +124,15 @@ def run_streaming_pipeline(
         device,
     )
 
+    # Field-level resampling factor. gf=1 keeps every operation byte-identical to
+    # the original 1mm path; gf=2 rotates/crops/fluxes/deposits on the 2mm grid and
+    # the per-field rotate/de-rotate carries the single resize (no per-beamlet
+    # down/up-sample). roi/flux-spacing are derived from gf; ``[1,1,1]`` (float32)
+    # is exactly the flux default so gf=1 stays byte-identical.
+    gf = config.grid_factor
+    roi = config.roi_size if gf == 1 else roi_for_factor(gf)
+    flux_spacing = np.asarray([gf, gf, gf], dtype=np.float32)
+
     model.eval()
     total = np.zeros(sitk.GetArrayFromImage(ct).shape, dtype=np.float32)  # (z, y, x)
     timing = {k: 0.0 for k in ("rotation", "crop", "flux", "prep", "forward", "post", "deposit", "derotate")}
@@ -132,7 +145,9 @@ def run_streaming_pipeline(
         iso_phys = isocenter_physical(iso_index, ct)
 
         rot_t = perf_counter()
-        rotated_ct = rotate_ct_around_isocenter(ct, angle, iso_phys, expand=True)
+        rotated_ct = rotate_ct_around_isocenter(
+            ct, angle, iso_phys, expand=True, out_spacing_factor=gf
+        )
         rotated_ct_array = sitk.GetArrayFromImage(rotated_ct)
         timing["rotation"] += perf_counter() - rot_t
 
@@ -153,7 +168,7 @@ def run_streaming_pipeline(
                 crop_t = perf_counter()
                 cropped_ct, entrance, crp, _oob = extract_beamlet_roi(
                     rotated_ct, d_nozzle, d_smx, d_smy, spot_position, iso_phys,
-                    config.roi_size, ct_array=rotated_ct_array,
+                    roi, ct_array=rotated_ct_array,
                 )
                 timing["crop"] += perf_counter() - crop_t
 
@@ -166,10 +181,13 @@ def run_streaming_pipeline(
                 if config.flux_on_gpu:
                     flux = flux_projection_gpu(
                         re_proj, beamlet_angles, sigmas, cropped_ct.shape,
-                        device=config.flux_device,
+                        spacing=flux_spacing, device=config.flux_device,
                     )
                 else:
-                    flux = flux_projection(re_proj, beamlet_angles, sigmas, cropped_ct.shape)
+                    flux = flux_projection(
+                        re_proj, beamlet_angles, sigmas, cropped_ct.shape,
+                        spacing=flux_spacing,
+                    )
                 timing["flux"] += perf_counter() - flux_t
 
                 prep_t = perf_counter()
@@ -177,6 +195,7 @@ def run_streaming_pipeline(
                     cropped_ct, flux, energy, scale=config.scale,
                     normalize_flux=config.normalize_flux,
                     downsampling_method=config.downsampling_method, device=device,
+                    resize=(gf == 1),
                 )
                 timing["prep"] += perf_counter() - prep_t
 
@@ -197,13 +216,16 @@ def run_streaming_pipeline(
 
             for i, (crp, weight) in enumerate(deposits):
                 post_t = perf_counter()
-                dose_pred = postprocess_prediction(pred[i : i + 1], config.scale)
-                # (1,1,320,60,60) -> (60,60,320) = (z,y,x) crop, as accumulation does.
+                dose_pred = postprocess_prediction(
+                    pred[i : i + 1], config.scale, upsample=(gf == 1)
+                )
+                # (1,1,D,H,W) -> (H,W,D) = (z,y,x) crop, as accumulation does. At
+                # gf=2 the prediction stays (160,30,30) -> (30,30,160).
                 dose_crop = np.moveaxis(np.squeeze(dose_pred), 0, -1)
                 timing["post"] += perf_counter() - post_t
 
                 dep_t = perf_counter()
-                deposit_crop(deposit_grid, dose_crop, crp, weight, config.roi_size)
+                deposit_crop(deposit_grid, dose_crop, crp, weight, roi)
                 timing["deposit"] += perf_counter() - dep_t
                 n_spots += 1
 
@@ -236,6 +258,8 @@ def run_streaming_pipeline(
         "n_spots": n_spots,
         "n_fields": len(grouped),
         "elapsed_s": elapsed,
+        "grid_factor": gf,
+        "grid_mode": "1mm" if gf == 1 else f"{gf}mm_field",
         "calibration_factor": float(config.calibration_factor),
         "dose_max": float(total.max()),
         "dose_sum": float(total.sum()),

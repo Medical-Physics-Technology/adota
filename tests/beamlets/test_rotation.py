@@ -204,3 +204,93 @@ def test_derotate_into_original_grid_recovers_input() -> None:
     a = sitk.GetArrayFromImage(restored)[:, 4:-4, 4:-4]
     b = smooth[:, 4:-4, 4:-4]
     assert float(np.abs(a - b).max()) < 1.0
+
+
+# --- P1: field-level coarse (2mm) rotation grid (out_spacing_factor=2) -------
+
+
+def test_coarse_grid_doubles_spacing_and_halves_size() -> None:
+    """out_spacing_factor=2 builds a 2x-coarser grid on all three axes."""
+    image = _corner_phantom()  # 21x21x3, 1mm spacing
+    iso = _off_iso(image)
+    fine = expanded_reference_grid(image, 30.0, iso)  # factor 1 (default)
+    coarse = expanded_reference_grid(image, 30.0, iso, out_spacing_factor=2)
+
+    assert coarse.GetSpacing() == tuple(2.0 * s for s in image.GetSpacing())
+    # Half the voxels per axis (within +/-1 from the ceil), z halved too.
+    for c, f in zip(coarse.GetSize(), fine.GetSize()):
+        assert c <= (f + 1) // 2 + 1
+    assert coarse.GetSize()[2] == (image.GetSize()[2] + 1) // 2
+    # Cell-center alignment: origin offset by +(f-1)/2 * fine_spacing (= +0.5mm
+    # at f=2) from the factor-1 grid, so the coarse voxels land on the 1mm
+    # cell-centres (matching the align_corners=False down-sample convention).
+    sx, sy, _ = image.GetSpacing()
+    np.testing.assert_allclose(
+        coarse.GetOrigin()[:2],
+        (fine.GetOrigin()[0] + 0.5 * sx, fine.GetOrigin()[1] + 0.5 * sy),
+        atol=1e-9,
+    )
+
+
+def test_coarse_isocenter_is_fixed_point() -> None:
+    """Rotating to the 2mm grid keeps content at the isocenter at the isocenter."""
+    arr = np.full((3, 21, 21), -1024.0, dtype=np.float32)
+    arr[:, 4:7, 4:7] = 1000.0  # 3x3 (all-z) blob centred on the isocenter index
+    image = sitk.GetImageFromArray(arr)
+    image.SetOrigin(_OFF_ORIGIN)
+    image.SetSpacing(_OFF_SPACING)
+    iso = _off_iso(image)
+
+    coarse = rotate_ct_around_isocenter(
+        image, 37.0, iso, expand=True, out_spacing_factor=2, default_value=-1024.0
+    )
+    arr_c = sitk.GetArrayFromImage(coarse)
+    z, y, x = np.unravel_index(int(arr_c.argmax()), arr_c.shape)
+    phys = coarse.TransformIndexToPhysicalPoint((int(x), int(y), int(z)))
+    # Peak stays within one 2mm voxel of the isocenter physical point.
+    np.testing.assert_allclose(phys[:2], iso[:2], atol=2.0)
+
+
+def test_coarse_rotation_no_clipping() -> None:
+    """The 2mm expanded grid's physical bbox contains every rotated corner."""
+    image = _corner_phantom()
+    iso = _off_iso(image)
+    coarse = expanded_reference_grid(image, 40.0, iso, out_spacing_factor=2)
+    nx, ny, _nz = image.GetSize()
+    ix0, iy0, iz0 = float(iso[0]), float(iso[1]), float(iso[2])
+    theta = np.radians(40.0)
+    cos_t, sin_t = np.cos(theta), np.sin(theta)
+    sx, sy, _ = coarse.GetSize()
+    for cx, cy in ((0, 0), (nx - 1, 0), (0, ny - 1), (nx - 1, ny - 1)):
+        px, py, _pz = image.TransformIndexToPhysicalPoint((cx, cy, 0))
+        rx = ix0 + (px - ix0) * cos_t - (py - iy0) * sin_t
+        ry = iy0 + (px - ix0) * sin_t + (py - iy0) * cos_t
+        idx = coarse.TransformPhysicalPointToContinuousIndex((rx, ry, iz0))
+        assert -0.5 <= idx[0] <= sx - 0.5  # corner lands inside the coarse grid
+        assert -0.5 <= idx[1] <= sy - 0.5
+
+
+def test_coarse_derotate_upsample_recovers_smooth_field() -> None:
+    """rotate->2mm then de-rotate->1mm (reference=ct) recovers a smooth field.
+
+    Uses a depth-thick phantom: the +0.5mm cell-center offset is negligible for a
+    realistic CT but would clip a razor-thin (few-slice) phantom at the z edges.
+    """
+    zz, yy, xx = np.meshgrid(np.arange(16), np.arange(21), np.arange(21), indexing="ij")
+    smooth = (yy * 2.0 + xx * 3.0 + zz * 1.0).astype(np.float32)  # band-limited
+    image = sitk.GetImageFromArray(smooth)
+    image.SetOrigin(_OFF_ORIGIN)
+    image.SetSpacing(_OFF_SPACING)
+    iso = image.TransformContinuousIndexToPhysicalPoint((5.0, 5.0, 8.0))
+
+    coarse = rotate_ct_around_isocenter(
+        image, 40.0, iso, expand=True, out_spacing_factor=2, default_value=0.0
+    )
+    # De-rotate + up-sample back to the original 1mm grid in one resample.
+    restored = rotate_ct_around_isocenter(
+        coarse, -40.0, iso, reference=image, default_value=0.0
+    )
+    a = sitk.GetArrayFromImage(restored)[3:-3, 5:-5, 5:-5]
+    b = smooth[3:-3, 5:-5, 5:-5]
+    # Larger tolerance than the 1mm round-trip: 2mm sampling loses resolution.
+    assert float(np.abs(a - b).max()) < 4.0
