@@ -117,14 +117,6 @@ def load_ct_from_dicom_dir(dicom_dir: Path, logger: logging.Logger) -> list:
     return ct_slices
 
 
-def _row(label: str, seconds: float, per_beamlet_ms: Optional[float] = None) -> str:
-    """Format one timing row, optionally with a per-beamlet figure."""
-    row = f"  {label:<24}: {seconds:8.2f} s"
-    if per_beamlet_ms is not None:
-        row += f"   ({per_beamlet_ms:8.3f} ms/beamlet)"
-    return row
-
-
 def _step(total_s: float, per_beamlet_ms: Optional[float] = None) -> dict:
     """One timing entry: total seconds (and optional per-beamlet ms)."""
     out = {"total_s": round(float(total_s), 3)}
@@ -162,6 +154,7 @@ def _build_timing_report(
             "n_fields": streaming["n_fields"],
             "grid_factor": streaming.get("grid_factor", 1),
             "grid_mode": streaming.get("grid_mode", "1mm"),
+            "precision": streaming.get("precision", "fp32"),
             "steps": {k: _step(v) for k, v in t.items()},
         }
 
@@ -247,28 +240,54 @@ def _merge_timing_report(existing: dict, new: dict) -> dict:
 
 
 def _format_timing_report(report: dict) -> str:
-    """Render the timing report as the human-readable summary table."""
+    """Render the timing report as an auto-aligned table (via ``rich``).
+
+    One table, grouped into per-stage sections (``Stage`` header row + indented
+    ``Step`` sub-rows). ``rich`` sizes the columns to the content, so adding or
+    renaming a row never needs manual width tuning.
+    """
+    from io import StringIO
+
+    from rich import box
+    from rich.console import Console
+    from rich.table import Table
+
     stages = report["stages"]
-    lines = ["=" * 70, "TIMING SUMMARY", "=" * 70]
+    table = Table(title="TIMING SUMMARY", box=box.SIMPLE_HEAD, title_style="bold",
+                  pad_edge=False)
+    table.add_column("Stage", no_wrap=True, style="bold")
+    table.add_column("Step", no_wrap=True)
+    table.add_column("Total [s]", justify="right", no_wrap=True)
+    table.add_column("ms/beamlet", justify="right", no_wrap=True)
+    table.add_column("Notes", no_wrap=True)
+
+    def fs(v: float) -> str:
+        return f"{float(v):.2f}"
+
+    def fms(step: dict) -> str:
+        v = step.get("ms_per_beamlet")
+        return f"{float(v):.3f}" if v is not None else ""
+
+    def header(name: str, st: dict, notes: str) -> None:
+        table.add_section()
+        table.add_row(name, "", fs(st["total_s"]), fms(st), notes)
+
+    def sub(label: str, step: dict) -> None:
+        table.add_row("", label, fs(step["total_s"]), fms(step), "")
+
     if "model_load" in stages:
-        lines.append(_row("model load", stages["model_load"]["total_s"]))
-    lines.append(_row("plan load", stages["plan_load"]["total_s"]))
+        table.add_row("model load", "", fs(stages["model_load"]["total_s"]), "", "")
+    table.add_row("plan load", "", fs(stages["plan_load"]["total_s"]), "", "")
 
     st = stages.get("streaming")
     if st:
         s = st["steps"]
-        # Distinct mode label: 1mm per-beamlet vs 2mm field-level resampling. At
-        # gf=2 the crop/flux/prep/post/deposit run on the 2mm grid (the per-field
-        # rotate/de-rotate carry the single resize), so those rows shrink.
         gf = st.get("grid_factor", 1)
-        mode = "fused, 1mm" if gf == 1 else f"fused, {gf}mm field"
-        lines.append("-" * 70)
-        lines.append(
-            f"Streaming ({mode})".ljust(29)
-            + f"total {st['total_s']:8.2f} s   "
-            f"({st['ms_per_beamlet']:8.3f} ms/beamlet)  "
-            f"[{st['n_spots']} spots, {st['n_fields']} fields, no disk]"
-        )
+        mode = "1mm" if gf == 1 else f"{gf}mm field"
+        if st.get("precision", "fp32") == "fp16":
+            mode += ", fp16"
+        header(f"Streaming ({mode})", st,
+               f"{st['n_spots']} spots, {st['n_fields']} fields, no disk")
         prep_lbl = "input prep (downsample)" if gf == 1 else "input prep (no resize)"
         post_lbl = "postprocess (upsample)" if gf == 1 else "postprocess (no resize)"
         for label, key in (
@@ -279,69 +298,56 @@ def _format_timing_report(report: dict) -> str:
             ("write Dose_ADoTA.mhd", "write"),
         ):
             if key in s:
-                lines.append(_row(label, s[key]["total_s"]))
+                sub(label, s[key])
 
     ex = stages.get("extraction")
     if ex:
         s = ex["steps"]
-        lines.append("-" * 70)
-        mode = (
-            f"pooled x{ex['workers']} threads" if ex.get("parallel") else "serial"
-        )
-        lines.append(
-            f"Extraction               total {ex['total_s']:8.2f} s   "
-            f"({ex['ms_per_beamlet']:8.3f} ms/beamlet)  [{ex['n_spots']} spots, {mode}]"
-        )
+        emode = f"pooled x{ex['workers']} threads" if ex.get("parallel") else "serial"
+        notes = f"{ex['n_spots']} spots, {emode}"
         if ex.get("parallel"):
-            # Sub-steps are the real wall-clock time each step was active (union of
-            # the concurrent per-spot intervals). Different steps still run in
-            # parallel across threads, so they can overlap each other and need not
-            # sum to the stage wall total above.
-            lines.append(
-                "  (sub-steps are real wall-time each step was active; they run "
-                "concurrently, so they can overlap)"
-            )
-        lines.append(_row("rotation (per field)", s["rotation"]["total_s"]))
-        lines.append(_row("CT cropping", s["ct_cropping"]["total_s"], s["ct_cropping"]["ms_per_beamlet"]))
-        lines.append(_row("flux projection", s["flux_projection"]["total_s"], s["flux_projection"]["ms_per_beamlet"]))
-        lines.append(_row("save beamlets to disk", s["save_beamlets"]["total_s"], s["save_beamlets"]["ms_per_beamlet"]))
+            notes += " (sub-steps overlap; real wall-time)"
+        header("Extraction", ex, notes)
+        sub("rotation (per field)", s["rotation"])
+        sub("CT cropping", s["ct_cropping"])
+        sub("flux projection", s["flux_projection"])
+        sub("save beamlets to disk", s["save_beamlets"])
 
     inf = stages.get("inference")
     if inf:
         s = inf["steps"]
-        lines.append("-" * 70)
-        lines.append(
-            f"ADoTA inference          total {inf['total_s']:8.2f} s   "
-            f"({inf['ms_per_beamlet']:8.3f} ms/beamlet)  "
-            f"[{inf['n_spots']} spots, {inf['n_batches']} batches of {inf['batch_size']}]"
-        )
-        lines.append(_row("record load (file read)", s["record_load"]["total_s"], s["record_load"]["ms_per_beamlet"]))
-        lines.append(_row("downsample (CT -> ADoTA grid)", s["downsample"]["total_s"], s["downsample"]["ms_per_beamlet"]))
-        lines.append(_row("ADoTA forward", s["forward"]["total_s"], s["forward"]["ms_per_beamlet"]))
-        lines.append(_row("upsample (ADoTA -> ROI grid)", s["upsample"]["total_s"], s["upsample"]["ms_per_beamlet"]))
-        lines.append(_row("save predictions to disk", s["save_write"]["total_s"], s["save_write"]["ms_per_beamlet"]))
+        header("ADoTA inference", inf,
+               f"{inf['n_spots']} spots, {inf['n_batches']} batches of {inf['batch_size']}")
+        sub("record load (file read)", s["record_load"])
+        sub("downsample (CT -> ADoTA grid)", s["downsample"])
+        sub("ADoTA forward", s["forward"])
+        sub("upsample (ADoTA -> ROI grid)", s["upsample"])
+        sub("save predictions to disk", s["save_write"])
 
     ac = stages.get("accumulation")
     if ac:
         s = ac["steps"]
-        lines.append("-" * 70)
-        lines.append(
-            f"Dose accumulation        total {ac['total_s']:8.2f} s   "
-            f"({ac['ms_per_beamlet']:8.3f} ms/beamlet)  [{ac['n_fields']} fields]"
-        )
-        lines.append(_row("deposit", s["deposit"]["total_s"]))
-        lines.append(_row("de-rotate (per field)", s["derotate"]["total_s"]))
+        header("Dose accumulation", ac, f"{ac['n_fields']} fields")
+        sub("deposit", s["deposit"])
+        sub("de-rotate (per field)", s["derotate"])
         if "write" in s:
-            lines.append(_row("write Dose_ADoTA.mhd", s["write"]["total_s"]))
+            sub("write Dose_ADoTA.mhd", s["write"])
 
     if "comparison_figures" in stages:
-        lines.append("-" * 70)
-        lines.append(_row("comparison figure", stages["comparison_figures"]["total_s"]))
+        table.add_section()
+        table.add_row("comparison figure", "",
+                      fs(stages["comparison_figures"]["total_s"]), "", "")
 
-    lines.append("-" * 70)
-    lines.append(f"  {'TOTAL':<24}: {report['total_s']:8.2f} s")
-    lines.append("=" * 70)
-    return "\n".join(lines)
+    table.add_section()
+    table.add_row("TOTAL", "", fs(report["total_s"]), "", "")
+    if "aggregate_total_s" in report:
+        table.add_row("TOTAL (all runs)", "", fs(report["aggregate_total_s"]), "", "")
+
+    # Wide enough that rich never truncates a column to fit; the table itself only
+    # spans its content (expand=False default), so lines stay as short as possible.
+    console = Console(file=StringIO(), width=140)
+    console.print(table)
+    return console.file.getvalue()
 
 
 @app.command()
@@ -405,6 +411,11 @@ def main(
         typer.Option(help="Dose-comparison figure style: 'image' (filled overlay, "
                           "default) or 'contour' (clinical filled isodose lines)."),
     ] = None,
+    precision: Annotated[
+        Optional[str],
+        typer.Option(help="Stream-stage forward precision: 'fp32' (default) or "
+                          "'fp16' (CUDA autocast; faster, validate dose vs MC)."),
+    ] = None,
 ) -> None:
     """Main CLI entry point for the ADoTA plan pipeline.
 
@@ -455,6 +466,13 @@ def main(
     if dose_render not in ("image", "contour"):
         raise typer.BadParameter(
             f"dose_render must be 'image' or 'contour', got {dose_render!r}"
+        )
+    precision = (
+        precision if precision is not None else yaml_config.get("precision", "fp32")
+    )
+    if precision not in ("fp32", "fp16"):
+        raise typer.BadParameter(
+            f"precision must be 'fp32' or 'fp16', got {precision!r}"
         )
 
     # Parse the stage / beam lists.
@@ -635,6 +653,8 @@ def main(
                 "Field-level resampling ENABLED: grid_factor=%d (%dmm field grid)",
                 grid_factor, grid_factor,
             )
+        if precision == "fp16":
+            logger.info("Forward precision: fp16 (CUDA autocast)")
         if calibration_factor != 1.0:
             logger.info("Dose calibration ENABLED: scaling dose by %.4f", calibration_factor)
         logger.info("=" * 70)
@@ -647,6 +667,7 @@ def main(
             flux_device=str(device),
             calibration_factor=calibration_factor,
             grid_factor=grid_factor,
+            precision=precision,
         )
         streaming_summary = run_streaming_pipeline(
             plan_directory, model, device, dose_path, streaming_config

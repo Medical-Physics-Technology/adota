@@ -71,6 +71,12 @@ class StreamingConfig:
     """Field-level resampling factor (1 = current 1mm per-beamlet path, byte-
     identical; 2 = rotate/crop/flux/deposit on the 2mm grid -- the resize is done
     once per field by the rotate/de-rotate instead of per beamlet)."""
+    precision: str = "fp32"
+    """Forward-pass precision. ``"fp32"`` (default) runs the model in full
+    precision, unchanged. ``"fp16"`` wraps **only the model forward** in
+    ``torch.autocast`` (CUDA half precision) for a large speed-up; the prediction
+    is cast back to fp32 before deposit so accumulation is unchanged. fp16 is a
+    no-op on CPU. Validate the dose (gamma vs MC) before adopting."""
 
 
 def run_streaming_pipeline(
@@ -132,6 +138,12 @@ def run_streaming_pipeline(
     gf = config.grid_factor
     roi = config.roi_size if gf == 1 else roi_for_factor(gf)
     flux_spacing = np.asarray([gf, gf, gf], dtype=np.float32)
+    # fp16 wraps only the GPU forward in autocast; the prediction is cast back to
+    # fp32 for deposit so accumulation is unchanged. No-op on CPU (autocast fp16
+    # is CUDA-only), so the staged-equivalence tests stay byte-identical.
+    use_fp16 = config.precision == "fp16" and device.type == "cuda"
+    if config.precision not in ("fp32", "fp16"):
+        raise ValueError(f"precision must be 'fp32' or 'fp16', got {config.precision!r}")
 
     model.eval()
     total = np.zeros(sitk.GetArrayFromImage(ct).shape, dtype=np.float32)  # (z, y, x)
@@ -209,7 +221,12 @@ def run_streaming_pipeline(
                 torch.cuda.synchronize(device)
             fwd_t = perf_counter()
             with torch.no_grad():
-                pred = model(x_batch, e_batch)[0]  # (B, 1, 160, 30, 30)
+                if use_fp16:
+                    with torch.autocast("cuda", dtype=torch.float16):
+                        pred = model(x_batch, e_batch)[0]
+                    pred = pred.float()  # back to fp32 for an unchanged deposit
+                else:
+                    pred = model(x_batch, e_batch)[0]  # (B, 1, 160, 30, 30)
             if device.type == "cuda":
                 torch.cuda.synchronize(device)
             timing["forward"] += perf_counter() - fwd_t
@@ -260,6 +277,7 @@ def run_streaming_pipeline(
         "elapsed_s": elapsed,
         "grid_factor": gf,
         "grid_mode": "1mm" if gf == 1 else f"{gf}mm_field",
+        "precision": "fp16" if use_fp16 else "fp32",
         "calibration_factor": float(config.calibration_factor),
         "dose_max": float(total.max()),
         "dose_sum": float(total.sum()),

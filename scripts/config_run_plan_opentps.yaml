@@ -12,7 +12,7 @@
 
 # OpenTPS plan directory: CT.mhd, PlanPencil.txt, bdl.txt, config.txt,
 # structure masks (target.mhd / OAR_*.mhd), and the MC reference Dose.mhd.
-plan_dir: /scratch/mstryja/opentps_plans/Prostate-AEC-069_3-5mm_target_margin_dij_test
+plan_dir: /scratch/mstryja/opentps_plans/Prostate-AEC-004_Prostate-AEC-004_1e9Primaries_per_beam
 
 # Model directory name under models/.
 model_name: DoTA_v3_grid_search_v11
@@ -89,6 +89,13 @@ batch_size: 120
 # pipeline_timing.json. Validated per-plan before adoption (see the grid_factor
 # A/B harness); leave at 1 unless explicitly running the 2mm comparison.
 grid_factor: 2
+
+# Forward-pass precision for the STREAM stage. "fp32" (default) = full precision,
+# unchanged. "fp16" wraps only the model forward in CUDA autocast (the prediction
+# is cast back to fp32 before deposit, so accumulation is unchanged) -- a large
+# speed-up on the GPU forward. fp16 is a no-op on CPU. Validate the dose (gamma vs
+# MC) before adopting; benchmark showed ~2.6x on the forward at ~0.3% max-rel.
+precision: fp32
 
 # Accumulation: which per-spot array to deposit as "dose".
 # Leave null to auto-select: "prediction" (the ADoTA model output) when the

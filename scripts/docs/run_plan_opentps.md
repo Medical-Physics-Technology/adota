@@ -147,6 +147,37 @@ directly comparable.
 
 ---
 
+## Dose-comparison figure style (`dose_render`)
+
+The ADoTA-vs-reference **`dose_comparison.*`** figure (written by the `accumulate`
+and `stream` stages) can be rendered two ways, selected by `dose_render`:
+
+| `dose_render` | Dose columns | Look |
+|---|---|---|
+| **`image`** (default) | filled `jet` overlay on the CT (`ax.imshow`), alpha-masked above a low threshold | smooth dose wash |
+| **`contour`** | filled **isodose contours** on the CT (`ax.contourf`) at **10 / 30 / 50 / 70 / 90 / 95 / 100 %** of the shared dose peak, with thin **labeled isodose lines** on top | the clinical isodose view |
+
+In **both** modes the difference column (ADoTA − reference) stays an `imshow`
+heatmap, the shared colorbar reflects the dose scale (the isodose levels in
+`contour` mode), and the three orthogonal views + integrated-depth-dose profile are
+unchanged. The `.png` / `.pdf` / `.svg` triple and the `dose_comparison_caption.txt`
+sidecar are produced identically (the caption text adapts to the chosen style). Only
+the dose-comparison figure is affected — DVH and gamma figures are unchanged.
+
+Isodose contours are common in clinical review, so `contour` gives a familiar
+read of target coverage and high-/low-dose spill. Enable it:
+
+```bash
+# config: set `dose_render: contour`   — or override on the CLI:
+uv run python scripts/run_plan_opentps.py --config scripts/config_run_plan_opentps.yaml \
+    --plan-dir "$PLAN_DIR" --stages stream --dose-render contour --overwrite
+```
+
+`dose_render` and `grid_factor` are independent and can be combined freely (e.g.
+`--grid-factor 2 --dose-render contour`).
+
+---
+
 ## Stage reference (`stages:`)
 
 Run any comma-separated subset, in order:
