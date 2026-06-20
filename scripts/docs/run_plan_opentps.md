@@ -184,6 +184,7 @@ to your own locations.**
 | `extraction_workers` | `0` | Thread count when parallel (`0` = auto, `min(32, os.cpu_count())`) |
 | `batch_size` | `56` | Spots per GPU forward pass (inference / stream) |
 | **`grid_factor`** | **`1`** | **Field-level resampling: `1` = 1 mm per-beamlet (byte-identical); `2` = 2 mm field grid (see above). Applies to stream and staged.** |
+| `dose_render` | `image` | Dose-comparison figure style: `image` (filled jet overlay) or `contour` (clinical filled isodose contours at 10/30/50/70/90/95/100 % of peak + labeled lines; the difference panel stays a heatmap) |
 | `dose_source` | `null` | `prediction` (model dose) or `flux` (stand-in); auto-selected when `infer` ran |
 | `dose_calibration_enabled` / `dose_calibration_factor` | `false` / `1.029` | Optional multiplicative dose calibration at accumulation (off by default) |
 | `gamma_criteria` | 5 criteria | List of `[dose%, distance_mm, dose_cutoff%]` for the gamma stage |
@@ -205,6 +206,7 @@ CLI flags override the YAML values.
 | `--device-index` | CUDA device index (`-1` = CPU) |
 | `--stages` | Comma-separated stages (e.g. `stream,gamma`) |
 | `--grid-factor` | `1` (1 mm per-beamlet) or `2` (2 mm field grid) |
+| `--dose-render` | `image` (filled overlay) or `contour` (clinical isodose contours) |
 | `--n-spots` / `--beams` | Subset controls |
 | `--overwrite` / `--no-overlays` / `--verbose` | Flags |
 | `--help` | Full help |

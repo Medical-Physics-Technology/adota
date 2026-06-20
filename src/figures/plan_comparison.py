@@ -86,6 +86,30 @@ def _overlay(ax, ct_slice, dose_slice, vmax, threshold):
     )
 
 
+def _overlay_contour(ax, ct_slice, dose_slice, vmax, levels_frac, label_lines):
+    """Draw a CT grayscale slice with filled isodose contours (clinical view).
+
+    The dose is shown as translucent ``contourf`` bands at ``levels_frac``
+    fractions of the shared dose peak over the CT (origin matches the ``imshow``
+    CT so the two align), optionally with thin labeled isodose lines on top.
+    Returns the filled ``QuadContourSet`` so it can drive the shared colorbar.
+    """
+    ax.imshow(ct_slice, cmap="gray", origin="lower", aspect="auto")
+    levels = [f * vmax for f in levels_frac]
+    # extend="max" keeps the level set identical across panels (shared colorbar);
+    # values above the top isodose fall into the over-range colour.
+    cf = ax.contourf(dose_slice, levels=levels, cmap="jet", alpha=0.6, extend="max")
+    if label_lines:
+        smax = float(dose_slice.max())
+        line_levels = [lv for lv in levels if 0.0 < lv < smax]
+        if line_levels:
+            cl = ax.contour(
+                dose_slice, levels=line_levels, colors="k", linewidths=0.5, alpha=0.7
+            )
+            ax.clabel(cl, fmt=lambda x: f"{x / vmax * 100:.0f}%", fontsize=7, inline=True)
+    return cf
+
+
 def plan_dose_comparison(
     ct: np.ndarray,
     dose_a: np.ndarray,
@@ -100,6 +124,9 @@ def plan_dose_comparison(
     diff_clip_pct: float = 20.0,
     dpi: int = 300,
     write_caption: bool = True,
+    dose_render: str = "image",
+    isodose_levels_pct: Tuple[float, ...] = (10.0, 30.0, 50.0, 70.0, 90.0, 95.0, 100.0),
+    isodose_labels: bool = True,
 ) -> list[Path]:
     """Compare two plan dose maps on the CT (axial/coronal/sagittal + profile).
 
@@ -120,15 +147,29 @@ def plan_dose_comparison(
             difference colorbar.
         dpi: Output resolution.
         write_caption: Write a ``*_caption.txt`` sidecar with the proposed caption.
+        dose_render: How to render the two dose columns. ``"image"`` (default) draws
+            the alpha-masked filled dose overlay; ``"contour"`` draws filled isodose
+            contours (``contourf``) at ``isodose_levels_pct`` of the shared peak --
+            the clinical isodose view. The difference column stays an ``imshow``
+            heatmap in both modes.
+        isodose_levels_pct: Isodose levels as percentages of the shared dose peak
+            (used only when ``dose_render="contour"``).
+        isodose_labels: Overlay thin labeled isodose lines on the filled contours
+            (``dose_render="contour"`` only).
 
     Returns:
         The written paths (figures, then the caption file if written).
     """
+    if dose_render not in ("image", "contour"):
+        raise ValueError(
+            f"dose_render must be 'image' or 'contour', got {dose_render!r}."
+        )
     if not (ct.shape == dose_a.shape == dose_b.shape):
         raise ValueError(
             f"ct/dose_a/dose_b must share shape, got {ct.shape}, "
             f"{dose_a.shape}, {dose_b.shape}."
         )
+    levels_frac = sorted(p / 100.0 for p in isodose_levels_pct)
 
     n_z, n_y, n_x = ct.shape
     zc, yc, xc = (
@@ -162,17 +203,22 @@ def plan_dose_comparison(
     fig = plt.figure(layout="constrained", figsize=(17, 16), dpi=dpi)
     ax = fig.subplot_mosaic(mosaic, width_ratios=width_ratios, height_ratios=height_ratios)
 
+    def _draw_dose(axx, ct_s, d_s):
+        if dose_render == "contour":
+            return _overlay_contour(axx, ct_s, d_s, vmax, levels_frac, isodose_labels)
+        return _overlay(axx, ct_s, d_s, vmax, dose_threshold)
+
     dose_im = None
     diff_im = None
     for i, ((name, slicer), (ka, kb, kd)) in enumerate(zip(rows, keys)):
         bottom = i == len(rows) - 1
         ct_s, a_s, b_s = slicer(ct_w), slicer(dose_a), slicer(dose_b)
 
-        dose_im = _overlay(ax[ka], ct_s, a_s, vmax, dose_threshold)
+        dose_im = _draw_dose(ax[ka], ct_s, a_s)
         _style_panel(ax[ka], grid, "white", xlabels=bottom, ylabels=True)
         ax[ka].set_ylabel(name, fontsize=15, weight="bold")
 
-        _overlay(ax[kb], ct_s, b_s, vmax, dose_threshold)
+        _draw_dose(ax[kb], ct_s, b_s)
         _style_panel(ax[kb], grid, "white", xlabels=bottom, ylabels=False)
 
         diff_pct = (a_s - b_s) / ref_peak * 100.0
@@ -216,12 +262,22 @@ def plan_dose_comparison(
     plt.close(fig)
 
     if write_caption:
+        if dose_render == "contour":
+            lv = ", ".join(f"{int(round(p))}" for p in sorted(isodose_levels_pct))
+            dose_desc = (
+                f"shown as filled isodose contours at {lv}% of the shared peak "
+                f"({dose_unit}); the difference is given"
+            )
+        else:
+            dose_desc = (
+                f"shown in {dose_unit} on a shared colour scale; the difference is given"
+            )
         caption = (
             f"Comparison of the {labels[0]}-predicted plan dose against the "
             f"{labels[1]} reference. Columns: {labels[0]}, {labels[1]} and their "
             f"difference ({labels[0]} - {labels[1]}). Rows: axial, coronal and "
             f"sagittal slices through voxel (z, y, x) = ({zc}, {yc}, {xc}). Dose is "
-            f"shown in {dose_unit} on a shared colour scale; the difference is given "
+            f"{dose_desc} "
             f"as a percentage of the {labels[1]} peak dose. Bottom: integrated depth "
             f"dose along x (lateral sum over z and y), normalised to the {labels[1]} "
             f"peak. Quantitative agreement over voxels above "

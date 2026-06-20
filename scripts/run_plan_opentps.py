@@ -400,6 +400,11 @@ def main(
                           "accumulate and stream stages (1 = 1mm per-beamlet; "
                           "2 = 2mm field grid)."),
     ] = None,
+    dose_render: Annotated[
+        Optional[str],
+        typer.Option(help="Dose-comparison figure style: 'image' (filled overlay, "
+                          "default) or 'contour' (clinical filled isodose lines)."),
+    ] = None,
 ) -> None:
     """Main CLI entry point for the ADoTA plan pipeline.
 
@@ -443,6 +448,14 @@ def main(
         no_overlays if no_overlays is not None else yaml_config.get("no_overlays", False)
     )
     verbose = verbose if verbose is not None else yaml_config.get("verbose", False)
+    dose_render = (
+        dose_render if dose_render is not None
+        else yaml_config.get("dose_render", "image")
+    )
+    if dose_render not in ("image", "contour"):
+        raise typer.BadParameter(
+            f"dose_render must be 'image' or 'contour', got {dose_render!r}"
+        )
 
     # Parse the stage / beam lists.
     stage_list = [s.strip() for s in str(stages_raw).split(",") if s.strip()]
@@ -601,7 +614,9 @@ def main(
             plan_directory, beamlets_dir, dose_path, accumulation_config
         )
         # Auto-generate the ADoTA vs MCsquare comparison + DVH figures.
-        figure_s = _generate_comparison_figures(plan_directory, plan_dir, dose_path)
+        figure_s = _generate_comparison_figures(
+            plan_directory, plan_dir, dose_path, dose_render=dose_render
+        )
 
     # --- Stage: stream (fused, disk-free alternative to extract+infer+accumulate) -
     if "stream" in stage_list:
@@ -637,7 +652,9 @@ def main(
             plan_directory, model, device, dose_path, streaming_config
         )
         # Same comparison + DVH figures as the accumulate stage (quality investigation).
-        figure_s = _generate_comparison_figures(plan_directory, plan_dir, dose_path)
+        figure_s = _generate_comparison_figures(
+            plan_directory, plan_dir, dose_path, dose_render=dose_render
+        )
 
     remaining = [
         s
@@ -680,13 +697,17 @@ def main(
     logger.info("Done.")
 
 
-def _generate_comparison_figures(plan_directory, plan_dir: Path, dose_path: Path) -> float:
+def _generate_comparison_figures(
+    plan_directory, plan_dir: Path, dose_path: Path, dose_render: str = "image"
+) -> float:
     """Generate the ADoTA vs MCsquare dose-comparison + DVH figures/metrics.
 
     Reads the just-written ``Dose_ADoTA.mhd`` and the MC ``Dose.mhd`` (both in Gy),
     writes ``dose_comparison.*``, ``dvh_comparison.*`` and ``dvh_metrics.json`` next
     to the plan, and returns the seconds spent. Shared by the ``accumulate`` and
     ``stream`` stages so both produce the same quality-investigation figures.
+    ``dose_render`` (``"image"`` or ``"contour"``) selects the dose-panel style of
+    the comparison figure (filled overlay vs clinical filled-isodose contours).
     """
     if plan_directory.mc_dose_path is None:
         logger.warning("No MC Dose.mhd in the plan dir; skipping comparison figure.")
@@ -707,6 +728,7 @@ def _generate_comparison_figures(plan_directory, plan_dir: Path, dose_path: Path
         str(plan_dir / "dose_comparison"),
         labels=("ADoTA", "MCsquare"),
         dose_unit="Gy",
+        dose_render=dose_render,
     )
     for fig_path in fig_paths:
         logger.info("  comparison figure: %s", fig_path)

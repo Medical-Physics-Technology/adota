@@ -51,7 +51,7 @@ max_control_points: 10000
 #             the same Dose_ADoTA.mhd + comparison/DVH figures. Use e.g.
 #             `stages: stream,gamma`. The staged path stays available for research.
 # ("compare" against the MC Dose.mhd is a later stage.)
-stages: extract,infer,accumulate # ,gamma
+stages: stream # extract,infer,accumulate # ,gamma
 
 # Subset controls for cheap runs (null = all).
 # n_spots: extract only the first N spots (global order).
@@ -88,13 +88,20 @@ batch_size: 120
 # vs the 1mm path on LUNG1-221). Surfaced as a distinct mode ("Nmm field") in
 # pipeline_timing.json. Validated per-plan before adoption (see the grid_factor
 # A/B harness); leave at 1 unless explicitly running the 2mm comparison.
-grid_factor: 1
+grid_factor: 2
 
 # Accumulation: which per-spot array to deposit as "dose".
 # Leave null to auto-select: "prediction" (the ADoTA model output) when the
 # infer stage runs, otherwise "flux" (the constructed flux projection stand-in).
 # Set explicitly to "flux" or "prediction" to force.
 dose_source: null
+
+# Dose-comparison figure style (dose_comparison.*). "image" (default) renders each
+# dose column as the filled jet overlay on the CT (ax.imshow). "contour" renders
+# them as clinical filled isodose contours (ax.contourf) at 10/30/50/70/90/95/100%
+# of the shared peak, with labeled isodose lines on top. The difference column stays
+# an imshow heatmap in both modes. Affects the accumulate and stream stages.
+dose_render: contour
 
 # Dose calibration (optional). The model systematically under-predicts each
 # beamlet's integral by ~2.8% (measured on held-out beamlets, std <1%), which
