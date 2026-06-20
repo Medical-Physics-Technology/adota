@@ -5,7 +5,15 @@
 # leaves its Dose_ADoTA.mhd, gamma_metrics.json, pipeline_timing.json and the
 # gamma figure in place.
 #
-# Each plan's full stdout/stderr is written to run_logs/<PlanName>.out.
+# GRID_FACTOR, PRECISION and DOSE_RENDER are configured below and passed through to
+# run_plan_opentps.py; all three are reflected in the per-plan log name so different
+# settings do not overwrite each other's logs.
+#   PRECISION=fp32     -> full-precision forward (reference)
+#   PRECISION=fp16     -> CUDA autocast forward (faster; validate the dose vs MC)
+#   DOSE_RENDER=image  -> filled jet overlay on the CT (dose_comparison figure)
+#   DOSE_RENDER=contour-> clinical filled isodose contours + labeled lines
+#
+# Each plan's full stdout/stderr is written to run_logs/<PlanName>_<settings>.out.
 # Run detached:
 #   nohup bash scripts/run_all_plans.sh > run_logs/run_all_plans.out 2>&1 &
 #
@@ -15,8 +23,11 @@ set -u
 PROJECT_ROOT="/home/mstryja/projects/adota"
 PY="${PROJECT_ROOT}/.venv/bin/python"
 CONFIG="scripts/config_run_plan_opentps.yaml"
-STAGES="stream,gamma"
+STAGES="stream"
 GRID_FACTOR=2
+PRECISION=fp16          # fp32 | fp16  (forward-pass precision for the stream stage)
+DOSE_RENDER=image       # image | contour  (dose_comparison figure style: filled
+                        # overlay vs clinical filled isodose contours)
 LOG_DIR="${PROJECT_ROOT}/run_logs"
 
 PLANS=(
@@ -39,14 +50,16 @@ mkdir -p "${LOG_DIR}"
 
 for P in "${PLANS[@]}"; do
   PLAN_NAME="$(basename "${P}")"
-  LOG="${LOG_DIR}/${PLAN_NAME}_field_level_${GRID_FACTOR}.out"
-  echo "[$(date '+%F %T')] START ${PLAN_NAME} (stream gf=${GRID_FACTOR}) -> ${LOG}"
+  LOG="${LOG_DIR}/${PLAN_NAME}_field_level_${GRID_FACTOR}_${PRECISION}_${DOSE_RENDER}.out"
+  echo "[$(date '+%F %T')] START ${PLAN_NAME} (stream gf=${GRID_FACTOR} ${PRECISION} ${DOSE_RENDER}) -> ${LOG}"
 
   "${PY}" scripts/run_plan_opentps.py \
     --config "${CONFIG}" \
     --plan-dir "${P}" \
     --stages "${STAGES}" \
     --grid-factor "${GRID_FACTOR}" \
+    --precision "${PRECISION}" \
+    --dose-render "${DOSE_RENDER}" \
     --overwrite \
     > "${LOG}" 2>&1
   STATUS=$?

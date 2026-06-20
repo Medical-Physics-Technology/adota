@@ -23,6 +23,7 @@ Usage:
 For detailed usage, see the ./scripts/README.md and the --help output.
 """
 
+import gc
 import json
 import logging
 import sys
@@ -32,6 +33,7 @@ from typing import Annotated, Optional
 
 import pydicom
 import SimpleITK as sitk
+import torch
 import typer
 
 # Add the project root to the path for imports.
@@ -240,26 +242,16 @@ def _merge_timing_report(existing: dict, new: dict) -> dict:
 
 
 def _format_timing_report(report: dict) -> str:
-    """Render the timing report as an auto-aligned table (via ``rich``).
+    """Render the timing report as a content-sized table (via ``prettytable``).
 
-    One table, grouped into per-stage sections (``Stage`` header row + indented
-    ``Step`` sub-rows). ``rich`` sizes the columns to the content, so adding or
-    renaming a row never needs manual width tuning.
+    One table grouped into per-stage sections (a ``Stage`` header row + indented
+    ``Step`` sub-rows, separated by a divider). PrettyTable sizes every column to
+    its content, so the full label/notes are always shown (never truncated) and
+    adding or renaming a row needs no manual width tuning.
     """
-    from io import StringIO
-
-    from rich import box
-    from rich.console import Console
-    from rich.table import Table
+    from prettytable import PrettyTable
 
     stages = report["stages"]
-    table = Table(title="TIMING SUMMARY", box=box.SIMPLE_HEAD, title_style="bold",
-                  pad_edge=False)
-    table.add_column("Stage", no_wrap=True, style="bold")
-    table.add_column("Step", no_wrap=True)
-    table.add_column("Total [s]", justify="right", no_wrap=True)
-    table.add_column("ms/beamlet", justify="right", no_wrap=True)
-    table.add_column("Notes", no_wrap=True)
 
     def fs(v: float) -> str:
         return f"{float(v):.2f}"
@@ -268,16 +260,14 @@ def _format_timing_report(report: dict) -> str:
         v = step.get("ms_per_beamlet")
         return f"{float(v):.3f}" if v is not None else ""
 
-    def header(name: str, st: dict, notes: str) -> None:
-        table.add_section()
-        table.add_row(name, "", fs(st["total_s"]), fms(st), notes)
+    # Build the report section by section; each section is a list of 5-column rows.
+    sections = []
 
-    def sub(label: str, step: dict) -> None:
-        table.add_row("", label, fs(step["total_s"]), fms(step), "")
-
+    pre = []
     if "model_load" in stages:
-        table.add_row("model load", "", fs(stages["model_load"]["total_s"]), "", "")
-    table.add_row("plan load", "", fs(stages["plan_load"]["total_s"]), "", "")
+        pre.append(["model load", "", fs(stages["model_load"]["total_s"]), "", ""])
+    pre.append(["plan load", "", fs(stages["plan_load"]["total_s"]), "", ""])
+    sections.append(pre)
 
     st = stages.get("streaming")
     if st:
@@ -286,8 +276,8 @@ def _format_timing_report(report: dict) -> str:
         mode = "1mm" if gf == 1 else f"{gf}mm field"
         if st.get("precision", "fp32") == "fp16":
             mode += ", fp16"
-        header(f"Streaming ({mode})", st,
-               f"{st['n_spots']} spots, {st['n_fields']} fields, no disk")
+        sec = [[f"Streaming ({mode})", "", fs(st["total_s"]), fms(st),
+                f"{st['n_spots']} spots, {st['n_fields']} fields, no disk"]]
         prep_lbl = "input prep (downsample)" if gf == 1 else "input prep (no resize)"
         post_lbl = "postprocess (upsample)" if gf == 1 else "postprocess (no resize)"
         for label, key in (
@@ -298,7 +288,8 @@ def _format_timing_report(report: dict) -> str:
             ("write Dose_ADoTA.mhd", "write"),
         ):
             if key in s:
-                sub(label, s[key])
+                sec.append(["", label, fs(s[key]["total_s"]), fms(s[key]), ""])
+        sections.append(sec)
 
     ex = stages.get("extraction")
     if ex:
@@ -307,47 +298,63 @@ def _format_timing_report(report: dict) -> str:
         notes = f"{ex['n_spots']} spots, {emode}"
         if ex.get("parallel"):
             notes += " (sub-steps overlap; real wall-time)"
-        header("Extraction", ex, notes)
-        sub("rotation (per field)", s["rotation"])
-        sub("CT cropping", s["ct_cropping"])
-        sub("flux projection", s["flux_projection"])
-        sub("save beamlets to disk", s["save_beamlets"])
+        sec = [["Extraction", "", fs(ex["total_s"]), fms(ex), notes]]
+        for label, key in (
+            ("rotation (per field)", "rotation"), ("CT cropping", "ct_cropping"),
+            ("flux projection", "flux_projection"), ("save beamlets to disk", "save_beamlets"),
+        ):
+            sec.append(["", label, fs(s[key]["total_s"]), fms(s[key]), ""])
+        sections.append(sec)
 
     inf = stages.get("inference")
     if inf:
         s = inf["steps"]
-        header("ADoTA inference", inf,
-               f"{inf['n_spots']} spots, {inf['n_batches']} batches of {inf['batch_size']}")
-        sub("record load (file read)", s["record_load"])
-        sub("downsample (CT -> ADoTA grid)", s["downsample"])
-        sub("ADoTA forward", s["forward"])
-        sub("upsample (ADoTA -> ROI grid)", s["upsample"])
-        sub("save predictions to disk", s["save_write"])
+        sec = [["ADoTA inference", "", fs(inf["total_s"]), fms(inf),
+                f"{inf['n_spots']} spots, {inf['n_batches']} batches of {inf['batch_size']}"]]
+        for label, key in (
+            ("record load (file read)", "record_load"),
+            ("downsample (CT -> ADoTA grid)", "downsample"),
+            ("ADoTA forward", "forward"),
+            ("upsample (ADoTA -> ROI grid)", "upsample"),
+            ("save predictions to disk", "save_write"),
+        ):
+            sec.append(["", label, fs(s[key]["total_s"]), fms(s[key]), ""])
+        sections.append(sec)
 
     ac = stages.get("accumulation")
     if ac:
         s = ac["steps"]
-        header("Dose accumulation", ac, f"{ac['n_fields']} fields")
-        sub("deposit", s["deposit"])
-        sub("de-rotate (per field)", s["derotate"])
+        sec = [["Dose accumulation", "", fs(ac["total_s"]), fms(ac), f"{ac['n_fields']} fields"],
+               ["", "deposit", fs(s["deposit"]["total_s"]), "", ""],
+               ["", "de-rotate (per field)", fs(s["derotate"]["total_s"]), "", ""]]
         if "write" in s:
-            sub("write Dose_ADoTA.mhd", s["write"])
+            sec.append(["", "write Dose_ADoTA.mhd", fs(s["write"]["total_s"]), "", ""])
+        sections.append(sec)
 
     if "comparison_figures" in stages:
-        table.add_section()
-        table.add_row("comparison figure", "",
-                      fs(stages["comparison_figures"]["total_s"]), "", "")
+        sections.append([["comparison figure", "",
+                           fs(stages["comparison_figures"]["total_s"]), "", ""]])
 
-    table.add_section()
-    table.add_row("TOTAL", "", fs(report["total_s"]), "", "")
+    total = [["TOTAL", "", fs(report["total_s"]), "", ""]]
     if "aggregate_total_s" in report:
-        table.add_row("TOTAL (all runs)", "", fs(report["aggregate_total_s"]), "", "")
+        total.append(["TOTAL (all runs)", "", fs(report["aggregate_total_s"]), "", ""])
+    sections.append(total)
 
-    # Wide enough that rich never truncates a column to fit; the table itself only
-    # spans its content (expand=False default), so lines stay as short as possible.
-    console = Console(file=StringIO(), width=140)
-    console.print(table)
-    return console.file.getvalue()
+    table = PrettyTable()
+    table.field_names = ["Stage", "Step", "Total [s]", "ms/beamlet", "Notes"]
+    table.align["Stage"] = "l"
+    table.align["Step"] = "l"
+    table.align["Total [s]"] = "r"
+    table.align["ms/beamlet"] = "r"
+    table.align["Notes"] = "l"
+    # Divider after the last row of each section (except the final one) to keep the
+    # per-stage grouping visible.
+    for si, sec in enumerate(sections):
+        for ri, row in enumerate(sec):
+            divider = (ri == len(sec) - 1) and (si != len(sections) - 1)
+            table.add_row(row, divider=divider)
+
+    return "TIMING SUMMARY\n" + table.get_string()
 
 
 @app.command()
@@ -684,6 +691,23 @@ def main(
     ]
     if remaining:
         logger.info("Stages not yet implemented, skipped: %s", remaining)
+
+    # The dose is reconstructed: all GPU work (extract/infer/accumulate/stream) is
+    # done. Release the model and the CUDA caching-allocator pool now, so the
+    # process stops holding GPU memory through the CPU-bound timing report, figures
+    # and the gamma stage that follow.
+    if model is not None and device.type == "cuda":
+        del model
+        model = None
+        gc.collect()
+        # cuBLAS keeps large per-handle workspaces that empty_cache() does not free;
+        # clear them too so the GPU pool is fully released. No GPU work runs after
+        # this (gamma + figures are CPU), so it is safe. Private API -> guarded.
+        clear_cublas = getattr(torch._C, "_cuda_clearCublasWorkspaces", None)
+        if clear_cublas is not None:
+            clear_cublas()
+        torch.cuda.empty_cache()
+        logger.info("Released model + CUDA cache after dose reconstruction.")
 
     timing_report = _build_timing_report(
         total_s=perf_counter() - pipeline_start,

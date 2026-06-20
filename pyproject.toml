@@ -20,6 +20,7 @@ dependencies = [
     "transformers>=4.45.0",
     "accelerate>=0.34.0",
     "typer>=0.21.1",
+    "prettytable>=3.16.0",
 ]
 
 # Development-only tooling (test framework, linter). Not installed for plain
