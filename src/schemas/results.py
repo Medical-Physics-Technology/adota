@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import torch
+
+if TYPE_CHECKING:
+    import numpy as np
+
+    from src.metrics.range_metrics import RangeMetrics
 
 
 # ── Model evaluation results ────────────────────────────────────────────────
@@ -55,6 +60,34 @@ class H5EvaluationResult:
     prediction: Optional[torch.Tensor] = field(default=None, repr=False)
     ground_truth: Optional[torch.Tensor] = field(default=None, repr=False)
     input_data: Optional[torch.Tensor] = field(default=None, repr=False)
+
+
+# ── Range-fidelity results ──────────────────────────────────────────────────
+
+
+@dataclass
+class RangeRecord:
+    """Beamlet-level range metrics for the MC ground truth vs the ADoTA prediction.
+
+    Produced by ``scripts/range_analysis.py``. ``mc`` / ``pred`` hold the
+    per-distribution :class:`~src.metrics.range_metrics.RangeMetrics`, while
+    ``deltas`` holds the signed (prediction - MC) differences in mm
+    (``r80_delta_mm`` is the clinical range error, ``dfw_delta_mm`` the distal
+    fall-off width mismatch).
+    """
+
+    sample_id: str
+    energy_mev: float
+    beamlet_angles: tuple
+    anatomical_site: str
+    mc: "RangeMetrics"
+    pred: "RangeMetrics"
+    deltas: dict
+    calc_time: float
+    dz_mm: float = 2.0
+    # Lateral-integrated depth-dose curves, kept for diagnostic overlay figures.
+    mc_idd: Optional["np.ndarray"] = field(default=None, repr=False)
+    pred_idd: Optional["np.ndarray"] = field(default=None, repr=False)
 
 
 # ── Texture-with-inference results ──────────────────────────────────────────

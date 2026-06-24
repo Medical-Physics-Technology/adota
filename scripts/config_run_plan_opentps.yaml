@@ -6,13 +6,16 @@
 # Usage:
 #   uv run python scripts/run_plan_opentps.py --config scripts/config_run_plan_opentps.yaml
 #
+# To run detached: 
+#   nohup uv run python scripts/run_plan_opentps.py --config scripts/config_run_plan_opentps.yaml > run_logs/<experiment_name>.log 2>&1 &
+# 
 # A copy of this file is saved in the run directory for reproducibility.
 
 # --- Required ---
 
 # OpenTPS plan directory: CT.mhd, PlanPencil.txt, bdl.txt, config.txt,
 # structure masks (target.mhd / OAR_*.mhd), and the MC reference Dose.mhd.
-plan_dir: /scratch/mstryja/opentps_plans/Prostate-AEC-004_Prostate-AEC-004_1e9Primaries_per_beam
+plan_dir: /scratch/mstryja/opentps_plans/LUNG1-364_Publication_Plan_5
 
 # Model directory name under models/.
 model_name: DoTA_v3_grid_search_v11
@@ -51,7 +54,7 @@ max_control_points: 10000
 #             the same Dose_ADoTA.mhd + comparison/DVH figures. Use e.g.
 #             `stages: stream,gamma`. The staged path stays available for research.
 # ("compare" against the MC Dose.mhd is a later stage.)
-stages: stream # extract,infer,accumulate # ,gamma
+stages: gamma # extract,infer,accumulate # ,gamma
 
 # Subset controls for cheap runs (null = all).
 # n_spots: extract only the first N spots (global order).
@@ -95,7 +98,7 @@ grid_factor: 2
 # is cast back to fp32 before deposit, so accumulation is unchanged) -- a large
 # speed-up on the GPU forward. fp16 is a no-op on CPU. Validate the dose (gamma vs
 # MC) before adopting; benchmark showed ~2.6x on the forward at ~0.3% max-rel.
-precision: fp32
+precision: fp16
 
 # Accumulation: which per-spot array to deposit as "dose".
 # Leave null to auto-select: "prediction" (the ADoTA model output) when the

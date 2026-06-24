@@ -3,9 +3,10 @@
 Renders two full-grid dose maps (e.g. the accumulated ``Dose_ADoTA.mhd`` and the
 MCsquare ``Dose.mhd``) on the CT in three orthogonal views plus a depth profile.
 Layout is a :func:`matplotlib.pyplot.subplot_mosaic` grid with **dedicated
-colorbar cells** so the two global colorbars (a shared dose scale and a
-percentage difference scale) are cleanly placed and aligned. The dose panels
-share one scale; the difference is shown as a percentage of the reference peak.
+colorbar cells** so the two global colorbars (a shared dose scale and an absolute
+difference scale) are cleanly placed and aligned. The dose panels share one scale;
+the difference is shown in absolute dose (e.g. Gy) on a symmetric, data-driven
+colour scale (a robust percentile of the difference, so it adapts to the plan).
 
 The figure carries no metric text; a sidecar ``*_caption.txt`` with the proposed
 caption (including the quantitative agreement) is written next to it. Reuses the
@@ -121,7 +122,7 @@ def plan_dose_comparison(
     dose_threshold: float = 0.05,
     dose_unit: str = "Gy",
     grid: bool = True,
-    diff_clip_pct: float = 20.0,
+    diff_percentile: float = 99.0,
     dpi: int = 300,
     write_caption: bool = True,
     dose_render: str = "image",
@@ -143,8 +144,10 @@ def plan_dose_comparison(
             transparent.
         dose_unit: Unit label for the dose colorbar (doses are expected pre-scaled).
         grid: Show shared ticks + grid on the image panels.
-        diff_clip_pct: Symmetric clip (percent of reference peak) for the
-            difference colorbar.
+        diff_percentile: Symmetric colour limit for the difference panel, taken as
+            this percentile of ``|dose_a - dose_b|`` over the high-dose region, so a
+            single outlier voxel at a gradient edge cannot blow out the scale
+            (``100`` = the literal max). Shown in ``dose_unit``, centred on 0.
         dpi: Output resolution.
         write_caption: Write a ``*_caption.txt`` sidecar with the proposed caption.
         dose_render: How to render the two dose columns. ``"image"`` (default) draws
@@ -181,6 +184,19 @@ def plan_dose_comparison(
     vmax = max(float(dose_a.max()), float(dose_b.max()), 1e-12)
     ref_peak = max(float(dose_b.max()), 1e-30)
     metrics = dose_comparison_metrics(dose_a, dose_b, threshold=max(dose_threshold, 0.1))
+
+    # Symmetric, data-driven colour limit for the difference panels: the
+    # ``diff_percentile`` of |a - b| over the high-dose region. Robust to single-
+    # voxel outliers at gradient edges, symmetric about 0 (white = perfect
+    # agreement), and small when ADoTA agrees well -- so the colorbar's own scale
+    # communicates the level of agreement.
+    _diff = dose_a - dose_b
+    _hi = dose_b > metrics["threshold"] * ref_peak
+    diff_lim = max(
+        float(np.percentile(np.abs(_diff[_hi]), diff_percentile))
+        if _hi.any() else float(np.abs(_diff).max()),
+        1e-9,
+    )
 
     # One row per orthogonal view: (name, slicer, grid colour for the diff panel).
     rows = [
@@ -221,10 +237,10 @@ def plan_dose_comparison(
         _draw_dose(ax[kb], ct_s, b_s)
         _style_panel(ax[kb], grid, "white", xlabels=bottom, ylabels=False)
 
-        diff_pct = (a_s - b_s) / ref_peak * 100.0
+        diff_gy = a_s - b_s
         diff_im = ax[kd].imshow(
-            diff_pct, cmap="seismic", origin="lower", aspect="auto",
-            vmin=-diff_clip_pct, vmax=diff_clip_pct,
+            diff_gy, cmap="seismic", origin="lower", aspect="auto",
+            vmin=-diff_lim, vmax=diff_lim,
         )
         _style_panel(ax[kd], grid, "0.4", xlabels=bottom, ylabels=False)
 
@@ -236,7 +252,8 @@ def plan_dose_comparison(
     cb_dose.set_label(f"Dose [{dose_unit}]", fontsize=15)
     cb_dose.ax.tick_params(labelsize=11)
     cb_diff = fig.colorbar(diff_im, cax=ax["cdiff"])
-    cb_diff.set_label(f"{labels[0]} - {labels[1]} [% of {labels[1]} peak]", fontsize=14)
+    # cb_diff.set_label(f"{labels[0]} - {labels[1]} [% of {labels[1]} peak]", fontsize=14)
+    cb_diff.set_label(f"{labels[0]} - {labels[1]} [Gy]", fontsize=14)
     cb_diff.ax.tick_params(labelsize=11)
 
     # Integrated depth dose along x, normalized to the reference (dose_b) peak.
@@ -278,7 +295,10 @@ def plan_dose_comparison(
             f"difference ({labels[0]} - {labels[1]}). Rows: axial, coronal and "
             f"sagittal slices through voxel (z, y, x) = ({zc}, {yc}, {xc}). Dose is "
             f"{dose_desc} "
-            f"as a percentage of the {labels[1]} peak dose. Bottom: integrated depth "
+            f"in {dose_unit} on a symmetric colour scale clipped at "
+            f"+/-{diff_lim:.3f} {dose_unit} (the {int(round(diff_percentile))}th "
+            f"percentile of |{labels[0]} - {labels[1]}| over the high-dose region). "
+            f"Bottom: integrated depth "
             f"dose along x (lateral sum over z and y), normalised to the {labels[1]} "
             f"peak. Quantitative agreement over voxels above "
             f"{int(metrics['threshold'] * 100)}% of the peak dose: peak ratio "

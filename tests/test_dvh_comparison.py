@@ -56,9 +56,9 @@ def test_metrics_are_structure_type_dependent() -> None:
     target = report["structures"]["target"]
     oar = report["structures"]["OAR_1"]
     assert target["type"] == "target" and oar["type"] == "OAR"
-    # Target carries D95/D98; OARs do not.
-    assert set(target["ADoTA"]) == {"Dmin", "Dmean", "Dmax", "D95", "D98"}
-    assert set(oar["ADoTA"]) == {"Dmin", "Dmean", "Dmax"}
+    # Target carries D95/D98; OARs do not. Both carry D2 (near-max hot-spot).
+    assert set(target["ADoTA"]) == {"Dmin", "Dmean", "Dmax", "D2", "D95", "D98"}
+    assert set(oar["ADoTA"]) == {"Dmin", "Dmean", "Dmax", "D2"}
     # Difference = ADoTA - MCsquare.
     assert target["difference"]["Dmax"] == round(57.0 - 60.0, 4)
 

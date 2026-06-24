@@ -6,8 +6,8 @@ Two outputs, kept separate:
   structures by colour, the two doses by line style (solid = ADoTA, dashed =
   MCsquare).
 * :func:`write_dvh_metrics_json` -- a per-plan ``dvh_metrics.json`` with
-  **structure-type-dependent** clinical metrics (target: Dmin/Dmean/Dmax/D95/D98;
-  OARs: Dmin/Dmean/Dmax) for both doses plus their difference, with embedded
+  **structure-type-dependent** clinical metrics (target: Dmin/Dmean/Dmax/D2/D95/D98;
+  OARs: Dmin/Dmean/Dmax/D2) for both doses plus their difference, with embedded
   descriptions and units.
 """
 
@@ -37,13 +37,18 @@ __all__ = [
 _PALETTE = ["tab:blue", "tab:red", "tab:green", "tab:orange", "tab:purple", "tab:brown"]
 
 # Clinically meaningful metrics per structure type.
-_TARGET_METRICS = ("Dmin", "Dmean", "Dmax", "D95", "D98")
-_OAR_METRICS = ("Dmin", "Dmean", "Dmax")
+_TARGET_METRICS = ("Dmin", "Dmean", "Dmax", "D2", "D95", "D98")
+_OAR_METRICS = ("Dmin", "Dmean", "Dmax", "D2")
 
 _METRIC_DEFINITIONS = {
     "Dmin": "Minimum dose in the structure (Gy).",
     "Dmean": "Mean dose in the structure (Gy).",
     "Dmax": "Maximum dose in the structure (Gy).",
+    "D2": (
+        "Near-maximum dose: the dose received by the hottest 2% of the structure "
+        "volume (Gy). A robust surrogate for Dmax (far less single-voxel noise) and "
+        "the standard hot-spot / high-dose indicator for both targets and OARs."
+    ),
     "D95": (
         "Dose covering at least 95% of the target volume (Gy); a minimum-coverage "
         "indicator, commonly required to be 90-95% of the prescribed dose."
@@ -114,8 +119,8 @@ def dvh_metrics(
 ) -> dict:
     """Build the structure-type-dependent DVH metrics report (dict).
 
-    Target structures report ``Dmin/Dmean/Dmax/D95/D98``; OARs report
-    ``Dmin/Dmean/Dmax``. Each structure carries both doses and their difference
+    Target structures report ``Dmin/Dmean/Dmax/D2/D95/D98``; OARs report
+    ``Dmin/Dmean/Dmax/D2``. Each structure carries both doses and their difference
     (``labels[0] - labels[1]``).
 
     Returns:

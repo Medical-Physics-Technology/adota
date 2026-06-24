@@ -1,0 +1,50 @@
+# ============================================================
+# Beamlet-Level Range-Fidelity Analysis (MC vs ADoTA)
+# (range_analysis.py)
+# ============================================================
+#
+# Usage:
+#   uv run python scripts/range_analysis.py \
+#       --config scripts/config_range_analysis.yaml
+#
+# CLI arguments take precedence over values defined here.
+# A copy of this file is saved to the run directory.
+# ============================================================
+
+# ── Model ───────────────────────────────────────────────────
+model_name: DoTA_v3_grid_search_v11
+model_fname: best_model.pth
+device_index: 1
+downsampling_method: interpolation
+
+# ── Test data (directory-based, same layout as run_model.py) ─
+test_data:
+  - label: thoracic CT
+    path: /scratch/mstryja/DoTA_dataset_v2/lung_testset_paper
+  - label: pelvic / abdominal
+    path: /scratch/mstryja/DoTA_dataset_v2/pelvis_abdominal_testset_paper
+
+# ── Range extraction ────────────────────────────────────────
+# Voxel resolution [mm] (depth, height, width); depth is the beam axis.
+resolution: [2.0, 2.0, 2.0]
+
+# Sub-voxel oversampling for the IDD fine grid (dz / oversample).
+oversample: 20
+
+# Beamlets whose MC peak IDD is <= this fraction of their own max are skipped.
+# 0.0 keeps every beamlet with a non-zero peak.
+min_peak_dose_frac: 0.0
+
+# Skip beamlets above this initial energy [MeV].
+max_energy_mev: 250.0
+
+# ── Reporting ───────────────────────────────────────────────
+energy_bins: [70, 100, 130, 160, 190, 220, 250]
+
+# Number of largest-|ΔR80| diagnostic IDD overlays to save (0 disables).
+n_worst_figures: 10
+
+# ── Flags ───────────────────────────────────────────────────
+normalize_flux: true
+no_progress: false
+verbose: false
