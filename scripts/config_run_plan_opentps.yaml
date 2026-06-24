@@ -15,7 +15,7 @@
 
 # OpenTPS plan directory: CT.mhd, PlanPencil.txt, bdl.txt, config.txt,
 # structure masks (target.mhd / OAR_*.mhd), and the MC reference Dose.mhd.
-plan_dir: /scratch/mstryja/opentps_plans/LUNG1-364_Publication_Plan_5
+plan_dir: /scratch/mstryja/opentps_plans/Prostate-AEC-069_Publication_Plan_2
 
 # Model directory name under models/.
 model_name: DoTA_v3_grid_search_v11
@@ -54,7 +54,7 @@ max_control_points: 10000
 #             the same Dose_ADoTA.mhd + comparison/DVH figures. Use e.g.
 #             `stages: stream,gamma`. The staged path stays available for research.
 # ("compare" against the MC Dose.mhd is a later stage.)
-stages: gamma # extract,infer,accumulate # ,gamma
+stages: stream # extract,infer,accumulate # ,gamma
 
 # Subset controls for cheap runs (null = all).
 # n_spots: extract only the first N spots (global order).
@@ -112,6 +112,14 @@ dose_source: null
 # of the shared peak, with labeled isodose lines on top. The difference column stays
 # an imshow heatmap in both modes. Affects the accumulate and stream stages.
 dose_render: contour
+
+# dose_comparison.* colorbars. false (default) -> two colorbars: a shared dose scale
+# (ADoTA + MCsquare) and a separate signed-difference scale auto-zoomed to the error
+# (highlights where the error is). true -> a SINGLE colorbar (the shared dose scale):
+# the difference panel shows the ABSOLUTE error |ADoTA - MCsquare| on that same
+# 0->peak dose scale, so a small error sinks to the bottom of the scale and reads as
+# negligible relative to the dose (the signed numbers stay in the caption).
+single_colorbar: false
 
 # Dose calibration (optional). The model systematically under-predicts each
 # beamlet's integral by ~2.8% (measured on held-out beamlets, std <1%), which

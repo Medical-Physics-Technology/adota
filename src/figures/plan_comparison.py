@@ -128,6 +128,7 @@ def plan_dose_comparison(
     dose_render: str = "image",
     isodose_levels_pct: Tuple[float, ...] = (10.0, 30.0, 50.0, 70.0, 90.0, 95.0, 100.0),
     isodose_labels: bool = True,
+    single_colorbar: bool = False,
 ) -> list[Path]:
     """Compare two plan dose maps on the CT (axial/coronal/sagittal + profile).
 
@@ -159,6 +160,13 @@ def plan_dose_comparison(
             (used only when ``dose_render="contour"``).
         isodose_labels: Overlay thin labeled isodose lines on the filled contours
             (``dose_render="contour"`` only).
+        single_colorbar: When ``True`` a **single** colorbar (the shared dose scale)
+            covers the whole figure: the difference panel shows the **absolute error**
+            ``|dose_a - dose_b|`` on the same 0->peak dose colormap as the dose panels,
+            so a small error sinks to the bottom of the scale and reads as negligible
+            *relative to the dose*. The signed difference is not shown (its numeric
+            agreement stays in the caption). Default ``False`` (a separate signed,
+            data-scaled difference colorbar that instead highlights the error).
 
     Returns:
         The written paths (figures, then the caption file if written).
@@ -206,14 +214,26 @@ def plan_dose_comparison(
     ]
     # Height ratios from the data aspect so aspect="auto" fills cells undistorted.
     height_ratios = [n_y / n_x, n_z / n_x, n_z / n_y, 0.55 * (n_y / n_x)]
-    width_ratios = [1.0, 1.0, 1.0, 0.10, 0.05, 0.22, 0.05]
 
-    mosaic = [
-        ["ax_a", "ax_b", "ax_d", ".", "cdose", ".", "cdiff"],
-        ["co_a", "co_b", "co_d", ".", "cdose", ".", "cdiff"],
-        ["sa_a", "sa_b", "sa_d", ".", "cdose", ".", "cdiff"],
-        ["prof", "prof", "prof", ".", ".", ".", "."],
-    ]
+    # Two colorbars (dose + difference) by default; ``single_colorbar`` drops the
+    # difference colorbar column so only the shared dose scale remains (its +/-
+    # range moves into the difference panel title instead).
+    if single_colorbar:
+        width_ratios = [1.0, 1.0, 1.0, 0.10, 0.05]
+        mosaic = [
+            ["ax_a", "ax_b", "ax_d", ".", "cdose"],
+            ["co_a", "co_b", "co_d", ".", "cdose"],
+            ["sa_a", "sa_b", "sa_d", ".", "cdose"],
+            ["prof", "prof", "prof", ".", "."],
+        ]
+    else:
+        width_ratios = [1.0, 1.0, 1.0, 0.10, 0.05, 0.22, 0.05]
+        mosaic = [
+            ["ax_a", "ax_b", "ax_d", ".", "cdose", ".", "cdiff"],
+            ["co_a", "co_b", "co_d", ".", "cdose", ".", "cdiff"],
+            ["sa_a", "sa_b", "sa_d", ".", "cdose", ".", "cdiff"],
+            ["prof", "prof", "prof", ".", ".", ".", "."],
+        ]
     keys = [("ax_a", "ax_b", "ax_d"), ("co_a", "co_b", "co_d"), ("sa_a", "sa_b", "sa_d")]
 
     fig = plt.figure(layout="constrained", figsize=(17, 16), dpi=dpi)
@@ -237,24 +257,36 @@ def plan_dose_comparison(
         _draw_dose(ax[kb], ct_s, b_s)
         _style_panel(ax[kb], grid, "white", xlabels=bottom, ylabels=False)
 
-        diff_gy = a_s - b_s
-        diff_im = ax[kd].imshow(
-            diff_gy, cmap="seismic", origin="lower", aspect="auto",
-            vmin=-diff_lim, vmax=diff_lim,
-        )
-        _style_panel(ax[kd], grid, "0.4", xlabels=bottom, ylabels=False)
+        if single_colorbar:
+            # |error| on the SAME dose scale/colormap as the panels, so the single
+            # dose colorbar covers all three and a small error sinks to the bottom
+            # of the 0->peak scale (visually negligible vs the dose).
+            _draw_dose(ax[kd], ct_s, np.abs(a_s - b_s))
+            _style_panel(ax[kd], grid, "white", xlabels=bottom, ylabels=False)
+        else:
+            diff_im = ax[kd].imshow(
+                a_s - b_s, cmap="seismic", origin="lower", aspect="auto",
+                vmin=-diff_lim, vmax=diff_lim,
+            )
+            _style_panel(ax[kd], grid, "0.4", xlabels=bottom, ylabels=False)
 
     ax["ax_a"].set_title(labels[0], fontsize=17, weight="bold")
     ax["ax_b"].set_title(labels[1], fontsize=17, weight="bold")
-    ax["ax_d"].set_title(f"{labels[0]} - {labels[1]}", fontsize=17, weight="bold")
+    # On the shared dose scale the panel is the absolute error |a - b|; otherwise
+    # it is the signed difference with its own diverging colorbar.
+    diff_title = (
+        f"|{labels[0]} - {labels[1]}|" if single_colorbar
+        else f"{labels[0]} - {labels[1]}"
+    )
+    ax["ax_d"].set_title(diff_title, fontsize=17, weight="bold")
 
     cb_dose = fig.colorbar(dose_im, cax=ax["cdose"])
     cb_dose.set_label(f"Dose [{dose_unit}]", fontsize=15)
     cb_dose.ax.tick_params(labelsize=11)
-    cb_diff = fig.colorbar(diff_im, cax=ax["cdiff"])
-    # cb_diff.set_label(f"{labels[0]} - {labels[1]} [% of {labels[1]} peak]", fontsize=14)
-    cb_diff.set_label(f"{labels[0]} - {labels[1]} [Gy]", fontsize=14)
-    cb_diff.ax.tick_params(labelsize=11)
+    if not single_colorbar:
+        cb_diff = fig.colorbar(diff_im, cax=ax["cdiff"])
+        cb_diff.set_label(f"{labels[0]} - {labels[1]} [{dose_unit}]", fontsize=14)
+        cb_diff.ax.tick_params(labelsize=11)
 
     # Integrated depth dose along x, normalized to the reference (dose_b) peak.
     idd_a = dose_a.sum(axis=(0, 1))
@@ -289,16 +321,24 @@ def plan_dose_comparison(
             dose_desc = (
                 f"shown in {dose_unit} on a shared colour scale; the difference is given"
             )
+        if single_colorbar:
+            diff_desc = (
+                f"as the absolute error |{labels[0]} - {labels[1]}| on the same "
+                f"0-{vmax:.2f} {dose_unit} dose colour scale, so a small error reads "
+                f"as negligible relative to the dose"
+            )
+        else:
+            diff_desc = (
+                f"in {dose_unit} on a symmetric colour scale clipped at "
+                f"+/-{diff_lim:.3f} {dose_unit} (the {int(round(diff_percentile))}th "
+                f"percentile of |{labels[0]} - {labels[1]}| over the high-dose region)"
+            )
         caption = (
             f"Comparison of the {labels[0]}-predicted plan dose against the "
             f"{labels[1]} reference. Columns: {labels[0]}, {labels[1]} and their "
             f"difference ({labels[0]} - {labels[1]}). Rows: axial, coronal and "
             f"sagittal slices through voxel (z, y, x) = ({zc}, {yc}, {xc}). Dose is "
-            f"{dose_desc} "
-            f"in {dose_unit} on a symmetric colour scale clipped at "
-            f"+/-{diff_lim:.3f} {dose_unit} (the {int(round(diff_percentile))}th "
-            f"percentile of |{labels[0]} - {labels[1]}| over the high-dose region). "
-            f"Bottom: integrated depth "
+            f"{dose_desc} {diff_desc}. Bottom: integrated depth "
             f"dose along x (lateral sum over z and y), normalised to the {labels[1]} "
             f"peak. Quantitative agreement over voxels above "
             f"{int(metrics['threshold'] * 100)}% of the peak dose: peak ratio "

@@ -423,6 +423,11 @@ def main(
         typer.Option(help="Stream-stage forward precision: 'fp32' (default) or "
                           "'fp16' (CUDA autocast; faster, validate dose vs MC)."),
     ] = None,
+    single_colorbar: Annotated[
+        Optional[bool],
+        typer.Option(help="dose_comparison figure: show only the shared dose "
+                          "colorbar (difference range goes in its panel title)."),
+    ] = None,
 ) -> None:
     """Main CLI entry point for the ADoTA plan pipeline.
 
@@ -481,6 +486,10 @@ def main(
         raise typer.BadParameter(
             f"precision must be 'fp32' or 'fp16', got {precision!r}"
         )
+    single_colorbar = (
+        single_colorbar if single_colorbar is not None
+        else bool(yaml_config.get("single_colorbar", False))
+    )
 
     # Parse the stage / beam lists.
     stage_list = [s.strip() for s in str(stages_raw).split(",") if s.strip()]
@@ -640,7 +649,8 @@ def main(
         )
         # Auto-generate the ADoTA vs MCsquare comparison + DVH figures.
         figure_s = _generate_comparison_figures(
-            plan_directory, plan_dir, dose_path, dose_render=dose_render
+            plan_directory, plan_dir, dose_path, dose_render=dose_render,
+            single_colorbar=single_colorbar,
         )
 
     # --- Stage: stream (fused, disk-free alternative to extract+infer+accumulate) -
@@ -681,7 +691,8 @@ def main(
         )
         # Same comparison + DVH figures as the accumulate stage (quality investigation).
         figure_s = _generate_comparison_figures(
-            plan_directory, plan_dir, dose_path, dose_render=dose_render
+            plan_directory, plan_dir, dose_path, dose_render=dose_render,
+            single_colorbar=single_colorbar,
         )
 
     remaining = [
@@ -743,7 +754,8 @@ def main(
 
 
 def _generate_comparison_figures(
-    plan_directory, plan_dir: Path, dose_path: Path, dose_render: str = "image"
+    plan_directory, plan_dir: Path, dose_path: Path, dose_render: str = "image",
+    single_colorbar: bool = False,
 ) -> float:
     """Generate the ADoTA vs MCsquare dose-comparison + DVH figures/metrics.
 
@@ -774,6 +786,7 @@ def _generate_comparison_figures(
         labels=("ADoTA", "MCsquare"),
         dose_unit="Gy",
         dose_render=dose_render,
+        single_colorbar=single_colorbar,
     )
     for fig_path in fig_paths:
         logger.info("  comparison figure: %s", fig_path)
