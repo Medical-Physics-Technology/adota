@@ -1,0 +1,96 @@
+# Per-beamlet BEV reinterpolation: DoTA-like vs ADoTA timing study
+# ================================================================
+# Configures scripts/beamlet_bev_rotation_timing.py. Every key maps to a CLI
+# option; CLI flags override the YAML.
+#
+# Usage:
+#   uv run python scripts/beamlet_bev_rotation_timing.py \
+#       --config scripts/config_beamlet_bev_rotation_timing.yaml
+#
+# The experiment compares, per beamlet, the two ways to make the beam direction
+# consumable by the model:
+#   * ADoTA  -- keep the crop axis-aligned and encode the tilt analytically with
+#               the proton-flux projection (CPU). No per-beamlet rotation.
+#   * DoTA   -- rotate the cropped subvolume so the beamlet is perpendicular to
+#               the entrance face (forward), infer, then rotate the predicted
+#               dose back (inverse). The two rotations are the cost we measure.
+#
+# This config drives the STEP 1+2 deliverable: staged CPU extraction (all
+# beamlets stored) on the 2mm per-field grid, plus the per-beamlet rotation
+# validation figures. (Timing/inference are added in the next step.)
+
+# --- Required ---
+
+# OpenTPS plan directory (CT.mhd, PlanPencil.txt, bdl.txt, config.txt, ...).
+plan_dir: /scratch/mstryja/opentps_plans/Prostate-AEC-007_Publication_Prostate-AEC-007_100MperBeam
+
+# Model directory name under models/ (used by the inference branch, next step).
+model_name: DoTA_v3_grid_search_v11
+model_fname: best_model.pth
+
+# --- Optional ---
+
+# Beam data library path. null -> plan-local bdl.txt.
+bdl_path: null
+
+# CUDA device index for the ADoTA model inference (-1 for CPU). Device split for
+# the comparison: the model forward runs on the GPU (it is the shared, legitimately
+# GPU-accelerated component), while the per-beamlet reinterpretation stays on the
+# CPU for BOTH pipelines -- flux (CPU) and the DoTA rotations (CPU) -- because the
+# original DoTA authors provided no GPU implementation of the BEV reinterpolation.
+device_index: 0
+
+# Base directory for run outputs (kept on /scratch, never under /home).
+runs_dir: /scratch/mstryja/tmp_adota/runs
+
+# Field-level resampling factor. 2 -> rotate/crop/flux on the 2mm grid so each
+# crop is already the model grid (160, 30, 30): the per-beamlet down/up-sample is
+# bypassed for BOTH pipelines, isolating the flux-vs-rotation comparison.
+grid_factor: 2
+
+# Rotation backend for the DoTA reinterpolation: scipy (CPU) or torch.
+rotation_backend: scipy
+
+# Extraction subset controls (null = whole plan).
+n_spots: null      # extract only the first N spots (global order)
+beams: null        # comma-separated beam (field) indices, e.g. "0"
+
+# How many beamlets to render as validation figures, how to pick them, and the
+# sampling seed. selection: 'max_angle' (most-tilted beamlets, where the BEV
+# reinterpolation is most visible) or 'random'.
+n_figures: 6
+figure_selection: max_angle
+figure_seed: 0
+
+# --- Timing comparison (DoTA-like vs ADoTA) ---
+
+# Run the per-beamlet timing comparison after extraction/figures.
+run_timing: true
+
+# How many beamlets to time (null = all). Rotation/flux cost is independent of
+# the beamlet angle, so a random sample is representative; 300 keeps it quick.
+n_timing: null
+
+# Timed repeats per CPU op (the per-op median is reported, to damp noise).
+timing_repeats: 3
+
+# Timing sampling seed.
+timing_seed: 0
+
+# --- End-to-end plan acceleration ---
+
+# After the per-beamlet timing, estimate the full-plan time of both pipelines.
+# Anchors on one real ADoTA streaming run (which measures every shared step on the
+# whole plan); the DoTA-like plan time is derived by substitution -- remove the
+# analytical flux (a true DoTA model is single-channel) and add the two
+# per-beamlet BEV rotations (CT->BEV + dose->CT) measured above.
+run_end_to_end: true
+
+# Streaming batch size for the end-to-end ADoTA run.
+batch_size: 16
+
+# Allow writing into a non-empty beamlets output directory.
+overwrite: true
+
+# Verbose/debug logging.
+verbose: false

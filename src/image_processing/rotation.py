@@ -230,6 +230,79 @@ def rotate_volume_torch(
     )
 
 
+def rotate_beamlet_crop(
+    crop_zyx: np.ndarray,
+    beamlet_angles: tuple[float, float],
+    *,
+    inverse: bool = False,
+    backend: str = "scipy",
+    device: str | torch.device = "cpu",
+    repeats: int = 1,
+) -> tuple[np.ndarray, float]:
+    """Rotate a BEV beamlet crop so the angled beamlet becomes perpendicular.
+
+    This is the per-beamlet "reinterpolation to the BEV" of the DoTA-like
+    pipeline: the crop is stored numpy ``(z, y, x)`` with the beam/depth axis
+    along ``x``, and a spot that is offset from the field's central axis has its
+    beamlet tilted by ``beamlet_angles = (theta_x, theta_y)`` (degrees, from
+    :func:`src.beamlets.bdl.spot_position_to_angles`). The forward rotation makes
+    that beamlet axis-aligned (perpendicular to the ``x = 0`` entrance face),
+    pivoting on the **crop centre** -- the point that defines the crop -- so the
+    lateral-centre line down the depth axis is the fixed "centerline" the DoTA
+    model assumes the protons enter on.
+
+    The angle->axis convention (``angle_y = -theta_y``, ``angle_x = +theta_x`` in
+    the depth-first ``(x, z, y)`` frame obtained by ``transpose(2, 0, 1)``) is the
+    one used by the existing rotation timing study and was pinned empirically by
+    requiring the analytical :func:`src.beamlets.flux.flux_projection` ridge to
+    straighten onto the depth centerline after the forward rotation.
+
+    Args:
+        crop_zyx: BEV crop ``(z, y, x)`` (CT, flux or predicted dose).
+        beamlet_angles: ``(theta_x, theta_y)`` in degrees.
+        inverse: When ``True`` apply the inverse rotation -- used to rotate the
+            predicted dose **back** from the perpendicular BEV frame into the crop
+            frame after inference. Exact inverse of the forward rotation (a smooth
+            volume round-trips to ~1e-3 relative error).
+        backend: ``"scipy"`` or ``"torch"`` (shared with the other rotation
+            helpers).
+        device: Torch device for the ``"torch"`` backend.
+        repeats: Timed repeats; the returned time is the per-repeat median.
+
+    Returns:
+        ``(rotated_zyx, seconds)`` where ``rotated_zyx`` matches ``crop_zyx``'s
+        shape and ``seconds`` is the median pure rotation time (one resample).
+    """
+    theta_x, theta_y = float(beamlet_angles[0]), float(beamlet_angles[1])
+    angle_y, angle_x = -theta_y, theta_x
+
+    volume_dhw = np.ascontiguousarray(np.transpose(crop_zyx, (2, 0, 1)))
+    pivot = center_pivot_dhw(volume_dhw.shape)
+    if not inverse:
+        # Two sequential content rotations (Y then X) collapse to one resample:
+        # out(q) = in(M_y M_x q).
+        matrix = build_lateral_axis_rotation_matrix_3d(
+            "y", angle_y, pivot
+        ) @ build_lateral_axis_rotation_matrix_3d("x", angle_x, pivot)
+    else:
+        # Inverse of (M_y M_x) is M_x(-) M_y(-): rotate the dose back to the crop.
+        matrix = build_lateral_axis_rotation_matrix_3d(
+            "x", -angle_x, pivot
+        ) @ build_lateral_axis_rotation_matrix_3d("y", -angle_y, pivot)
+
+    if backend == "scipy":
+        result = rotate_volume_scipy(volume_dhw, matrix, repeats=repeats)
+    elif backend == "torch":
+        result = rotate_volume_torch(volume_dhw, matrix, repeats=repeats, device=device)
+    else:
+        raise ValueError(f"Unsupported rotation backend {backend!r}; expected 'scipy' or 'torch'.")
+
+    if result.rotated is None:
+        raise RuntimeError(f"{backend} beamlet rotation produced no output volume.")
+    rotated_zyx = np.ascontiguousarray(np.transpose(result.rotated, (1, 2, 0)))
+    return rotated_zyx, result.pure_median
+
+
 def rotate_lateral_axes_sequential(
     volume_dhw: np.ndarray,
     angle_y_deg: float,
