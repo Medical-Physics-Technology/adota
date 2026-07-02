@@ -11,7 +11,7 @@
 # ============================================================
 
 # ── Run identification ──────────────────────────────────────
-config_name: dota_v3_baseline
+config_name: dota_v3_ft_anneal_from_best
 
 # ── Data ────────────────────────────────────────────────────
 dataset_path: /scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5
@@ -30,22 +30,38 @@ scale:
   max_energy: 270.0
 
 # ── DataLoader ──────────────────────────────────────────────
+# The baseline used 21.6 GB at batch 56 (eager) on the 44 GB A40; torch.compile
+# adds memory overhead on top, so batch 56 is the safe, proven choice that
+# leaves headroom for the compiled graph. Do not raise without checking the
+# logged gpu_mem under compile (batch ~160 OOMs).
 batch_size: 56
 num_workers: 4
 augmentation: true
 normalize_flux_only: true
 
 # ── Optimization ────────────────────────────────────────────
-num_epochs: 400
-learning_rate: 0.0005
-weight_decay: 0.001
-patience: 50        # early-stopping patience (epochs)
+# Warm-start anneal from the baseline best (ep131, val 8.43e-3). The baseline
+# never annealed (lr 5e-4 -> 2.4e-4 over 232 ep) and its val curve stayed
+# noisy at high LR. Here we start low and let ReduceLROnPlateau drop hard.
+num_epochs: 200            # capped; the 12h budget bounds the run
+learning_rate: 0.00015     # low: fine-tuning a good model, not exploring (was 5e-4)
+weight_decay: 0.003        # up from 1e-3 to close the small train/val gap
+patience: 40               # early-stop; do not idle the night after a plateau
 seed: 1234
-device_index: 1
+device_index: 1            # override on the CLI to pick a free GPU
 
-# ReduceLROnPlateau scheduler
-lr_factor: 0.9
-lr_patience: 20
+# ReduceLROnPlateau scheduler: a real anneal (baseline's 0.9 / 20 was too gentle)
+lr_factor: 0.5
+lr_patience: 8
+
+# ── Acceleration (opt-in) ───────────────────────────────────
+# torch.compile fuses the forward/backward for a large speedup. The first
+# epoch is slower (one-time compilation warmup); steady-state epochs are
+# faster. allow_tf32 enables TF32 matmul/conv kernels on Ampere+ (small
+# numeric change, large throughput gain). Both relax cuDNN determinism.
+compile: true
+compile_mode: default   # default | reduce-overhead | max-autotune
+allow_tf32: true
 
 # ── Loss balancing ──────────────────────────────────────────
 initial_weight_mse: 0.7
@@ -61,9 +77,16 @@ lps_dy_mm: 2.0
 
 # ── Validation cadence ──────────────────────────────────────
 # RMSE / MAPE / RDE every epoch on the full val set.
-# GPR every N epochs on a random subset (it is expensive).
-gpr_every_n_epochs: 25
-gpr_subset_size: 20
+# Gamma every N epochs on a fixed nested pool (it is expensive): a stable
+# pool of gpr_subset_size, with a nested gpr_comparable_size subset reported
+# separately for apples-to-apples comparison with prior runs. The pool is
+# frozen before the loop and written to run_dir/gpr_samples.json (and
+# inherited automatically on --resume-from). gpr_samples_file pins an exact
+# set; empty => draw fresh and persist.
+gpr_every_n_epochs: 10
+gpr_subset_size: 50
+gpr_comparable_size: 20
+gpr_samples_file: ""
 
 gamma_params:
   dose_percent_threshold: 2
@@ -107,7 +130,7 @@ worst_k_samples: 10
 
 # ── Checkpoint retention ───────────────────────────────────
 # best.pth + last.pth always; epoch_NNNN.pth every K epochs.
-checkpoint_every_n_epochs: 25
+checkpoint_every_n_epochs: 10
 
 # ── Attention canary ───────────────────────────────────────
 # Saves attention maps from a fixed val sample every K epochs.
@@ -115,9 +138,10 @@ checkpoint_every_n_epochs: 25
 attention_every_n_epochs: 10
 
 # ── Run-control flags (overridable via CLI) ────────────────
-max_hours: null      # null = no wall-time limit
+max_hours: 12        # wall-time budget (hours); null = no limit
 smoke_test: false    # true = 2 epochs, 4 batches/epoch, exit
-resume_from: null    # path to a previous checkpoint .pth
+resume_from: null    # path to a previous checkpoint .pth (use --resume-from)
+weights_only: false  # warm-start: load weights only (use --weights-only)
 
 # ── Model hyperparameters ──────────────────────────────────
 input_shape: [2, 160, 30, 30]
@@ -146,4 +170,4 @@ norm_layer: batch
 weight_init: default
 
 # ── Free-form notes ────────────────────────────────────────
-comment: ""
+comment: "Warm-start anneal from baseline best (ep131, val 8.43e-3); compile+TF32"

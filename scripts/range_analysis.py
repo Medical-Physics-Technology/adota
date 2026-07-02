@@ -38,7 +38,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import typer
-from scipy.stats import pearsonr
+from scipy.stats import gaussian_kde, pearsonr
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -238,28 +238,96 @@ def summarize(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def plot_delta_histogram(df: pd.DataFrame, col: str, label: str, out: Path) -> None:
-    vals = df[col].dropna().to_numpy()
-    if vals.size < 2:
+def plot_delta_histogram(
+    df: pd.DataFrame,
+    col: str,
+    label: str,
+    out: Path,
+    *,
+    outlier_sigma: float = 3.0,
+) -> None:
+    """Continuous (KDE) distribution of a signed range-error delta.
+
+    The distribution is shown as smooth density curves rather than bars: one
+    per anatomical site (color-coded) plus a combined curve across all sites.
+    Individual outliers (``|delta - mean| > outlier_sigma * std`` of the
+    combined cohort) are marked as a per-site rug along the baseline. The
+    legend reports only the mean and std of each cohort (no sample counts).
+
+    Args:
+        df: Per-beamlet dataframe; must contain ``anatomical_site`` and ``col``.
+        col: Signed-difference column (e.g. ``r80_delta_mm``).
+        label: Human-readable metric name for the axis/title (e.g. ``ΔR80``).
+        out: Destination PNG path.
+        outlier_sigma: Sigma multiple (combined cohort) defining a rug outlier.
+    """
+    data = df.loc[df[col].notna(), ["anatomical_site", col]]
+    vals_all = data[col].to_numpy()
+    if vals_all.size < 2 or np.std(vals_all) == 0:
         return
-    fig, ax = plt.subplots(figsize=(7, 4))
-    ax.hist(vals, bins=60, edgecolor="black", linewidth=0.3, alpha=0.75)
-    ax.axvline(0, color="red", ls="--", lw=0.8)
-    ax.set_xlabel(f"{label}  (ADoTA - MC) [mm]")
-    ax.set_ylabel("Count")
-    ax.set_title(f"{label} distribution")
-    ax.text(
-        0.97,
-        0.95,
-        f"mean={vals.mean():.2f} mm\nstd={vals.std():.2f} mm\nMAE={np.abs(vals).mean():.2f} mm\nn={vals.size}",
-        transform=ax.transAxes,
-        va="top",
-        ha="right",
-        fontsize=9,
-        bbox=dict(boxstyle="round", fc="white", alpha=0.8),
+
+    sites = sorted(str(s) for s in data["anatomical_site"].dropna().unique())
+    palette = dict(
+        zip(sites, sns.color_palette("colorblind", n_colors=max(len(sites), 1)))
     )
+
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+
+    def _kde_curve(vals, color, lw, legend, *, fill=False, zorder=2):
+        vals = np.asarray(vals, dtype=float)
+        if vals.size < 2 or np.std(vals) == 0:
+            return
+        kde = gaussian_kde(vals)
+        xs = np.linspace(vals.min(), vals.max(), 512)
+        ys = kde(xs)
+        ax.plot(xs, ys, color=color, lw=lw, label=legend, zorder=zorder)
+        if fill:
+            ax.fill_between(xs, ys, color=color, alpha=0.12, zorder=zorder - 1)
+
+    # Combined cohort (only meaningful when more than one site is present).
+    if len(sites) > 1:
+        _kde_curve(
+            vals_all, "0.25", 2.2,
+            f"Combined: mean {vals_all.mean():+.2f}, std {vals_all.std():.2f} mm",
+            fill=True, zorder=2,
+        )
+    # Per-site cohorts.
+    for site in sites:
+        v = data.loc[data["anatomical_site"] == site, col].to_numpy()
+        _kde_curve(
+            v, palette[site], 1.9,
+            f"{site}: mean {v.mean():+.2f}, std {v.std():.2f} mm",
+            zorder=3,
+        )
+
+    ax.axvline(0.0, color="red", ls="--", lw=0.9, zorder=1)
+
+    # Outlier rug: individual beamlets beyond +/- outlier_sigma * combined std.
+    mu, sd = float(vals_all.mean()), float(vals_all.std())
+    lo, hi = mu - outlier_sigma * sd, mu + outlier_sigma * sd
+    _, y_top = ax.get_ylim()
+    rug_y = -0.04 * y_top
+    for site in sites:
+        v = data.loc[data["anatomical_site"] == site, col].to_numpy()
+        out_v = v[(v < lo) | (v > hi)]
+        if out_v.size:
+            ax.plot(
+                out_v, np.full_like(out_v, rug_y), marker="|", ls="none",
+                color=palette[site], ms=9, mew=1.2, alpha=0.85,
+                clip_on=False, zorder=4,
+            )
+    ax.set_ylim(rug_y * 1.6, y_top * 1.05)
+
+    ax.set_xlabel(f"{label}  (ADoTA - MC) [mm]")
+    ax.set_ylabel("Probability density [1/mm]")
+    ax.set_title(f"{label} distribution by anatomical site")
+    ax.text(
+        0.02, 0.02, f"ticks: outliers (|Δ| > {outlier_sigma:g}σ)",
+        transform=ax.transAxes, fontsize=8, color="0.35", va="bottom", ha="left",
+    )
+    ax.legend(loc="upper right", fontsize=8, framealpha=0.9, title=None)
     fig.tight_layout()
-    fig.savefig(out, dpi=150)
+    fig.savefig(out, dpi=300)
     plt.close(fig)
 
 

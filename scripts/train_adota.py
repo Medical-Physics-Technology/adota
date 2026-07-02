@@ -13,8 +13,8 @@ The script:
    checkpoints, attention snapshots, validation artifacts, and NaN dumps.
 4. Builds train / val :class:`H5PYGenerator` datasets and DataLoaders.
 5. Builds :class:`DoTA3D_v3`, an AdamW optimizer, and a
-   :class:`ReduceLROnPlateau` scheduler. Optionally resumes from a
-   prior checkpoint.
+   :class:`ReduceLROnPlateau` scheduler. Optionally wraps the model with
+   ``torch.compile`` and resumes from a prior checkpoint.
 6. Trains with two losses (:class:`LMSE`, :class:`LPS`), either with
    static or adaptive (softmax-over-log) balancing.
 7. After every epoch: validates with full per-sample RMSE / MAPE / RDE
@@ -28,42 +28,57 @@ The script:
 9. Honors SIGINT / SIGTERM (graceful shutdown after the current epoch)
    and an optional ``--max-hours`` wall-time budget.
 10. ``--smoke-test`` runs 2 epochs with 4 train / 4 val batches, exits 0.
+
+The data, model/optimizer factory, training-step, and validation-selection
+helpers live under :mod:`src.training` (``data``, ``factory``, ``loop``,
+``validation``); this script is the orchestration layer that wires them
+together.
 """
 
 from __future__ import annotations
 
 import logging
-import random
 import shutil
 import sys
-from dataclasses import fields
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
-from typing import Annotated, Any, Dict, List, Optional, Tuple
+from typing import Annotated, Any, Dict, Optional
 
-import h5py
 import numpy as np
 import torch
 import typer
-from torch.utils.data import DataLoader
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.adota.config import load_yaml_config  # noqa: E402
-from src.adota.models import DoTA3D_v3  # noqa: E402
 from src.evaluation.cli import resolve_device  # noqa: E402
-from src.loaders.generator import H5PYGenerator  # noqa: E402
-from src.schemas.configs import TrainingConfig  # noqa: E402
+from src.training.data import (  # noqa: E402
+    build_dataloaders,
+    limited_loader,
+    load_record_ids,
+    train_val_split,
+)
+from src.training.factory import (  # noqa: E402
+    build_adota_model,
+    build_config_from_yaml,
+    build_optimizer_scheduler,
+    configure_backends,
+    maybe_compile_model,
+    set_determinism,
+)
+from src.training.gpr_pool import (  # noqa: E402
+    build_gpr_pool,
+    load_gpr_pool,
+    pool_to_indices,
+    save_gpr_pool,
+)
+from src.training.loop import resolve_weights, train_one_epoch  # noqa: E402
 from src.training.losses import LMSE, LPS, TwoObjectiveBalancer  # noqa: E402
 from src.training.run import (  # noqa: E402
     CheckpointManager,
     GracefulShutdown,
     MetricsLog,
-    compute_grad_norm,
-    compute_param_norm,
-    dump_nan_context,
     format_duration,
     log_banner,
     log_phase,
@@ -74,363 +89,15 @@ from src.training.run import (  # noqa: E402
     silence_pymedphys,
     write_manifest,
 )
-from src.training.utils import get_lr, validate_tensor_ranges  # noqa: E402
+from src.training.utils import get_lr  # noqa: E402
 from src.training.validation import (  # noqa: E402
     evaluate_validation,
+    pick_canary,
     save_attention_snapshot,
 )
 
 logger = logging.getLogger(__name__)
 app = typer.Typer(help="ADoTA training tool")
-
-
-# ── Determinism ─────────────────────────────────────────────────────────────
-
-
-def _set_determinism(seed: int) -> None:
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-
-# ── Config plumbing ─────────────────────────────────────────────────────────
-
-
-def _build_config_from_yaml(
-    yaml_path: Optional[Path],
-    overrides: Dict[str, Any],
-) -> TrainingConfig:
-    """Load YAML config, apply CLI overrides, return ``TrainingConfig``."""
-    yaml_cfg: Dict[str, Any] = {}
-    if yaml_path is not None:
-        yaml_cfg = load_yaml_config(yaml_path)
-
-    valid_keys = {f.name for f in fields(TrainingConfig)}
-    merged = {k: v for k, v in yaml_cfg.items() if k in valid_keys}
-    for k, v in overrides.items():
-        if v is not None:
-            merged[k] = v
-
-    # Normalize tuple-shaped fields that YAML loads as lists.
-    if "input_shape" in merged and isinstance(merged["input_shape"], list):
-        merged["input_shape"] = tuple(merged["input_shape"])
-    if "gpr_resolution_mm" in merged and isinstance(merged["gpr_resolution_mm"], list):
-        merged["gpr_resolution_mm"] = tuple(merged["gpr_resolution_mm"])
-
-    return TrainingConfig(**merged)
-
-
-# ── Data loading helpers ────────────────────────────────────────────────────
-
-
-def _train_val_split(
-    record_ids: List[str], test_size: float, random_state: int
-) -> Tuple[List[str], List[str]]:
-    """Deterministic shuffle then split; matches sklearn semantics."""
-    rng = np.random.RandomState(random_state)
-    indices = np.arange(len(record_ids))
-    rng.shuffle(indices)
-    n_val = int(round(len(record_ids) * test_size))
-    val_idx = sorted(indices[:n_val].tolist())
-    train_idx = sorted(indices[n_val:].tolist())
-    return [record_ids[i] for i in train_idx], [record_ids[i] for i in val_idx]
-
-
-def _load_record_ids(dataset_path: Path, excluded_indexes_path: Optional[Path]) -> List[str]:
-    """Read the H5 keys and remove anything listed in the exclusion file."""
-    with h5py.File(str(dataset_path), "r") as ds:
-        record_ids = list(ds.keys())
-
-    excluded: List[str] = []
-    if excluded_indexes_path is not None and excluded_indexes_path.exists():
-        with open(excluded_indexes_path, "r") as f:
-            excluded = [line.strip() for line in f if line.strip()]
-        logger.info(
-            "Loaded %d excluded indexes from %s", len(excluded), excluded_indexes_path
-        )
-
-    excluded_set = set(excluded)
-    return [rid for rid in record_ids if rid not in excluded_set]
-
-
-def _collate_h5(batch):
-    """Stack H5PYGenerator samples into contiguous batched tensors."""
-    xs, es, ys = zip(*batch)
-    X = torch.stack([t.contiguous() if not t.is_contiguous() else t for t in xs], dim=0)
-    E = torch.stack([e.view(1) for e in es], dim=0)
-    Y = torch.stack([t.contiguous() if not t.is_contiguous() else t for t in ys], dim=0)
-    return X, E, Y
-
-
-def _build_dataloaders(
-    config: TrainingConfig,
-    train_indexes: List[str],
-    val_indexes: List[str],
-) -> Tuple[DataLoader, DataLoader]:
-    train_ds = H5PYGenerator(
-        file_path=config.dataset_path,
-        indexes=train_indexes,
-        augmentation=config.augmentation,
-        normalize=False,
-        normalize_flux_only=config.normalize_flux_only,
-        flux_mode=config.flux_mode,
-        indexes_to_exclude_list=config.excluded_indexes_file,
-    )
-    val_ds = H5PYGenerator(
-        file_path=config.dataset_path,
-        indexes=val_indexes,
-        augmentation=False,
-        cropp=True,
-        normalize=False,
-        normalize_flux_only=config.normalize_flux_only,
-        flux_mode=config.flux_mode,
-        indexes_to_exclude_list=config.excluded_indexes_file,
-    )
-
-    generator = torch.Generator()
-    generator.manual_seed(config.seed)
-
-    train_loader = DataLoader(
-        train_ds,
-        batch_size=config.batch_size,
-        shuffle=True,
-        num_workers=config.num_workers,
-        pin_memory=True,
-        persistent_workers=config.num_workers > 0,
-        generator=generator,
-        collate_fn=_collate_h5,
-    )
-    val_loader = DataLoader(
-        val_ds,
-        batch_size=config.batch_size,
-        shuffle=False,
-        num_workers=config.num_workers,
-        pin_memory=True,
-        persistent_workers=config.num_workers > 0,
-        collate_fn=_collate_h5,
-    )
-    return train_loader, val_loader
-
-
-# ── Model / optimizer ───────────────────────────────────────────────────────
-
-
-def _build_model(config: TrainingConfig, device: torch.device) -> DoTA3D_v3:
-    model = DoTA3D_v3(
-        input_shape=tuple(config.input_shape),
-        num_transformers=config.num_transformers,
-        num_heads=config.num_heads,
-        dim_feedforward=config.dim_feedforward,
-        num_levels=config.num_levels,
-        enc_features=config.enc_features,
-        kernel_size=config.kernel_size,
-        convolutional_steps=config.convolutional_steps,
-        conv_hidden_channels=config.conv_hidden_channels,
-        dropout_rate=config.dropout_rate,
-        causal=config.causal,
-        zero_padding=config.zero_padding,
-        last_activation=config.last_activation,
-        num_forward=config.num_forward,
-        transformer_residual=config.transformer_residual,
-        conv_residual=config.conv_residual,
-        weight_standardization=config.weight_standardization,
-        norm_layer=config.norm_layer,
-        weight_init=config.weight_init,
-    ).to(device)
-    return model
-
-
-def _build_optimizer_scheduler(
-    model: torch.nn.Module, config: TrainingConfig
-) -> Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.ReduceLROnPlateau]:
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=config.learning_rate,
-        weight_decay=config.weight_decay,
-    )
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", factor=config.lr_factor, patience=config.lr_patience
-    )
-    return optimizer, scheduler
-
-
-# ── Canary / GPR subset selection ───────────────────────────────────────────
-
-
-def _pick_canary(val_dataset: H5PYGenerator, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor, str]:
-    """Return ``(x, energy, sample_id)`` for a fixed canary validation sample."""
-    x, energy, _ = val_dataset[0]
-    canary_id = val_dataset.record_ids[0]
-    return x.unsqueeze(0).to(device), energy.view(1, 1).to(device), canary_id
-
-
-def _pick_gpr_subset(n_val_samples: int, subset_size: int, rng: np.random.RandomState) -> List[int]:
-    if subset_size >= n_val_samples:
-        return list(range(n_val_samples))
-    return sorted(rng.choice(n_val_samples, size=subset_size, replace=False).tolist())
-
-
-# ── Training loop ───────────────────────────────────────────────────────────
-
-
-def _train_one_epoch(
-    *,
-    model: torch.nn.Module,
-    train_loader: DataLoader,
-    optimizer: torch.optim.Optimizer,
-    loss_mse_fn: LMSE,
-    loss_ps_fn: LPS,
-    weight_mse: torch.Tensor,
-    weight_ps: torch.Tensor,
-    device: torch.device,
-    epoch: int,
-    run_dir: Path,
-    max_batches: Optional[int],
-    loss_mode: str,
-) -> Dict[str, Any]:
-    """Run one training epoch; returns aggregate stats."""
-    model.train()
-    sum_loss = 0.0
-    sum_loss_mse = 0.0
-    sum_loss_ps = 0.0
-    timings = {"load_s": [], "forward_s": [], "backward_s": []}
-    n_batches = 0
-    last_grad_norm: Optional[float] = None
-
-    # Heartbeat: aim for ~10 [TRAIN] lines per epoch regardless of size.
-    try:
-        total_batches = len(train_loader)
-    except TypeError:
-        total_batches = 0
-    if max_batches is not None:
-        total_batches = (
-            min(total_batches, max_batches) if total_batches else max_batches
-        )
-    heartbeat_every = max(1, total_batches // 10) if total_batches else 1
-
-    t_load_start = perf_counter()
-    for batch_idx, (x, e, y) in enumerate(train_loader):
-        if max_batches is not None and batch_idx >= max_batches:
-            break
-
-        x = x.to(device, non_blocking=True)
-        e = e.to(device, non_blocking=True)
-        y = y.to(device, non_blocking=True)
-        timings["load_s"].append(perf_counter() - t_load_start)
-
-        if not validate_tensor_ranges(x, y, e):
-            log_phase(
-                "ERROR",
-                f"batch {batch_idx}: tensors out of [0, 1]: "
-                f"x=[{x.min().item():.3f}, {x.max().item():.3f}] "
-                f"y=[{y.min().item():.3f}, {y.max().item():.3f}] "
-                f"e=[{e.min().item():.3f}, {e.max().item():.3f}]",
-                level=logging.WARNING,
-            )
-
-        optimizer.zero_grad()
-        t_fwd = perf_counter()
-        outputs = model(x, e)[0]  # forward returns (dose, attention)
-        timings["forward_s"].append(perf_counter() - t_fwd)
-
-        loss_mse = loss_mse_fn(outputs, y)
-        if loss_mode == "mse_idd":
-            loss_ps = loss_ps_fn(outputs, y)
-            loss = weight_mse * loss_mse + weight_ps * loss_ps
-        else:
-            loss_ps = torch.zeros(1, device=device)
-            loss = loss_mse
-
-        if not torch.isfinite(loss):
-            grad_norm = compute_grad_norm(model)
-            fail_dir = dump_nan_context(
-                run_dir,
-                epoch=epoch,
-                batch_idx=batch_idx,
-                x=x,
-                energy=e,
-                y=y,
-                outputs=outputs,
-                loss_components={
-                    "loss_mse": float(loss_mse.item()) if torch.isfinite(loss_mse) else float("nan"),
-                    "loss_ps": float(loss_ps.item()) if torch.isfinite(loss_ps) else float("nan"),
-                },
-                weights={"w_mse": float(weight_mse.item()), "w_ps": float(weight_ps.item())},
-                grad_norm=grad_norm,
-            )
-            log_phase(
-                "ERROR",
-                f"Non-finite loss at epoch={epoch} batch={batch_idx}. "
-                f"Dump: {fail_dir}",
-                level=logging.ERROR,
-            )
-            raise RuntimeError(
-                f"Non-finite loss at epoch={epoch}, batch={batch_idx}. "
-                f"Tensors and context saved under {run_dir / 'failures'}."
-            )
-
-        t_bwd = perf_counter()
-        loss.backward()
-        last_grad_norm = compute_grad_norm(model)
-        optimizer.step()
-        timings["backward_s"].append(perf_counter() - t_bwd)
-
-        sum_loss += float(loss.item())
-        sum_loss_mse += float(loss_mse.item())
-        sum_loss_ps += float(loss_ps.item())
-        n_batches += 1
-
-        if (
-            total_batches
-            and ((batch_idx + 1) % heartbeat_every == 0 or batch_idx == total_batches - 1)
-        ):
-            log_phase(
-                "TRAIN",
-                f"batch {batch_idx + 1}/{total_batches}  "
-                f"loss={loss.item():.4e} (mse={loss_mse.item():.4e} "
-                f"ps={loss_ps.item():.4e})",
-            )
-
-        t_load_start = perf_counter()
-
-    if n_batches == 0:
-        return {"n_batches": 0}
-
-    return {
-        "n_batches": n_batches,
-        "loss_combined_mean": sum_loss / n_batches,
-        "loss_mse_mean": sum_loss_mse / n_batches,
-        "loss_ps_mean": sum_loss_ps / n_batches,
-        "t_load_mean_s": float(np.mean(timings["load_s"])) if timings["load_s"] else 0.0,
-        "t_forward_mean_s": float(np.mean(timings["forward_s"])) if timings["forward_s"] else 0.0,
-        "t_backward_mean_s": float(np.mean(timings["backward_s"])) if timings["backward_s"] else 0.0,
-        "grad_norm_last": last_grad_norm,
-        "param_norm": compute_param_norm(model),
-    }
-
-
-# ── Loss-balancing schedule ─────────────────────────────────────────────────
-
-
-def _resolve_weights(
-    config: TrainingConfig,
-    epoch: int,
-    balancer: TwoObjectiveBalancer,
-    prev_val: Optional[Dict[str, float]],
-    device: torch.device,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Return per-epoch loss weights (static or adaptive)."""
-    if epoch < config.adaptive_after_epoch or prev_val is None:
-        return (
-            torch.tensor(config.initial_weight_mse, device=device),
-            torch.tensor(config.initial_weight_ps, device=device),
-        )
-    l_mse = torch.tensor(prev_val["loss_mse_mean"], device=device)
-    l_ps = torch.tensor(prev_val["loss_ps_mean"], device=device)
-    return balancer.get_weights(l_mse, l_ps)
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
@@ -445,6 +112,13 @@ def main(
         Optional[Path],
         typer.Option(help="Path to a previous checkpoint .pth to resume from."),
     ] = None,
+    weights_only: Annotated[
+        bool,
+        typer.Option(
+            help="Warm-start: load only model weights from --resume-from "
+            "(fresh optimizer/scheduler/epoch). For fine-tuning a prior best."
+        ),
+    ] = False,
     device_index: Annotated[
         Optional[int], typer.Option(help="CUDA device index. -1 for CPU.")
     ] = None,
@@ -480,6 +154,7 @@ def main(
 ) -> None:
     overrides = {
         "resume_from": str(resume_from) if resume_from is not None else None,
+        "weights_only": weights_only if weights_only else None,  # leave default if False
         "device_index": device_index,
         "max_hours": max_hours,
         "smoke_test": smoke_test if smoke_test else None,  # leave default if False
@@ -487,7 +162,7 @@ def main(
         "num_epochs": num_epochs,
         "runs_dir": runs_dir,
     }
-    cfg = _build_config_from_yaml(config, overrides)
+    cfg = build_config_from_yaml(config, overrides)
 
     if not cfg.dataset_path:
         raise typer.BadParameter(
@@ -515,8 +190,9 @@ def main(
         shutil.copy2(config, run_dir / "config_input.yaml")
     save_resolved_config(cfg, run_dir / "config.yaml")
 
-    # ── Determinism ──────────────────────────────────────────────────
-    _set_determinism(cfg.seed)
+    # ── Determinism + backends ───────────────────────────────────────
+    set_determinism(cfg.seed)
+    configure_backends(cfg)
 
     # ── Device ────────────────────────────────────────────────────────
     device = resolve_device(cfg.device_index)
@@ -534,7 +210,7 @@ def main(
     )
 
     log_phase("INIT", f"Dataset   : {dataset_path.name}")
-    record_ids = _load_record_ids(dataset_path, excluded_path)
+    record_ids = load_record_ids(dataset_path, excluded_path)
     n_total_after_exclusion = len(record_ids)
     if max_records is not None and max_records < len(record_ids):
         rng = np.random.RandomState(cfg.seed)
@@ -548,7 +224,7 @@ def main(
             f"{n_total_after_exclusion}) via --max-records.",
             level=logging.WARNING,
         )
-    train_ids, val_ids = _train_val_split(
+    train_ids, val_ids = train_val_split(
         record_ids,
         test_size=cfg.train_test_split,
         random_state=cfg.split_random_state,
@@ -578,24 +254,34 @@ def main(
         cfg.num_epochs = 2
         cfg.gpr_every_n_epochs = 1
         cfg.gpr_subset_size = 2
+        cfg.gpr_comparable_size = 1
         cfg.attention_every_n_epochs = 1
         cfg.checkpoint_every_n_epochs = 1
 
     # ── Data loaders ─────────────────────────────────────────────────
-    train_loader, val_loader = _build_dataloaders(cfg, train_ids, val_ids)
+    train_loader, val_loader = build_dataloaders(cfg, train_ids, val_ids)
 
     # ── Model / optimizer / scheduler ───────────────────────────────
-    model = _build_model(cfg, device)
-    optimizer, scheduler = _build_optimizer_scheduler(model, cfg)
+    # Build the optimizer from the eager module, then optionally compile: the
+    # compiled wrapper shares the same parameter tensors, and checkpoints are
+    # saved/loaded via the unwrapped module (see CheckpointManager).
+    base_model = build_adota_model(cfg, device)
+    optimizer, scheduler = build_optimizer_scheduler(base_model, cfg)
+    model = maybe_compile_model(base_model, cfg)
     balancer = TwoObjectiveBalancer(smoothing=cfg.balancer_smoothing)
     loss_mse_fn = LMSE()
     loss_ps_fn = LPS(dx=cfg.lps_dx_mm, dy=cfg.lps_dy_mm)
 
-    n_params = sum(p.numel() for p in model.parameters())
+    n_params = sum(p.numel() for p in base_model.parameters())
     log_phase(
         "INIT",
         f"Model     : DoTA3D_v3, {n_params / 1e6:.2f} M params "
         f"({cfg.num_transformers} transformer block(s), {cfg.num_heads} heads)",
+    )
+    log_phase(
+        "INIT",
+        f"Accel     : compile={'on (' + cfg.compile_mode + ')' if cfg.compile else 'off'} "
+        f"| tf32={'on' if cfg.allow_tf32 else 'off'}",
     )
     log_phase(
         "INIT",
@@ -634,7 +320,7 @@ def main(
     import json
 
     with open(run_dir / "hyperparams.json", "w") as f:
-        json.dump(model.to_dict(), f, indent=2, default=str)
+        json.dump(base_model.to_dict(), f, indent=2, default=str)
 
     # ── Resume ───────────────────────────────────────────────────────
     start_epoch = 0
@@ -645,24 +331,34 @@ def main(
         resume_path = Path(cfg.resume_from)
         if not resume_path.exists():
             raise typer.BadParameter(f"resume_from path does not exist: {resume_path}")
-        log_phase("INIT", f"Resuming from checkpoint: {resume_path}")
-        bookkeeping = CheckpointManager.load(
-            resume_path,
-            model=model,
-            optimizer=optimizer,
-            scheduler=scheduler,
-            balancer=balancer,
-            device=device,
-        )
-        start_epoch = int(bookkeeping["epoch"]) + 1
-        best_val_loss = float(bookkeeping["best_val_loss"])
-        patience_counter = int(bookkeeping["patience_counter"])
-        log_phase(
-            "INIT",
-            f"Resumed: start_epoch={start_epoch} "
-            f"best_val_loss={best_val_loss:.6e} "
-            f"patience_counter={patience_counter}",
-        )
+        if cfg.weights_only:
+            CheckpointManager.load_weights_only(
+                resume_path, model=model, device=device
+            )
+            log_phase(
+                "INIT",
+                f"Warm-start (weights only) from: {resume_path} "
+                f"| fresh optimizer/scheduler/epoch",
+            )
+        else:
+            log_phase("INIT", f"Resuming from checkpoint: {resume_path}")
+            bookkeeping = CheckpointManager.load(
+                resume_path,
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                balancer=balancer,
+                device=device,
+            )
+            start_epoch = int(bookkeeping["epoch"]) + 1
+            best_val_loss = float(bookkeeping["best_val_loss"])
+            patience_counter = int(bookkeeping["patience_counter"])
+            log_phase(
+                "INIT",
+                f"Resumed: start_epoch={start_epoch} "
+                f"best_val_loss={best_val_loss:.6e} "
+                f"patience_counter={patience_counter}",
+            )
 
     # ── Bookkeeping objects ──────────────────────────────────────────
     metrics_log = MetricsLog(run_dir / "metrics.jsonl")
@@ -672,12 +368,45 @@ def main(
     )
     shutdown = GracefulShutdown()
 
-    # ── Canary + GPR subset (fixed for the run) ──────────────────────
-    canary_x, canary_e, canary_id = _pick_canary(val_loader.dataset, device)
+    # ── Canary (fixed for the run) ───────────────────────────────────
+    canary_x, canary_e, canary_id = pick_canary(val_loader.dataset, device)
     log_phase("INIT", f"Canary    : {canary_id}")
-    rng_subset = np.random.RandomState(cfg.seed)
-    gpr_subset_indices = _pick_gpr_subset(
-        len(val_loader.dataset), cfg.gpr_subset_size, rng_subset
+
+    # ── Gamma (GPR) pool: nested comparable-in-pool, pinned by record id ──
+    # Priority: explicit gpr_samples_file > inherit parent run's pool on
+    # resume/warm-start > draw fresh (deterministic) and persist.
+    val_record_ids = val_loader.dataset.record_ids
+    gpr_samples_path = run_dir / "gpr_samples.json"
+    if cfg.gpr_samples_file:
+        gpr_pool = load_gpr_pool(Path(cfg.gpr_samples_file))
+        log_phase("INIT", f"Gamma pool: pinned from {cfg.gpr_samples_file}")
+    else:
+        inherited = None
+        if cfg.resume_from is not None:
+            parent_pool = Path(cfg.resume_from).resolve().parent.parent / "gpr_samples.json"
+            if parent_pool.exists():
+                inherited = parent_pool
+        if inherited is not None:
+            gpr_pool = load_gpr_pool(inherited)
+            log_phase("INIT", f"Gamma pool: inherited from {inherited}")
+        else:
+            gpr_pool = build_gpr_pool(
+                val_record_ids,
+                pool_size=cfg.gpr_subset_size,
+                comparable_size=cfg.gpr_comparable_size,
+                seed=cfg.seed,
+                source_run=cfg.resume_from,
+            )
+            log_phase("INIT", "Gamma pool: drawn fresh (nested comparable-in-pool)")
+    save_gpr_pool(gpr_pool, gpr_samples_path)
+    gpr_subset_indices, gpr_comparable_indices = pool_to_indices(
+        gpr_pool, val_record_ids
+    )
+    gpr_comparable_ids = list(gpr_pool["comparable_ids"])
+    log_phase(
+        "INIT",
+        f"Gamma pool: {len(gpr_subset_indices)} pool "
+        f"({len(gpr_comparable_indices)} comparable) | {gpr_samples_path.name}",
     )
 
     # ── Training loop ────────────────────────────────────────────────
@@ -710,14 +439,14 @@ def main(
                 break
 
         epoch_start = perf_counter()
-        w_mse, w_ps = _resolve_weights(cfg, epoch, balancer, prev_val, device)
+        w_mse, w_ps = resolve_weights(cfg, epoch, balancer, prev_val, device)
         log_section(
             f"EPOCH {epoch} / {cfg.num_epochs - 1}   "
             f"w=({w_mse.item():.3f}, {w_ps.item():.3f})  "
             f"lr={get_lr(optimizer):.2e}"
         )
 
-        train_stats = _train_one_epoch(
+        train_stats = train_one_epoch(
             model=model,
             train_loader=train_loader,
             optimizer=optimizer,
@@ -775,7 +504,7 @@ def main(
 
         val_stats = evaluate_validation(
             model=model,
-            val_dataloader=_limited_loader(val_loader_for_eval, smoke_val_batches),
+            val_dataloader=limited_loader(val_loader_for_eval, smoke_val_batches),
             val_sample_ids=val_sample_ids,
             device=device,
             config=cfg,
@@ -783,6 +512,7 @@ def main(
             weight_ps=w_ps,
             compute_gpr=compute_gpr_this_epoch,
             gpr_subset_indices=gpr_subset_indices,
+            gpr_comparable_ids=gpr_comparable_ids,
             run_dir=run_dir,
             epoch=epoch,
         )
@@ -798,12 +528,17 @@ def main(
         )
 
         if compute_gpr_this_epoch and "gpr_mean" in val_stats:
-            log_phase(
-                "GPR",
-                f"mean={val_stats['gpr_mean']:.4f} "
+            gpr_line = (
+                f"pool={val_stats['gpr_mean']:.4f} "
                 f"+/- {val_stats.get('gpr_std', 0.0):.4f} "
-                f"(N={val_stats.get('gpr_n_samples', 0)})",
+                f"(N={val_stats.get('gpr_n_samples', 0)})"
             )
+            if "gpr_comparable_mean" in val_stats:
+                gpr_line += (
+                    f" | comparable={val_stats['gpr_comparable_mean']:.4f} "
+                    f"(N={val_stats.get('gpr_comparable_n_samples', 0)})"
+                )
+            log_phase("GPR", gpr_line)
 
         # ── Attention snapshot ────────────────────────────────────
         if (epoch + 1) % cfg.attention_every_n_epochs == 0:
@@ -921,35 +656,6 @@ def main(
         log_phase("DONE", "Best val loss    : (no completed epoch)")
     log_phase("DONE", f"Metrics file     : {run_dir / 'metrics.jsonl'}")
     log_phase("DONE", f"Run directory    : {run_dir}")
-
-
-# ── DataLoader slicing for smoke test ───────────────────────────────────────
-
-
-class _LimitedLoader:
-    """Wrap a DataLoader and stop after ``max_batches`` iterations."""
-
-    def __init__(self, loader: DataLoader, max_batches: Optional[int]):
-        self._loader = loader
-        self._max = max_batches
-        self.dataset = loader.dataset
-
-    def __iter__(self):
-        for i, batch in enumerate(self._loader):
-            if self._max is not None and i >= self._max:
-                break
-            yield batch
-
-    def __len__(self) -> int:
-        if self._max is None:
-            return len(self._loader)
-        return min(self._max, len(self._loader))
-
-
-def _limited_loader(loader: DataLoader, max_batches: Optional[int]):
-    if max_batches is None:
-        return loader
-    return _LimitedLoader(loader, max_batches)
 
 
 if __name__ == "__main__":

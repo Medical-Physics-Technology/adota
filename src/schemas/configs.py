@@ -182,6 +182,15 @@ class TrainingConfig:
     lr_factor: float = 0.9
     lr_patience: int = 20
 
+    # ── Acceleration (opt-in; defaults keep the FP32 eager path untouched) ──
+    # compile: wrap the model with torch.compile for fused forward/backward.
+    # compile_mode: one of "default" / "reduce-overhead" / "max-autotune".
+    # allow_tf32: enable TF32 matmul/conv kernels (small numeric change, large
+    #   throughput gain on Ampere+). Both relax cuDNN determinism when enabled.
+    compile: bool = False
+    compile_mode: str = "default"
+    allow_tf32: bool = False
+
     # ── Loss balancing ──────────────────────────────────────────────────
     # Initial static weights for the (LMSE, LPS) pair. After
     # ``adaptive_after_epoch`` the TwoObjectiveBalancer takes over.
@@ -202,9 +211,16 @@ class TrainingConfig:
 
     # ── Validation cadence ──────────────────────────────────────────────
     # RMSE/MAPE/RDE are computed every epoch on the full val set.
-    # GPR is computed every ``gpr_every_n_epochs`` on a random subset.
+    # GPR is computed every ``gpr_every_n_epochs`` on a fixed, persisted pool.
     gpr_every_n_epochs: int = 10
+    # gpr_subset_size is the (stable) pool size; gpr_comparable_size is the
+    # nested subset reported for apples-to-apples comparison with prior runs.
+    # The pool is frozen before the loop and written to run_dir/gpr_samples.json.
     gpr_subset_size: int = 50
+    gpr_comparable_size: int = 20
+    # Optional path to a gpr_samples.json to pin the exact gamma set (overrides
+    # the deterministic draw). Empty => draw fresh (and persist).
+    gpr_samples_file: str = ""
     gamma_params: dict = field(default_factory=lambda: DEFAULT_GAMMA_PARAMS.copy())
     # Voxel spacing used by the gamma index (mm). Matches the downsampled
     # (160, 30, 30) grid produced by the H5 loader.
@@ -237,6 +253,10 @@ class TrainingConfig:
     max_hours: Optional[float] = None  # wall-time budget
     smoke_test: bool = False  # 2 epochs, 4 batches/epoch, exit cleanly
     resume_from: Optional[str] = None  # path to a checkpoint .pth
+    # Warm-start: load only the model weights from resume_from (fresh
+    # optimizer / scheduler / epoch counter). Used to fine-tune a prior best
+    # checkpoint with a new LR schedule.
+    weights_only: bool = False
 
     # ── Model hyperparameters (passed verbatim to DoTA3D_v3) ───────────
     input_shape: Tuple[int, int, int, int] = (2, 160, 30, 30)
@@ -282,3 +302,74 @@ class TrainingConfig:
     weight_standardization: bool = False
     norm_layer: str = "batch"
     weight_init: str = "default"
+
+
+# ── Cross-run validation experiment (validation_adota.py) ───────────────────
+
+
+@dataclass
+class RunRef:
+    """One trained run to evaluate in the comparison.
+
+    ``run_dir`` is a directory under ``runs_dir`` containing ``hyperparams.json``
+    and a ``checkpoints/`` folder. ``checkpoint_fname`` (when set) overrides the
+    experiment-level default for this run.
+    """
+
+    name: str
+    run_dir: str
+    checkpoint_fname: Optional[str] = None
+
+
+@dataclass
+class ValidationExperimentConfig:
+    """Configuration for the cross-run validation experiment.
+
+    Evaluates several trained ADoTA runs on one shared validation set (defined
+    by the data + split fields below) and reports a Run x Metric table. No
+    training is performed.
+    """
+
+    # ── Shared validation set (defines the identical val set for all runs) ──
+    dataset_path: str = ""
+    excluded_indexes_file: str = ""
+    train_test_split: float = 0.2
+    split_random_state: int = 42
+    normalize_flux_only: bool = True
+    flux_mode: str = "analytical"
+    scale: dict = field(default_factory=lambda: DEFAULT_SCALE.copy())
+
+    # ── Runs to compare ──────────────────────────────────────────────────
+    runs: List[RunRef] = field(default_factory=list)
+    checkpoint_fname: str = "best.pth"  # default checkpoint per run (inference mode)
+
+    # ── Reporting methodology ────────────────────────────────────────────
+    # report_mode:
+    #   "logs"      -- reproduce the published ablation: read each run's
+    #                  metrics.jsonl, select the epoch minimising val MAPE
+    #                  (select_by), and report that epoch's LOGGED metrics.
+    #                  No model/GPU needed. Range errors are unavailable.
+    #   "inference" -- fresh batched inference on each run's checkpoint
+    #                  (checkpoint_fname); computes range errors too. Use for
+    #                  runs that saved a best_mape.pth at the min-MAPE epoch.
+    # select_by: metric to minimise when choosing the reporting epoch
+    #            ("val_mape" => mape_pct_mean, "val_loss" => loss_combined_mean).
+    report_mode: str = "logs"
+    select_by: str = "val_mape"
+
+    # ── Evaluation control ───────────────────────────────────────────────
+    device_index: int = 0
+    batch_size: int = 32  # batched inference (eval mode => results batch-invariant)
+    num_workers: int = 4  # DataLoader workers for parallel H5 reads
+    n_samples: Optional[int] = None  # cap the val set (first-N) for quick runs
+    mape_mask_frac: float = 0.1  # MAPE mask: y_pred > frac * max(y_pred)
+    strict_split_check: bool = True  # error (vs warn) on split/scale mismatch
+
+    # ── Range-metric extraction (range_metrics.compute_range_metrics) ────
+    range_dz_mm: float = 2.0
+    range_oversample: int = 20
+    range_min_peak_dose: float = 0.0
+
+    # ── Output ───────────────────────────────────────────────────────────
+    output_dir: str = "/scratch/mstryja/adota_runs/validation_experiments"
+    experiment_name: str = "validation_experiment"

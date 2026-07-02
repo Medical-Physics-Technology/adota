@@ -1,0 +1,76 @@
+# ============================================================
+# ADoTA Cross-Run Validation Experiment (validation_adota.py)
+# ============================================================
+#
+# Evaluates several trained runs on ONE shared validation set and prints/saves
+# a Run x Metric table (mean +/- std). Inference only; no training.
+#
+# Usage:
+#   uv run python scripts/validation_adota.py --config scripts/config_validation_adota.yaml
+#
+# The shared validation set is defined by the data + split fields below; every
+# listed run is scored on the identical set. Each run's saved config.yaml is
+# checked to share these split/scale fields (strict_split_check).
+# ============================================================
+
+# ── Shared validation set ───────────────────────────────────
+dataset_path: /scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5
+excluded_indexes_file: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
+train_test_split: 0.2
+split_random_state: 42
+normalize_flux_only: true
+flux_mode: analytical
+
+# Dose / CT / energy MinMax scaling. MUST match the dataset generation AND the
+# scaling the listed runs were trained with.
+scale:
+  min_ds: 0.0
+  max_ds: 25277028.0
+  min_ct: -1024
+  max_ct: 3071
+  min_energy: 70.0
+  max_energy: 270.0
+
+# ── Reporting methodology ───────────────────────────────────
+# report_mode:
+#   logs      -> reproduce the published ablation. Read each run's
+#                metrics.jsonl, select the epoch minimising val MAPE
+#                (select_by), and report that epoch's LOGGED metrics
+#                (MAPE, RDE, RMSE, LMSE). No model/GPU/dataset needed.
+#                Range errors are unavailable (not logged; min-MAPE
+#                checkpoint not saved for historical runs).
+#   inference -> fresh batched inference on each run's checkpoint
+#                (checkpoint_fname); also computes range errors. Use for
+#                runs that saved best_mape.pth at the min-MAPE epoch.
+report_mode: logs
+select_by: val_mape   # val_mape (paper) | val_loss
+
+# ── Runs to compare ─────────────────────────────────────────
+# Each run dir must contain metrics.jsonl (logs mode) or hyperparams.json +
+# checkpoints/<checkpoint_fname> (inference mode). For inference at the
+# paper's selection point on a future run, set this to best_mape.pth.
+checkpoint_fname: best.pth
+runs:
+  - name: baseline
+    run_dir: /scratch/mstryja/adota_runs/train_20260519_231135_baseline
+  - name: ablation_analytical_mse_only
+    run_dir: /scratch/mstryja/adota_runs/train_20260526_023947_ablation_analytical_mse_only
+  - name: no_conv_residual
+    run_dir: /scratch/mstryja/adota_runs/train_20260609_160145_ablation_no_conv_residual
+
+# ── Evaluation control ──────────────────────────────────────
+device_index: 1
+batch_size: 100        # batched inference (eval mode => results batch-invariant)
+num_workers: 4        # DataLoader workers for parallel H5 reads
+n_samples: ~          # null = whole val set; set small (e.g. 20) for a quick run
+mape_mask_frac: 0.1   # MAPE mask: y_pred > frac * max(y_pred)
+strict_split_check: true  # error on split/scale mismatch (false = warn + continue)
+
+# ── Range-metric extraction (range_metrics.compute_range_metrics) ──
+range_dz_mm: 2.0
+range_oversample: 20
+range_min_peak_dose: 0.0
+
+# ── Output ──────────────────────────────────────────────────
+output_dir: /scratch/mstryja/adota_runs/validation_experiments
+experiment_name: mse_only_no_conv_residual_vs_baseline_batched

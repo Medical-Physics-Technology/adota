@@ -15,7 +15,7 @@
 
 # OpenTPS plan directory: CT.mhd, PlanPencil.txt, bdl.txt, config.txt,
 # structure masks (target.mhd / OAR_*.mhd), and the MC reference Dose.mhd.
-plan_dir: /scratch/mstryja/opentps_plans/Prostate-AEC-069_Publication_Plan_2
+plan_dir: /scratch/mstryja/opentps_plans/LUNG1-364_Publication_Plan_5
 
 # Model directory name under models/.
 model_name: DoTA_v3_grid_search_v11

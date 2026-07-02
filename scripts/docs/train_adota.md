@@ -88,6 +88,22 @@ seed: 1234
 
 **Precedence order:** CLI arguments > YAML config > built-in defaults.
 
+#### Acceleration (opt-in)
+
+Two optional flags speed up training; both default to `false`, leaving the FP32 eager path unchanged.
+
+```yaml
+compile: false          # wrap the model with torch.compile (fused forward/backward)
+compile_mode: default   # default | reduce-overhead | max-autotune
+allow_tf32: false       # enable TF32 matmul/conv kernels (Ampere+)
+```
+
+Notes:
+- With `compile: true`, the **first epoch is slower** (one-time compilation warmup); steady-state epochs are faster. Compare the logged `samples/s` from epoch 2 onward, not epoch 1.
+- `allow_tf32` is a small numeric change for a large throughput gain on Ampere+ GPUs.
+- Either flag relaxes cuDNN determinism (`benchmark=True`) so kernel autotuning is effective; with both off, runs stay bit-for-bit deterministic.
+- Checkpoints are format-identical whether or not compile is enabled, so a model trained with `compile: true` resumes into a `compile: false` run (and vice versa) and stays loadable by the inference scripts.
+
 For reproducibility, the input config is copied to the run directory as `config_input.yaml`, and the fully-resolved config is written as `config.yaml` alongside a manifest (git commit, library versions, GPU info, dataset fingerprint).
 
 ### Output

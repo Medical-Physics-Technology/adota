@@ -226,6 +226,65 @@ def test_load_works_without_optimizer_scheduler_balancer(checkpoint_dir: Path) -
         assert torch.equal(new_model.state_dict()[k], ref)
 
 
+# ── torch.compile compatibility ────────────────────────────────────────────
+
+
+def test_save_from_compiled_model_strips_orig_mod_prefix(checkpoint_dir: Path) -> None:
+    """A compiled model must produce eager-compatible checkpoints.
+
+    ``torch.compile`` wraps the module so its ``state_dict`` keys gain an
+    ``_orig_mod.`` prefix; ``CheckpointManager`` must unwrap it so snapshots
+    stay loadable by eager models / inference scripts.
+    """
+    model, optimizer, scheduler, balancer = _build_state()
+    try:
+        compiled = torch.compile(model)
+    except Exception as exc:  # pragma: no cover - backend-dependent
+        pytest.skip(f"torch.compile unavailable: {exc}")
+
+    mgr = CheckpointManager(checkpoint_dir, save_every_n_epochs=1)
+    ckpt = mgr.save(
+        model=compiled, optimizer=optimizer, scheduler=scheduler,
+        epoch=2, best_val_loss=0.3, patience_counter=1,
+        balancer=balancer, is_best=False,
+    )
+
+    state = torch.load(ckpt, weights_only=False)
+    assert all(not k.startswith("_orig_mod.") for k in state["model"])
+
+    # And it loads straight into a fresh eager model.
+    fresh, _, _, _ = _build_state()
+    for p in fresh.parameters():
+        p.data.zero_()
+    CheckpointManager.load(ckpt, model=fresh, device=torch.device("cpu"))
+    for k, ref in model.state_dict().items():
+        assert torch.equal(fresh.state_dict()[k], ref)
+
+
+def test_load_weights_only_restores_weights_not_bookkeeping(checkpoint_dir: Path) -> None:
+    """Warm-start loads weights only; optimizer/epoch state is not returned."""
+    model, optimizer, scheduler, balancer = _build_state()
+    mgr = CheckpointManager(checkpoint_dir, save_every_n_epochs=1)
+    mgr.save(
+        model=model, optimizer=optimizer, scheduler=scheduler,
+        epoch=7, best_val_loss=0.1, patience_counter=3,
+        balancer=balancer, is_best=True,
+    )
+
+    ref_weights = {k: v.clone() for k, v in model.state_dict().items()}
+    fresh, _, _, _ = _build_state()
+    for p in fresh.parameters():
+        p.data.zero_()
+
+    # Returns None (no bookkeeping); only weights are copied over.
+    out = CheckpointManager.load_weights_only(
+        checkpoint_dir / "best.pth", model=fresh, device=torch.device("cpu")
+    )
+    assert out is None
+    for k, ref in ref_weights.items():
+        assert torch.equal(fresh.state_dict()[k], ref)
+
+
 # ── Edge case: balancer with no running state ──────────────────────────────
 
 

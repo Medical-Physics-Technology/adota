@@ -402,6 +402,17 @@ def _restore_rng_state(state: Dict[str, Any]) -> None:
         random.setstate(state["python"])
 
 
+def _unwrap_compiled(model: torch.nn.Module) -> torch.nn.Module:
+    """Return the underlying module behind a ``torch.compile`` wrapper.
+
+    ``torch.compile`` returns an ``OptimizedModule`` whose ``state_dict`` keys
+    carry an ``_orig_mod.`` prefix. Saving / loading via the unwrapped module
+    keeps checkpoints format-identical whether or not the model was compiled,
+    so they stay loadable by inference scripts and across compile settings.
+    """
+    return getattr(model, "_orig_mod", model)
+
+
 class CheckpointManager:
     """Save and load full training snapshots.
 
@@ -436,7 +447,7 @@ class CheckpointManager:
         """Persist a training snapshot. Returns the ``last.pth`` path."""
         state: Dict[str, Any] = {
             "epoch": epoch,
-            "model": model.state_dict(),
+            "model": _unwrap_compiled(model).state_dict(),
             "optimizer": optimizer.state_dict(),
             "scheduler": scheduler.state_dict() if scheduler is not None else None,
             "best_val_loss": best_val_loss,
@@ -478,7 +489,7 @@ class CheckpointManager:
         # RNG state (and a balancer tensor) alongside the state dicts.
         state = torch.load(path, map_location=map_location, weights_only=False)
 
-        model.load_state_dict(state["model"])
+        _unwrap_compiled(model).load_state_dict(state["model"])
         if optimizer is not None and state.get("optimizer") is not None:
             optimizer.load_state_dict(state["optimizer"])
         if scheduler is not None and state.get("scheduler") is not None:
@@ -494,6 +505,25 @@ class CheckpointManager:
             "patience_counter": state["patience_counter"],
             "extra": state.get("extra", {}),
         }
+
+    @staticmethod
+    def load_weights_only(
+        path: Path,
+        *,
+        model: torch.nn.Module,
+        device: Optional[torch.device] = None,
+    ) -> None:
+        """Warm-start: load only the model weights from a checkpoint.
+
+        Optimizer, scheduler, balancer, RNG, and the epoch / best-loss
+        bookkeeping are deliberately *not* restored, so the caller starts a
+        fresh training run (fresh schedule, epoch counter at 0) from a prior
+        set of weights. Unwraps ``torch.compile`` so a compiled model loads an
+        eager checkpoint and vice versa.
+        """
+        map_location = device if device is not None else "cpu"
+        state = torch.load(path, map_location=map_location, weights_only=False)
+        _unwrap_compiled(model).load_state_dict(state["model"])
 
 
 # ── Signal handling ─────────────────────────────────────────────────────────

@@ -20,6 +20,7 @@ from torch.utils.data import DataLoader
 
 from src.adota.models import DoTA3D_v3
 from src.loaders.generator import H5PYGenerator
+from src.training.data import collate_h5
 from src.training.losses import LMSE
 
 DATASET_PATH = (
@@ -78,13 +79,9 @@ def _pick_device() -> torch.device:
     return torch.device(f"cuda:{best_idx}" if best_idx is not None else "cuda:0")
 
 
-def _collate(batch):
-    """Stack H5PYGenerator samples (mirrors scripts/train_adota._collate_h5)."""
-    xs, es, ys = zip(*batch)
-    X = torch.stack([t.contiguous() for t in xs], dim=0)
-    E = torch.stack([e.view(1) for e in es], dim=0)
-    Y = torch.stack([t.contiguous() for t in ys], dim=0)
-    return X, E, Y
+# Stack H5PYGenerator samples via the shared production collate (single source
+# of truth in src.training.data).
+_collate = collate_h5
 
 
 def test_training_smoke_on_real_data_slice():

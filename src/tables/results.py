@@ -176,3 +176,51 @@ def print_results_table(
         _print(f"Mean {label}: {mean} ± {std}")
         _print(f"Min {label}: {min_val}")
         _print(f"Max {label}: {max_val}")
+
+
+def render_comparison_table(
+    row_labels: List[str],
+    column_headers: List[str],
+    cells: List[List[str]],
+    *,
+    row_header: str = "Run",
+) -> str:
+    """Render an aligned ``Row x Column`` text table (also valid Markdown).
+
+    Generic helper for the cross-run validation experiment: one row per run,
+    one column per metric, each cell a pre-formatted string (e.g. ``mean ± std``).
+    The output is column-aligned monospace text whose ``|``-delimited rows and
+    separator line also parse as a GitHub Markdown table.
+
+    Args:
+        row_labels: Left-column label for each row (e.g. run names).
+        column_headers: Metric column headers.
+        cells: ``cells[i][j]`` is the string for row ``i``, column ``j``.
+            Must be a rectangular ``len(row_labels) x len(column_headers)`` grid.
+        row_header: Header for the left-most (label) column.
+
+    Returns:
+        The table as a single string (rows joined by newlines).
+    """
+    n_rows, n_cols = len(row_labels), len(column_headers)
+    if len(cells) != n_rows or any(len(r) != n_cols for r in cells):
+        raise ValueError(
+            f"cells must be {n_rows}x{n_cols}; got "
+            f"{len(cells)}x{[len(r) for r in cells]}"
+        )
+
+    headers = [row_header, *column_headers]
+    grid = [headers] + [
+        [row_labels[i], *cells[i]] for i in range(n_rows)
+    ]
+    widths = [
+        max(len(grid[r][c]) for r in range(len(grid))) for c in range(n_cols + 1)
+    ]
+
+    def _fmt_row(values: List[str]) -> str:
+        return "| " + " | ".join(v.ljust(widths[c]) for c, v in enumerate(values)) + " |"
+
+    sep = "|" + "|".join("-" * (w + 2) for w in widths) + "|"
+    lines = [_fmt_row(headers), sep]
+    lines += [_fmt_row(grid[r]) for r in range(1, len(grid))]
+    return "\n".join(lines)

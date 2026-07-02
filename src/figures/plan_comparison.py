@@ -281,12 +281,12 @@ def plan_dose_comparison(
     ax["ax_d"].set_title(diff_title, fontsize=17, weight="bold")
 
     cb_dose = fig.colorbar(dose_im, cax=ax["cdose"])
-    cb_dose.set_label(f"Dose [{dose_unit}]", fontsize=15)
-    cb_dose.ax.tick_params(labelsize=11)
+    cb_dose.set_label(f"Dose [{dose_unit}]", fontsize=19)
+    cb_dose.ax.tick_params(labelsize=15)
     if not single_colorbar:
         cb_diff = fig.colorbar(diff_im, cax=ax["cdiff"])
-        cb_diff.set_label(f"{labels[0]} - {labels[1]} [{dose_unit}]", fontsize=14)
-        cb_diff.ax.tick_params(labelsize=11)
+        cb_diff.set_label(f"{labels[0]} - {labels[1]} [{dose_unit}]", fontsize=18)
+        cb_diff.ax.tick_params(labelsize=15)
 
     # Integrated depth dose along x, normalized to the reference (dose_b) peak.
     idd_a = dose_a.sum(axis=(0, 1))

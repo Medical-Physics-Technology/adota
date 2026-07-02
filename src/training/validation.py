@@ -159,6 +159,34 @@ def _gamma_pass_rate(
     return float(np.sum(gamma_values[valid] <= 1.0) / np.count_nonzero(valid))
 
 
+# ── Canary / GPR subset selection ───────────────────────────────────────────
+
+
+def pick_canary(
+    val_dataset, device: torch.device
+) -> Tuple[torch.Tensor, torch.Tensor, str]:
+    """Return ``(x, energy, sample_id)`` for a fixed canary validation sample.
+
+    The canary is always the first validation record, so attention snapshots
+    across epochs are directly comparable.
+    """
+    x, energy, _ = val_dataset[0]
+    canary_id = val_dataset.record_ids[0]
+    return x.unsqueeze(0).to(device), energy.view(1, 1).to(device), canary_id
+
+
+def pick_gpr_subset(
+    n_val_samples: int, subset_size: int, rng: np.random.RandomState
+) -> List[int]:
+    """Pick a sorted, fixed random subset of validation indices for gamma.
+
+    When ``subset_size`` covers the whole set, every index is returned.
+    """
+    if subset_size >= n_val_samples:
+        return list(range(n_val_samples))
+    return sorted(rng.choice(n_val_samples, size=subset_size, replace=False).tolist())
+
+
 # ── Main entry point ────────────────────────────────────────────────────────
 
 
@@ -175,6 +203,7 @@ def evaluate_validation(
     gpr_subset_indices: Sequence[int],
     run_dir: Path,
     epoch: int,
+    gpr_comparable_ids: Optional[Sequence[str]] = None,
 ) -> Dict[str, Any]:
     """Run validation and produce structured metrics + side artifacts.
 
@@ -193,10 +222,15 @@ def evaluate_validation(
             combined validation loss.
         compute_gpr: Whether to compute GPR this epoch.
         gpr_subset_indices: Indices (into the iteration order) of the
-            samples to run GPR on. Ignored if ``compute_gpr`` is False.
+            samples to run GPR on (the stable pool). Ignored if
+            ``compute_gpr`` is False.
         run_dir: Root run directory; per-epoch artifacts go under
             ``run_dir/validation/epoch_NNNN/``.
         epoch: Current epoch (used for filenames).
+        gpr_comparable_ids: Optional record ids forming the nested
+            comparable subset of the gamma pool. When given, an extra
+            ``gpr_comparable_mean`` is reported over just those records, for
+            apples-to-apples comparison with prior runs.
 
     Returns:
         Dictionary with the aggregated metrics, ready to feed into
@@ -350,6 +384,24 @@ def evaluate_validation(
                 "gpr_n_samples": len(gpr_values),
             }
         )
+        # Nested comparable subset: gamma averaged over just the prior-run
+        # comparable ids (a subset of the pool already scored above).
+        if gpr_comparable_ids:
+            comp_set = set(gpr_comparable_ids)
+            comp_vals = [
+                s.gpr
+                for s, sid in zip(samples, sample_ids_seen)
+                if s.gpr is not None and sid in comp_set
+            ]
+            if comp_vals:
+                comp_arr = np.array(comp_vals)
+                metrics.update(
+                    {
+                        "gpr_comparable_mean": float(comp_arr.mean()),
+                        "gpr_comparable_std": float(comp_arr.std()),
+                        "gpr_comparable_n_samples": len(comp_vals),
+                    }
+                )
 
     # ── Per-energy breakdowns ────────────────────────────────────────
     fixed_edges = config.energy_bins_fixed
