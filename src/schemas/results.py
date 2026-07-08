@@ -184,8 +184,29 @@ class SampleRecord:
     isi_max: float = 0.0
     isi_mean: float = 0.0
     isi_axial_sum: float = 0.0
+    # Derived: DW edge energy weighted by orientation, tr(J_dw) * sin^2(theta).
+    # Emphasizes edges parallel to the beam axis (lateral interfaces, the
+    # Pflugfelder range-dilution case).
+    lateral_edge_energy: float = 0.0
+    # Beamlet direction: per-spot steering angles (deg) = the rotation applied to
+    # the input before inference, and the field gantry angle (deg). NaN when the
+    # source dataset carries no angle metadata.
+    beamlet_angle_0_deg: float = float("nan")
+    beamlet_angle_1_deg: float = float("nan")
+    gantry_angle_deg: float = float("nan")
     gpr: float = 0.0
     rde: float = 0.0
+    # Range-fidelity metrics from the integrated depth-dose (IDD) curves.
+    # MC reference depths plus signed (ADoTA - MC) deltas, all in mm; NaN when
+    # the IDD is degenerate (empty / no distal fall-off).
+    mc_r100_mm: float = float("nan")
+    mc_r80_mm: float = float("nan")
+    mc_r20_mm: float = float("nan")
+    mc_dfw_mm: float = float("nan")
+    r100_delta_mm: float = float("nan")
+    r80_delta_mm: float = float("nan")
+    r20_delta_mm: float = float("nan")
+    dfw_delta_mm: float = float("nan")
     extract_time: float = 0.0
 
 

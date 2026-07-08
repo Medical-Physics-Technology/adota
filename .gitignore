@@ -221,3 +221,8 @@ runs/
 run_logs/
 
 publications/*
+
+# graphify knowledge-graph output (regenerable via /graphify); keep only the report
+graphify-out/*
+!graphify-out/GRAPH_REPORT.md
+src/graphify-out/

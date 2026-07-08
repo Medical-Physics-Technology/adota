@@ -91,6 +91,12 @@ class AdvancedAnalysisConfig:
     # Interface Severity Index — severity weighting mode
     # ("rsp_sq", "rsp_abs", or "density_sq")
     isi_severity_mode: str = "rsp_sq"
+    # Correlation analysis: scatter plots kept per target (top-N by |Spearman|)
+    scatter_top_n: int = 6
+    # Diagnostic IDD overlays for the largest |ΔR80| beamlets (0 disables)
+    n_worst_idd_figures: int = 8
+    # Sub-voxel oversampling for range-metric (R80/R100/DFW) extraction
+    range_oversample: int = 20
 
 
 # ── VLM-based analysis ──────────────────────────────────────────────────────
