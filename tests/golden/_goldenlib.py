@@ -63,7 +63,14 @@ def set_determinism(seed: int = 1234) -> None:
 
 
 def _is_timing(col: str) -> bool:
-    return col.endswith("_time_s") or col in {"calc_time_s", "extract_time_s"}
+    # Match both the legacy suffixed names (``*_time_s``) and the dataclass-native
+    # names now emitted by the CSV (``extract_time``, ``calc_time``); all are
+    # wall-clock and vary run to run.
+    return (
+        col.endswith("_time_s")
+        or col.endswith("_time")
+        or col in {"calc_time_s", "extract_time_s", "calc_time", "extract_time"}
+    )
 
 
 def compare_csv(

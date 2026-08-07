@@ -38,12 +38,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from src.adota.config import DEFAULT_SCALE
 from src.figures.ct_visualizations import plot_bp_estimation_diagnostic
 from src.loaders.generator import H5PYGenerator
-from src.processing.rsp import (
-    DENSITY_WATER,
-    hu_to_density,
-    hu_to_rsp,
-    hu_to_rsp_density,
-)
+from src.processing.rsp import hu_to_rsp_density
 from src.utils.scallers import inverse_minmax
 
 logger = logging.getLogger(__name__)
@@ -121,15 +116,17 @@ def load_schneider_calibration(path: Path) -> dict:
         return yaml.safe_load(f)
 
 
-def hu_to_rsp(ct_hu: np.ndarray, calibration: dict) -> np.ndarray:
+def hu_to_rsp(ct_hu: np.ndarray, calibration: Optional[dict] = None) -> np.ndarray:
     """Convert HU volume to relative stopping power (RSP).
 
-    NOTE: This is a thin wrapper kept for backward compatibility.
-    The canonical implementation lives in ``src.processing.rsp``.
+    Uses the single canonical physical model (the MCsquare ``default``-scanner
+    calibration in :mod:`src.processing.mcsquare_calibration`) so this script is
+    consistent with the WEPL/Pflugfelder and ISI metrics. The ``calibration``
+    argument is retained for signature compatibility but is ignored.
     """
     from src.processing.rsp import hu_to_rsp as _hu_to_rsp
 
-    return _hu_to_rsp(ct_hu, calibration=calibration)
+    return _hu_to_rsp(ct_hu)
 
 
 def energy_to_r80_mm(energy_mev: float) -> float:

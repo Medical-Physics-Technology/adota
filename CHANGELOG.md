@@ -3,6 +3,68 @@
 All notable changes to this project are documented in this file. This project
 adheres to [Semantic Versioning](https://semver.org).
 
+## [1.3.0] - 2026-08-07
+
+Two additions: a single unified physical model behind every heterogeneity metric,
+and a complete input-only difficulty-score study for active-learning beamlet
+selection (report plus reproducible analysis code). The per-beamlet dose model is
+**unchanged**.
+
+### New
+- **`src/processing/mcsquare_calibration.py`** - self-contained HU to relative
+  stopping power (RSP) using the MCsquare `default` scanner tables (the ones the
+  DoTA data generation used): `RSP = rho(HU) * SP_material(HU,E) / SP_water(E)`.
+  Validated against OpenTPS to six decimals (water SP at 100 MeV = 7.256284), no
+  runtime OpenTPS dependency. Scanner and Geant4 material stopping-power tables
+  live in `src/processing/data/mcsquare_default/`.
+- **`src/processing/range_energy.py`** - Grevillot energy-to-R80 range fits, so the
+  Bragg-peak depth is derivable from the beam energy alone (input-only).
+- **[`research/acquisition_function_final_summary.md`](research/acquisition_function_final_summary.md)**
+  (with rendered [PDF](research/acquisition_function_final_summary.pdf)) - the
+  difficulty-score study. An input-only score (weighted sum of percentile-normalized
+  physics metrics) predicts the relative dose error on unseen patients to Pearson
+  0.85 / Spearman 0.86, with an interpretable 14-metric version at 0.79 / 0.82;
+  frozen-test validated on 7 held-out patients. The gamma pass rate is predictable
+  only to 0.71. Design and math framework in
+  [`research/acquisition_function_design.md`](research/acquisition_function_design.md).
+- **`scripts/analysis/`** - reproducible analysis behind the report:
+  `acquisition_regression_study.py` and `acquisition_dev_analysis.py` (achievability),
+  `acquisition_target_comparison.py` and `extract_mape.py` (target/transform),
+  `acquisition_single_metric_corr.py` (single-metric floor), `acquisition_frozen_test.py`
+  and `acquisition_rde_finalize.py` (final scorer plus frozen test),
+  `acquisition_ranking_benchmark.py` (tail-lift), `build_beamlet_provenance.py`
+  (per-beamlet anatomy/patient map), and the `plot_*` figure generators. Figures under
+  `research/figures/acquisition/`.
+
+### Changed
+- **Unified physical model** - `src/processing/rsp.py`,
+  `src/processing/tissue_decomposition.py`, `scripts/bragg_peak_estimation.py` and
+  `src/processing/pflugfelder_hi.py` now delegate their density and RSP values to
+  `mcsquare_calibration`, so WEPL, ISI, range and Bragg-peak estimation share one
+  physically consistent model (verified bit-identical across the entry points).
+
+### Fixed
+- **WEPL used a density ratio instead of stopping power** - the previous `hu_to_rsp`
+  defaulted to `rho/rho_water`, overestimating bone RSP by about 25 percent at
+  HU 1500. `compute_wepl_map` and the Pflugfelder index now use the MCsquare
+  stopping-power calibration.
+
+### Added (metric, not wired into the pipeline)
+- **`compute_parallel_beam_wepl_diff`** in `pflugfelder_hi.py` - a parallel-to-beam
+  WEPL split ("half bone, half air"). Kept and smoke-tested, but found redundant
+  with `wepl_std` (Spearman 0.92) and deliberately not wired into extraction.
+
+### Tests
+- `tests/test_pflugfelder_hi.py` updated for the stopping-power RSP (HU 0 now gives
+  soft-tissue RSP about 1.017, not pure water; added water-SP and bone-correction
+  checks). Golden-test baseline refreshed.
+
+### Dependencies
+- Added `scikit-learn>=1.6.1` (used by the acquisition analysis scripts).
+
+### Docs
+- `guides/` - the supervisor's publication guidelines that the report follows.
+
 ## [1.2.0] - 2026-06-16
 
 Plan-level dose pipeline: a new `src/beamlets/` package and

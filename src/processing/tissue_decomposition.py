@@ -90,23 +90,33 @@ TISSUE_LABELS = [
 
 
 def hu_to_density(hu: np.ndarray) -> np.ndarray:
-    """Convert HU to mass density [g/cm³] using piecewise-linear model.
+    """Convert HU to mass density [g/cm³].
 
-    Segment 1 (HU ≤ 0):  ρ = 1.0 + HU × 0.001  (air → water)
-    Segment 2 (HU > 0):  ρ = 1.0 + HU × 0.0005  (water → bone)
+    Delegates to the canonical MCsquare ``default``-scanner calibration
+    (:mod:`src.processing.mcsquare_calibration`) so every metric shares one
+    physical model. (Previously a 2-segment linear approximation; see git
+    history for the old behaviour.)
     """
-    rho = np.where(hu <= 0, 1.0 + hu * 0.001, 1.0 + hu * 0.0005)
-    return np.clip(rho, 0.001, 3.0)
+    from src.processing.mcsquare_calibration import get_default_calibration
+
+    return get_default_calibration().convert_hu_to_density(
+        np.asarray(hu, dtype=float)
+    )
 
 
 def hu_to_rsp_schneider(hu: np.ndarray) -> np.ndarray:
-    """Convert HU → relative stopping power via Schneider calibration.
+    """Convert HU → relative stopping power (RSP).
 
-    HU ≤ 0:  RSP = 1.0 + HU × 0.001029
-    HU > 0:  RSP = 1.0 + HU × 0.000487
+    Delegates to the canonical MCsquare ``default``-scanner calibration
+    (:mod:`src.processing.mcsquare_calibration`): ``RSP = rho(HU) *
+    SP_material(HU, E) / SP_water(E)`` at the 100 MeV reference energy, so the
+    Interface Severity Index uses the exact physical model shared by the
+    WEPL/Pflugfelder metrics and by MCsquare itself. (Previously a 2-segment
+    linear Schneider approximation.)
     """
-    rsp = np.where(hu <= 0, 1.0 + hu * 0.001029, 1.0 + hu * 0.000487)
-    return np.clip(rsp, 0.001, 2.5)
+    from src.processing.mcsquare_calibration import get_default_calibration
+
+    return get_default_calibration().convert_hu_to_rsp(np.asarray(hu, dtype=float))
 
 
 def mat_comp(hu: np.ndarray) -> np.ndarray:

@@ -88,11 +88,10 @@ def test_training_set_analysis_advanced_metrics_golden(tmp_path):
 
     results = extract_all_samples(
         model=model,
-        record_ids=record_ids,
         dataset=dataset,
+        record_ids=record_ids,
         config=config,
         device=device,
-        figures_dir=tmp_path / "figures",
         show_progress=False,
     )
     assert results, "all sampled beamlets were skipped; widen the slice"
