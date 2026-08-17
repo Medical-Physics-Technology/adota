@@ -291,7 +291,17 @@ class TrainingConfig:
     #   "angle_broadcast" -- a constant volume whose value is
     #                        sqrt(theta_x^2 + theta_y^2), removing all
     #                        spatial structure from the flux channel
+    #   "centerline_fixed" / "centerline_soft" / "centerline_binary" --
+    #                        the beam centerline instead of the flux projection
+    #                        (see src.loaders.generator.CENTERLINE_MODES); these
+    #                        read line params from ``centerline_sidecar``.
     flux_mode: str = "analytical"
+    # Parquet sidecar of precomputed centerline params {uuid: a0,a1,b0,b1};
+    # only used by the centerline_* flux modes.
+    centerline_sidecar: str = (
+        "/scratch/mstryja/DoTA_dataset_v2/"
+        "centerline_params_trainset_pelvis_initial_test_one_ct.csv"
+    )
 
     # Residual-connection ablations (passed verbatim to DoTA3D_v3). Both
     # default to True, reproducing the original architecture.
@@ -320,11 +330,19 @@ class RunRef:
     ``run_dir`` is a directory under ``runs_dir`` containing ``hyperparams.json``
     and a ``checkpoints/`` folder. ``checkpoint_fname`` (when set) overrides the
     experiment-level default for this run.
+
+    ``flux_mode`` / ``centerline_sidecar`` override the input encoding for this
+    run. When left ``None`` they are auto-detected from the run's saved
+    ``config.yaml`` (falling back to the experiment-level defaults), so a run
+    trained with a different second channel (e.g. ``centerline_fixed``) is
+    evaluated with the input channel it was actually trained on.
     """
 
     name: str
     run_dir: str
     checkpoint_fname: Optional[str] = None
+    flux_mode: Optional[str] = None
+    centerline_sidecar: Optional[str] = None
 
 
 @dataclass
@@ -342,7 +360,15 @@ class ValidationExperimentConfig:
     train_test_split: float = 0.2
     split_random_state: int = 42
     normalize_flux_only: bool = True
+    # Experiment-level default input encoding. Each run may override it (and it
+    # is auto-detected from the run's saved config.yaml), so runs trained with
+    # different second channels are compared on the same records, each fed the
+    # channel it was trained on.
     flux_mode: str = "analytical"
+    centerline_sidecar: str = (
+        "/scratch/mstryja/DoTA_dataset_v2/"
+        "centerline_params_trainset_pelvis_initial_test_one_ct.csv"
+    )
     scale: dict = field(default_factory=lambda: DEFAULT_SCALE.copy())
 
     # ── Runs to compare ──────────────────────────────────────────────────

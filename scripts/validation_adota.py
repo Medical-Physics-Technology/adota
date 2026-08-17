@@ -146,11 +146,11 @@ def _check_split_consistency(
 # ── Shared validation set ───────────────────────────────────────────────────
 
 
-def _build_val_loader(cfg: ValidationExperimentConfig):
-    """Build the shared, batched validation DataLoader (identical for all runs).
+def _compute_val_ids(cfg: ValidationExperimentConfig) -> List[str]:
+    """Deterministic validation record ids, identical for every run.
 
-    Returns ``(loader, val_ids)``. ``shuffle=False`` keeps the iteration order
-    aligned with ``val_ids`` so per-sample results map back to record ids.
+    All runs are scored on the same records (the split guard enforces matching
+    dataset/split); only the input encoding differs per run.
     """
     excluded = (
         Path(cfg.excluded_indexes_file) if cfg.excluded_indexes_file else None
@@ -164,7 +164,48 @@ def _build_val_loader(cfg: ValidationExperimentConfig):
     if cfg.n_samples is not None and cfg.n_samples < len(val_ids):
         val_ids = val_ids[: cfg.n_samples]
         logger.warning("Capped val set to first %d samples (n_samples).", len(val_ids))
+    return val_ids
 
+
+def _resolve_run_input(
+    cfg: ValidationExperimentConfig, run: RunRef, run_dir: Path
+) -> tuple[str, str]:
+    """Resolve ``(flux_mode, centerline_sidecar)`` for a run.
+
+    Precedence: explicit ``RunRef`` field > the run's saved ``config.yaml`` (what
+    it was trained with) > the experiment-level default. This ensures a run
+    trained on a different second channel (e.g. ``centerline_fixed``) is
+    evaluated with the input channel it was actually trained on.
+    """
+    run_cfg: Dict[str, Any] = {}
+    cfg_path = run_dir / "config.yaml"
+    if cfg_path.exists():
+        try:
+            run_cfg = load_yaml_config(cfg_path)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("[%s] could not read run config.yaml (%s)", run.name, exc)
+    flux_mode = run.flux_mode or run_cfg.get("flux_mode") or cfg.flux_mode
+    sidecar = (
+        run.centerline_sidecar
+        or run_cfg.get("centerline_sidecar")
+        or cfg.centerline_sidecar
+    )
+    return flux_mode, sidecar
+
+
+def _build_val_loader(
+    cfg: ValidationExperimentConfig,
+    val_ids: List[str],
+    flux_mode: str,
+    centerline_sidecar: str,
+):
+    """Batched loader over the shared ``val_ids`` with the given input encoding.
+
+    Returns ``(loader, effective_ids)``. ``effective_ids`` is the dataset's
+    actual record order: centerline modes drop records missing from the sidecar,
+    so returning the real order keeps per-sample results mapped to the right ids.
+    ``shuffle=False`` keeps the iteration order aligned with ``effective_ids``.
+    """
     dataset = H5PYGenerator(
         file_path=cfg.dataset_path,
         indexes=val_ids,
@@ -172,9 +213,17 @@ def _build_val_loader(cfg: ValidationExperimentConfig):
         cropp=True,
         normalize=False,
         normalize_flux_only=cfg.normalize_flux_only,
-        flux_mode=cfg.flux_mode,
+        flux_mode=flux_mode,
+        centerline_sidecar=centerline_sidecar,
         indexes_to_exclude_list=cfg.excluded_indexes_file,
     )
+    effective_ids = list(dataset.record_ids)
+    if len(effective_ids) != len(val_ids):
+        logger.warning(
+            "[flux_mode=%s] covers %d/%d shared val records; the rest are dropped "
+            "(sidecar coverage). Comparison is over the covered subset for this run.",
+            flux_mode, len(effective_ids), len(val_ids),
+        )
     loader = DataLoader(
         dataset,
         batch_size=cfg.batch_size,
@@ -184,11 +233,7 @@ def _build_val_loader(cfg: ValidationExperimentConfig):
         persistent_workers=cfg.num_workers > 0,
         collate_fn=collate_h5,
     )
-    logger.info(
-        "Shared validation set: %d samples | batch_size=%d num_workers=%d",
-        len(dataset), cfg.batch_size, cfg.num_workers,
-    )
-    return loader, val_ids
+    return loader, effective_ids
 
 
 def load_run_model(
@@ -536,7 +581,11 @@ def _run_inference_mode(
     device = resolve_device(cfg.device_index)
     logger.info("Device     : %s", device)
 
-    val_loader, val_ids = _build_val_loader(cfg)
+    val_ids = _compute_val_ids(cfg)
+    logger.info(
+        "Shared validation set: %d records | batch_size=%d num_workers=%d",
+        len(val_ids), cfg.batch_size, cfg.num_workers,
+    )
     loss_mse_fn = LMSE()
     headers = [h for _a, h, _f in _METRIC_COLUMNS]
     row_labels: List[str] = []
@@ -545,20 +594,27 @@ def _run_inference_mode(
     for run in cfg.runs:
         rd = Path(run.run_dir)
         _check_split_consistency(cfg, run, rd)
+        # Each run is fed the input channel it was trained on (auto-detected from
+        # its saved config.yaml), so mixed-encoding runs stay comparable.
+        flux_mode, sidecar = _resolve_run_input(cfg, run, rd)
         ckpt_name = run.checkpoint_fname or cfg.checkpoint_fname
-        logger.info("[%s] loading %s", run.name, rd / "checkpoints" / ckpt_name)
+        logger.info(
+            "[%s] flux_mode=%s | loading %s",
+            run.name, flux_mode, rd / "checkpoints" / ckpt_name,
+        )
         model = load_run_model(rd, ckpt_name, device)
+        loader, eff_ids = _build_val_loader(cfg, val_ids, flux_mode, sidecar)
 
         results = evaluate_run(
-            model, val_loader, val_ids, device, cfg, loss_mse_fn, desc=f"[{run.name}]"
+            model, loader, eff_ids, device, cfg, loss_mse_fn, desc=f"[{run.name}]"
         )
         agg = aggregate_run(results)
         row_labels.append(run.name)
         cells.append([_cell(agg[attr], fmt) for attr, _h, fmt in _METRIC_COLUMNS])
         _save_per_sample_csv(results, run_dir / f"per_sample_{run.name}.csv")
-        logger.info("[%s] done: %d samples", run.name, len(results))
+        logger.info("[%s] flux_mode=%s done: %d samples", run.name, flux_mode, len(results))
 
-        del model
+        del model, loader
         if device.type == "cuda":
             torch.cuda.empty_cache()
 

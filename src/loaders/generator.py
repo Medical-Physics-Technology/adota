@@ -10,6 +10,16 @@ from src.augmentation.geo_augmenations import (
     moving_window_augmentation,
     cropp_around_index,
 )
+from src.beamlets.centerline import BeamLine, render_centerline
+
+# Centerline flux modes: the second input channel carries the beam centerline
+# instead of the Gaussian flux projection. Maps mode -> (render mode, sigma).
+# ``centerline_fixed`` is the smooth, fixed-size (energy-independent) tube.
+CENTERLINE_MODES = {
+    "centerline_fixed": ("soft", 1.71),   # constant-width smooth tube
+    "centerline_soft": ("soft", 1.0),     # thin soft line
+    "centerline_binary": ("binary", 1.0),  # nearest-voxel line
+}
 
 
 class H5PYGenerator(Dataset):
@@ -101,8 +111,33 @@ class H5PYGenerator(Dataset):
         )  # Normalize flux only is a flag which is used for tests.
 
         self.flux_mode = kwargs.get("flux_mode", "analytical")
-        if self.flux_mode not in {"analytical", "angle_broadcast"}:
+        if self.flux_mode not in ({"analytical", "angle_broadcast"} | set(CENTERLINE_MODES)):
             raise ValueError(f"Unknown flux_mode: {self.flux_mode!r}")
+
+        # For a centerline flux mode, load the precomputed line-parameter sidecar
+        # ({uuid: a0,a1,b0,b1}, raw-record frame) and keep only records it covers.
+        self._cl_params = None
+        if self.flux_mode in CENTERLINE_MODES:
+            self._cl_render_mode, self._cl_sigma = CENTERLINE_MODES[self.flux_mode]
+            sidecar = kwargs.get(
+                "centerline_sidecar",
+                "/scratch/mstryja/DoTA_dataset_v2/"
+                "centerline_params_trainset_pelvis_initial_test_one_ct.csv",
+            )
+            import pandas as pd  # local import: only needed for centerline modes
+            cl = pd.read_csv(sidecar)
+            self._cl_params = {
+                r.uuid: (r.a0, r.a1, r.b0, r.b1) for r in cl.itertuples(index=False)
+            }
+            before = len(self.record_ids)
+            self.record_ids = [r for r in self.record_ids if r in self._cl_params]
+            dropped = before - len(self.record_ids)
+            if dropped:
+                warnings.warn(
+                    f"centerline mode {self.flux_mode!r}: dropped {dropped}/{before} "
+                    f"records missing from the sidecar {sidecar}",
+                    category=UserWarning,
+                )
 
         # Random rotation by one of angles (0, 90, 180, 270)
         self.rotk = np.arange(4) if self.square_slice else [0, 2]
@@ -118,6 +153,16 @@ class H5PYGenerator(Dataset):
             ct_grid = record_group["ct"][:]
             dose_grid = record_group["dose"][:]
             flux_grid = record_group["flux"][:]
+
+            # Centerline modes replace the flux channel with the beam centerline,
+            # rendered in the raw record frame so it rides the same crop + rot90
+            # augmentation as the ct/flux/dose grids below.
+            if self._cl_params is not None:
+                a0, a1, b0, b1 = self._cl_params[_id]
+                flux_grid = render_centerline(
+                    BeamLine(a0, a1, b0, b1), flux_grid.shape,
+                    mode=self._cl_render_mode, sigma=self._cl_sigma,
+                )
 
             if not self.augmentation and self.cropp:
                 # If augmentation is disabled, but cropping is enabled, we cropp around the Bragg peak.
