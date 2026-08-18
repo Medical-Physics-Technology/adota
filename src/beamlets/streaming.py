@@ -35,10 +35,16 @@ from src.beamlets import ROI_SIZE, roi_for_factor
 from src.beamlets.accumulation import deposit_crop
 from src.beamlets.bdl import BeamDataLibrary, spot_position_to_angles
 from src.beamlets.cropping import extract_beamlet_roi
-from src.beamlets.flux import flux_projection, flux_projection_gpu, flux_spatial_spread
+from src.beamlets.flux import (
+    flux_projection,
+    flux_projection_gpu,
+    flux_projection_gpu_batched,
+    flux_spatial_spread,
+)
 from src.beamlets.isocenter import isocenter_physical
 from src.beamlets.plan_spots import expand_plan_to_spots, group_by_field
 from src.beamlets.rotation import rotate_ct_around_isocenter
+from src.image_processing.rotation import rotate_beamlet_crops_batched
 from src.loaders.dir_based import postprocess_prediction, prepare_input_from_arrays
 from src.loaders.plan_directory import PlanDirectory
 
@@ -61,6 +67,12 @@ class StreamingConfig:
     bdl_path: Optional[Path] = None
     batch_size: int = 56
     flux_on_gpu: bool = True
+    flux_batched: bool = False
+    """Build the whole batch's flux in one :func:`flux_projection_gpu_batched`
+    call instead of per-spot (GPU only). ``False`` (default) keeps the per-spot
+    path byte-identical to the staged pipeline; ``True`` is the optimized ADoTA
+    reinterpretation used for the fair DoTA-vs-ADoTA plan timing (the counterpart
+    to the batched GPU BEV rotation)."""
     flux_device: str = "cuda"
     normalize_flux: bool = True
     downsampling_method: str = "interpolation"
@@ -77,6 +89,17 @@ class StreamingConfig:
     ``torch.autocast`` (CUDA half precision) for a large speed-up; the prediction
     is cast back to fp32 before deposit so accumulation is unchanged. fp16 is a
     no-op on CPU. Validate the dose (gamma vs MC) before adopting."""
+    reinterpretation_mode: str = "adota_flux"
+    """Which per-beamlet direction handling to run (for the DoTA-vs-ADoTA timing
+    study). ``"adota_flux"`` (default) is the real ADoTA pipeline, byte-identical
+    to before: axis-aligned crop + analytical flux channel. ``"dota_rotation"``
+    is the DoTA-like path, actually executed for a *measured* plan number: each
+    batch of CT crops is rotated into the BEV (batched GPU ``grid_sample``,
+    charged to ``rotate_to_bev``), the shared model runs on the rotated CT with a
+    zero second channel (no flux is built or charged), and the predicted dose is
+    rotated back to the field frame (``rotate_to_field``) before deposit. The
+    dose it deposits is NOT validated (the shared 2-channel model is fed a zero
+    flux); this mode exists only to time the reinterpretation on real plan data."""
 
 
 def run_streaming_pipeline(
@@ -146,8 +169,26 @@ def run_streaming_pipeline(
         raise ValueError(f"precision must be 'fp32' or 'fp16', got {config.precision!r}")
 
     model.eval()
+    dota_mode = config.reinterpretation_mode == "dota_rotation"
+    if config.reinterpretation_mode not in ("adota_flux", "dota_rotation"):
+        raise ValueError(
+            "reinterpretation_mode must be 'adota_flux' or 'dota_rotation', "
+            f"got {config.reinterpretation_mode!r}"
+        )
+    if dota_mode:
+        logger.warning(
+            "reinterpretation_mode=dota_rotation: timing the DoTA BEV rotations on "
+            "real plan data; the deposited dose is NOT validated (zero flux channel)."
+        )
+
     total = np.zeros(sitk.GetArrayFromImage(ct).shape, dtype=np.float32)  # (z, y, x)
-    timing = {k: 0.0 for k in ("rotation", "crop", "flux", "prep", "forward", "post", "deposit", "derotate")}
+    timing = {
+        k: 0.0
+        for k in (
+            "rotation", "crop", "flux", "rotate_to_bev", "prep", "forward",
+            "post", "rotate_to_field", "deposit", "derotate",
+        )
+    }
     n_spots = 0
     started = perf_counter()
 
@@ -172,6 +213,9 @@ def run_streaming_pipeline(
         ]
         for batch in batches:
             inputs, energies, deposits = [], [], []  # deposits: (crp, weight)
+            # Crop every record first; collect what each reinterpretation needs.
+            crops, angles_list, energy_list, flux_list = [], [], [], []
+            flux_params = []  # (re_proj, angles, sigmas) for the ADoTA flux
             for record in batch:
                 sim_log = record["simulation_log"]
                 spot_position = sim_log["bixelgrid_shifts_xy"][0]
@@ -184,36 +228,72 @@ def run_streaming_pipeline(
                 )
                 timing["crop"] += perf_counter() - crop_t
 
-                flux_t = perf_counter()
                 beamlet_angles = spot_position_to_angles(
                     spot_position[0], spot_position[1], d_smx, d_smy
                 )
-                sigmas = flux_spatial_spread(bdl, energy)
-                re_proj = [entrance[1], entrance[2], entrance[0]]
-                if config.flux_on_gpu:
-                    flux = flux_projection_gpu(
-                        re_proj, beamlet_angles, sigmas, cropped_ct.shape,
-                        spacing=flux_spacing, device=config.flux_device,
-                    )
-                else:
-                    flux = flux_projection(
-                        re_proj, beamlet_angles, sigmas, cropped_ct.shape,
-                        spacing=flux_spacing,
-                    )
-                timing["flux"] += perf_counter() - flux_t
+                crops.append(cropped_ct)
+                angles_list.append(beamlet_angles)
+                energy_list.append(energy)
+                deposits.append((crp, float(sim_log["relative_weight"])))
 
+                if not dota_mode:
+                    sigmas = flux_spatial_spread(bdl, energy)
+                    re_proj = [entrance[1], entrance[2], entrance[0]]
+                    flux_params.append((re_proj, beamlet_angles, sigmas))
+
+            # ADoTA reinterpretation: analytical flux (the charged cost). Batched
+            # (one GPU call) when flux_batched, else per-spot; both feed the model
+            # the axis-aligned crop + flux channel.
+            if not dota_mode:
+                shape = crops[0].shape
+                flux_t = perf_counter()
+                if config.flux_on_gpu and config.flux_batched:
+                    flux_arr = flux_projection_gpu_batched(
+                        [p[0] for p in flux_params], [p[1] for p in flux_params],
+                        [p[2] for p in flux_params], shape, spacing=flux_spacing,
+                        device=config.flux_device, return_numpy=True,
+                    )
+                    flux_list = list(flux_arr)
+                elif config.flux_on_gpu:
+                    flux_list = [
+                        flux_projection_gpu(p[0], p[1], p[2], shape,
+                                            spacing=flux_spacing, device=config.flux_device)
+                        for p in flux_params
+                    ]
+                else:
+                    flux_list = [
+                        flux_projection(p[0], p[1], p[2], shape, spacing=flux_spacing)
+                        for p in flux_params
+                    ]
+                timing["flux"] += perf_counter() - flux_t
+                model_cts = crops
+                normalize_flux = config.normalize_flux
+
+            # DoTA reinterpretation (1/2): batched CT-patch -> BEV rotation (GPU).
+            if dota_mode:
+                r2b_t = perf_counter()
+                rot = rotate_beamlet_crops_batched(
+                    crops, angles_list, inverse=False, device=str(device),
+                    dtype=torch.float32, repeats=1, return_numpy=True,
+                )
+                model_cts = list(rot.rotated_numpy)
+                timing["rotate_to_bev"] += perf_counter() - r2b_t
+                # Zero second channel: a real DoTA model is single-channel, so no
+                # flux is built or charged; the shared model still needs 2 inputs.
+                flux_list = [np.zeros_like(c) for c in model_cts]
+                normalize_flux = False
+
+            for cropped_ct, flux, energy in zip(model_cts, flux_list, energy_list):
                 prep_t = perf_counter()
                 x, e = prepare_input_from_arrays(
                     cropped_ct, flux, energy, scale=config.scale,
-                    normalize_flux=config.normalize_flux,
+                    normalize_flux=normalize_flux,
                     downsampling_method=config.downsampling_method, device=device,
                     resize=(gf == 1),
                 )
                 timing["prep"] += perf_counter() - prep_t
-
                 inputs.append(x)
                 energies.append(e)
-                deposits.append((crp, float(sim_log["relative_weight"])))
 
             x_batch = torch.stack(inputs).to(device)
             e_batch = torch.stack(energies).to(device)
@@ -231,7 +311,8 @@ def run_streaming_pipeline(
                 torch.cuda.synchronize(device)
             timing["forward"] += perf_counter() - fwd_t
 
-            for i, (crp, weight) in enumerate(deposits):
+            dose_crops = []
+            for i in range(len(deposits)):
                 post_t = perf_counter()
                 dose_pred = postprocess_prediction(
                     pred[i : i + 1], config.scale, upsample=(gf == 1)
@@ -240,7 +321,19 @@ def run_streaming_pipeline(
                 # gf=2 the prediction stays (160,30,30) -> (30,30,160).
                 dose_crop = np.moveaxis(np.squeeze(dose_pred), 0, -1)
                 timing["post"] += perf_counter() - post_t
+                dose_crops.append(dose_crop)
 
+            # DoTA reinterpretation (2/2): batched BEV dose -> field-frame (GPU).
+            if dota_mode:
+                d2f_t = perf_counter()
+                rot_back = rotate_beamlet_crops_batched(
+                    dose_crops, angles_list, inverse=True, device=str(device),
+                    dtype=torch.float32, repeats=1, return_numpy=True,
+                )
+                dose_crops = list(rot_back.rotated_numpy)
+                timing["rotate_to_field"] += perf_counter() - d2f_t
+
+            for (crp, weight), dose_crop in zip(deposits, dose_crops):
                 dep_t = perf_counter()
                 deposit_crop(deposit_grid, dose_crop, crp, weight, roi)
                 timing["deposit"] += perf_counter() - dep_t
@@ -277,6 +370,7 @@ def run_streaming_pipeline(
         "elapsed_s": elapsed,
         "grid_factor": gf,
         "grid_mode": "1mm" if gf == 1 else f"{gf}mm_field",
+        "reinterpretation_mode": config.reinterpretation_mode,
         "precision": "fp16" if use_fp16 else "fp32",
         "calibration_factor": float(config.calibration_factor),
         "dose_max": float(total.max()),

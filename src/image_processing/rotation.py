@@ -303,6 +303,164 @@ def rotate_beamlet_crop(
     return rotated_zyx, result.pure_median
 
 
+@dataclass
+class BatchRotation:
+    """Result + timings for a batched GPU beamlet rotation."""
+
+    rotated: Optional[object] = None  # torch.Tensor (B,1,D,H,W) on device, or None
+    rotated_numpy: Optional[np.ndarray] = None  # (B, z, y, x) if requested
+    pure_seconds_all: list[float] = field(default_factory=list)
+    practical_seconds_all: list[float] = field(default_factory=list)
+
+    @property
+    def pure_median(self) -> float:
+        return float(np.median(self.pure_seconds_all)) if self.pure_seconds_all else float("nan")
+
+    @property
+    def practical_median(self) -> float:
+        return (
+            float(np.median(self.practical_seconds_all))
+            if self.practical_seconds_all
+            else float("nan")
+        )
+
+
+def _beamlet_norm_theta(
+    crop_zyx_shape: tuple[int, int, int],
+    beamlet_angles: tuple[float, float],
+    inverse: bool,
+) -> torch.Tensor:
+    """Normalized (3, 4) grid_sample theta for one beamlet crop (shared with the
+    per-item :func:`rotate_beamlet_crop`; identical matrix construction)."""
+    theta_x, theta_y = float(beamlet_angles[0]), float(beamlet_angles[1])
+    angle_y, angle_x = -theta_y, theta_x
+    # crop is (z, y, x); the rotation works on (D, H, W) = transpose(2, 0, 1).
+    nz, ny, nx = crop_zyx_shape
+    shape_dhw = (nx, nz, ny)
+    pivot = center_pivot_dhw(shape_dhw)
+    if not inverse:
+        matrix = build_lateral_axis_rotation_matrix_3d(
+            "y", angle_y, pivot
+        ) @ build_lateral_axis_rotation_matrix_3d("x", angle_x, pivot)
+    else:
+        matrix = build_lateral_axis_rotation_matrix_3d(
+            "x", -angle_x, pivot
+        ) @ build_lateral_axis_rotation_matrix_3d("y", -angle_y, pivot)
+    return _torch_norm_theta(matrix, shape_dhw)
+
+
+def rotate_beamlet_crops_batched(
+    crops_zyx: "list[np.ndarray]",
+    beamlet_angles: "list[tuple[float, float]]",
+    *,
+    inverse: bool = False,
+    device: str | torch.device = "cuda",
+    dtype: Optional[object] = None,
+    repeats: int = 1,
+    return_numpy: bool = False,
+) -> BatchRotation:
+    """Rotate ``B`` equally-shaped beamlet crops in ONE batched ``grid_sample``.
+
+    The optimized GPU twin of the per-beamlet :func:`rotate_beamlet_crop`: all
+    crops share the output grid, so only the per-sample affine ``theta`` differs
+    and a single ``grid_sample`` handles the batch, amortising kernel-launch cost.
+    Two timings are returned, mirroring :func:`rotate_volume_torch`:
+
+    * ``pure``      -- compute only, tensors already resident on the device;
+    * ``practical`` -- includes the host->device copy of the batch + theta and the
+      device->host copy of the result (the transfer the reviewer asked about).
+
+    Interpolation is trilinear (``grid_sample mode="bilinear"``, ``align_corners=
+    True``, ``padding_mode="zeros"``), identical to the per-item torch path.
+
+    Args:
+        crops_zyx: List of ``B`` crops ``(z, y, x)`` of identical shape.
+        beamlet_angles: List of ``B`` ``(theta_x, theta_y)`` in degrees.
+        inverse: Forward (CT->BEV) when ``False``; inverse (dose->field) when True.
+        device: Torch device.
+        dtype: Torch dtype (default float32, the benchmark precision).
+        repeats: Timed repeats (median reported by the properties).
+        return_numpy: Also return the rotated batch as ``(B, z, y, x)`` numpy.
+
+    Returns:
+        A :class:`BatchRotation` with the on-device tensor and pure/practical times.
+    """
+    if len(crops_zyx) != len(beamlet_angles):
+        raise ValueError("crops_zyx and beamlet_angles must have equal length.")
+    if not crops_zyx:
+        raise ValueError("rotate_beamlet_crops_batched received an empty batch.")
+
+    torch_device = torch.device(device)
+    dt = dtype if dtype is not None else torch.float32
+
+    shape_zyx = crops_zyx[0].shape
+    # (B, D, H, W) with (D, H, W) = (x, z, y) as the per-item path uses.
+    volumes = np.stack(
+        [np.ascontiguousarray(np.transpose(c, (2, 0, 1))) for c in crops_zyx], axis=0
+    ).astype(np.float32, copy=False)
+    # Per-sample fill value (each crop's own min), matching the per-item path;
+    # a shared batch min would corrupt the out-of-bounds padding of every crop.
+    cval_np = volumes.reshape(volumes.shape[0], -1).min(axis=1)  # (B,)
+    theta_cpu = torch.stack(
+        [_beamlet_norm_theta(shape_zyx, a, inverse) for a in beamlet_angles], dim=0
+    ).to(dt)  # (B, 3, 4)
+    cval_cpu = torch.from_numpy(cval_np).to(dt).view(-1, 1, 1, 1, 1)  # (B,1,1,1,1)
+
+    def _rotate(vol: torch.Tensor, theta: torch.Tensor, cval: torch.Tensor) -> torch.Tensor:
+        grid = _make_torch_grid(theta, vol.shape)
+        shifted = vol - cval
+        rotated = F.grid_sample(
+            shifted, grid, mode="bilinear", padding_mode="zeros", align_corners=True
+        )
+        outside = torch.any((grid < -1.0) | (grid > 1.0), dim=-1, keepdim=True)
+        return rotated.masked_fill(outside.permute(0, 4, 1, 2, 3), 0.0) + cval
+
+    # Resident tensors for the "pure" (compute-only) timing.
+    vol_t = torch.from_numpy(volumes).to(torch_device).to(dt).unsqueeze(1)  # (B,1,D,H,W)
+    theta_t = theta_cpu.to(torch_device)
+    cval_t = cval_cpu.to(torch_device)
+
+    _ = _rotate(vol_t, theta_t, cval_t)  # warmup
+    if torch_device.type == "cuda":
+        torch.cuda.synchronize(torch_device)
+
+    pure_times: list[float] = []
+    practical_times: list[float] = []
+    rotated_dev: Optional[torch.Tensor] = None
+    rotated_np: Optional[np.ndarray] = None
+    for _ in range(repeats):
+        if torch_device.type == "cuda":
+            torch.cuda.synchronize(torch_device)
+        start = perf_counter()
+        rotated_dev = _rotate(vol_t, theta_t, cval_t)
+        if torch_device.type == "cuda":
+            torch.cuda.synchronize(torch_device)
+        pure_times.append(perf_counter() - start)
+
+        if torch_device.type == "cuda":
+            torch.cuda.synchronize(torch_device)
+        start = perf_counter()
+        vol_p = torch.from_numpy(volumes).to(torch_device).to(dt).unsqueeze(1)
+        theta_p = theta_cpu.to(torch_device)
+        cval_p = cval_cpu.to(torch_device)
+        rotated_p = _rotate(vol_p, theta_p, cval_p)
+        out_np = rotated_p.squeeze(1).detach().cpu().numpy().copy()  # (B, D, H, W)
+        if torch_device.type == "cuda":
+            torch.cuda.synchronize(torch_device)
+        practical_times.append(perf_counter() - start)
+        rotated_np = out_np
+
+    if return_numpy and rotated_np is not None:
+        rotated_np = np.ascontiguousarray(np.transpose(rotated_np, (0, 2, 3, 1)))  # (B,z,y,x)
+
+    return BatchRotation(
+        rotated=rotated_dev,
+        rotated_numpy=rotated_np if return_numpy else None,
+        pure_seconds_all=pure_times,
+        practical_seconds_all=practical_times,
+    )
+
+
 def rotate_lateral_axes_sequential(
     volume_dhw: np.ndarray,
     angle_y_deg: float,
