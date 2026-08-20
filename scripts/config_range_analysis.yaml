@@ -48,3 +48,10 @@ n_worst_figures: 10
 normalize_flux: true
 no_progress: false
 verbose: false
+
+# ── Absolute-error / percentile / exceedance reporting ──────
+# Signed means hide large +/- errors, so also report |Δ| magnitude and the
+# fraction of beamlets whose |Δ| exceeds each clinically relevant threshold.
+exceed_thresholds_mm: [1.0, 2.0, 3.0, 5.0]   # % of |Δ| exceeding each [mm]
+abs_percentiles: [50, 90, 95, 99]            # percentiles of |Δ| [mm]
+signed_percentiles: [5, 50, 95]              # signed percentiles [mm] (tails)
