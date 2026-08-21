@@ -1,0 +1,53 @@
+# Multi-patient beamlet-angle robustness (overnight experiment)
+# ============================================================
+#   uv run python scripts/mc/generate_patient_set.py \
+#       --config scripts/mc/config_robustness_multipatient.yaml
+#
+# 5 thoracic (Lung-PET-CT-Dx) + 5 abdominal (StageII-Colorectal) patients, all at
+# FIXED gantry 90 deg, same 18x18 beamlet-angle grid, energies 80/120/140 MeV.
+# Deliverables: per-patient GPR grids AND the mean pass rate across the 5 patients
+# per energy (plot_angle_robustness.py `mode: aggregate`).
+#
+# Leakage-safe: patients drawn from the last-30 (sorted) of each collection -- the
+# first ~50 were used for training (user-confirmed); last 30 are safe held-out.
+# Selection provenance: registry/robustness_multipatient_selection.csv (seed 20260821).
+
+name: robustness_multipatient
+
+datasets:
+  - name: Lung-PET-CT-Dx           # thoracic held-out (last-30 pool, seed 20260821)
+    anatomy: thoracic
+    root: /data/lung_cancer_dataset/manifest-1608669183333
+    collection: Lung-PET-CT-Dx
+    patient_ids: [Lung_Dx-G0035, Lung_Dx-G0041, Lung_Dx-G0047, Lung_Dx-G0050, Lung_Dx-G0062]
+    qc: {min_slices: 70, max_spacing_xy: 1.5, max_spacing_z: 2.0}
+  - name: StageII-Colorectal       # abdominal held-out (last-30 pool, seed 20260821)
+    anatomy: abdominal
+    root: /scratch/mstryja/manifest-1646429317311
+    patient_ids: [StageII-Colorectal-CT-207, StageII-Colorectal-CT-210, StageII-Colorectal-CT-211, StageII-Colorectal-CT-223, StageII-Colorectal-CT-224]
+    qc: {}                         # ungated (homogeneous 5mm collection)
+
+engine:
+  mcsquare_install: /home/mstryja/tools/mcsquare
+  mc_work_dir: /scratch/mstryja/mc_work/robustness_multipatient
+  bdl_file: hptc_beam_model_rsnone.txt
+  scanner: default
+
+robustness:
+  energies: [80.0, 120.0, 140.0]
+  theta_x_range: [-2.0, 2.0]
+  theta_y_range: [-2.0, 2.0]
+  grid_n: 18                     # 18x18 = 324 beamlet angles
+  gantry_mode: fixed             # same gantry for every patient
+  gantry_value: 90.0
+  roi_size: [60, 60, 320]
+  iso_spacing_mm: 1.0
+  num_primaries: 1.0e6
+  num_threads: 0
+  rng_seed: 0
+  min_deposition_ratio: 0.5
+  output_root: /scratch/mstryja/DoTA_dataset_v2
+  experiment_prefix: robustness_multipatient
+  experiment_version: 2
+  make_figures: false
+  overwrite: false               # resumable

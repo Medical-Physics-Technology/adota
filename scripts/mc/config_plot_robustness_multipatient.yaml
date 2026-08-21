@@ -1,0 +1,30 @@
+# GPR grids for the 10-patient robustness experiment (run after generation).
+#   Per-patient grids:  --mode per_patient   (one panel per patient x energy)
+#   Mean across 5:      --mode aggregate      (one panel per anatomy x energy =
+#                                              mean pass rate across the 5 patients)
+#   uv run python scripts/mc/plot_angle_robustness.py \
+#       --config scripts/mc/config_plot_robustness_multipatient.yaml --mode aggregate
+
+model:
+  name: DoTA_v3_grid_search_v11
+  fname: best_model.pth
+  device_index: 0
+
+gamma_criteria:
+  - {dose: 2, dist: 2, cutoff: 10}
+  - {dose: 1, dist: 3, cutoff: 0.1}
+
+grid_n: 18
+theta_range: [-2.0, 2.0]
+mode: per_patient          # override with --mode aggregate for the mean figures
+
+cmap: viridis
+emit:
+  bare: true
+  with_colorbar: true      # per-figure colorbar (shared scale)
+  standalone_colorbar: true
+
+render_examples: false
+
+input_glob: /scratch/mstryja/DoTA_dataset_v2/robustness_multipatient_*_v2
+output_dir: /scratch/mstryja/DoTA_dataset_v2/robustness_multipatient_figures
