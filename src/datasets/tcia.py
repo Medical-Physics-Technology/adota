@@ -20,6 +20,7 @@ from typing import List, Optional, Sequence
 import pydicom
 
 from src.datasets.base import CTDataset, CTRecord
+from src.provenance.dicom_qc import check_quality, gates_from_dict, params_from_header
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +50,13 @@ class TCIADataset(CTDataset):
         name: Optional[str] = None,
         patient_ids: Optional[Sequence[str]] = None,
         n_patients: Optional[int] = None,
-        selection: str = "first",  # "first" | "random"
+        selection: str = "first",  # "first" | "last" | "random"
         seed: int = 0,
         min_slices: int = 50,
         max_slices: int = 1000,
         require_ct: bool = True,
         require_monochrome2: bool = True,
+        qc: Optional[dict] = None,
         verbose: bool = False,
     ):
         self.root = root
@@ -62,8 +64,12 @@ class TCIADataset(CTDataset):
         self.collection_dir = os.path.join(root, self.collection)
         self.anatomy = anatomy
         self.name = name or self.collection
-        self.min_slices, self.max_slices = min_slices, max_slices
-        self.require_ct, self.require_monochrome2 = require_ct, require_monochrome2
+        # QC gates: legacy scalars form the base; `qc` dict opts into the extended
+        # spacing / kVp / tube-current gates (all off by default). Provenance is
+        # always recorded regardless of gating.
+        self.qc_gates = gates_from_dict(
+            qc, min_slices=min_slices, max_slices=max_slices,
+            require_ct=require_ct, require_monochrome2=require_monochrome2)
         self.verbose = verbose
 
         # --- choose patients from directory names only (cheap) ---
@@ -79,6 +85,10 @@ class TCIADataset(CTDataset):
             if n_patients is not None and n_patients < len(chosen):
                 if selection == "random":
                     chosen = sorted(random.Random(seed).sample(chosen, n_patients))
+                elif selection == "last":
+                    # take from the back: training-set generation consumed the
+                    # first samples, so held-out / expansion patients come last.
+                    chosen = chosen[-n_patients:]
                 else:
                     chosen = chosen[:n_patients]
 
@@ -100,29 +110,38 @@ class TCIADataset(CTDataset):
                 yield os.path.join(pdir, study, series)
 
     def _select_ct_series(self, patient_id: str) -> Optional[CTRecord]:
-        """Return the largest qualifying CT series for a patient (or None)."""
-        best = None  # (n_slices, series_dir, series_uid)
+        """Return the largest QC-passing CT series for a patient (or None).
+
+        Extracts acquisition provenance from every candidate's header, applies the
+        configured QC gates, and keeps the passing series with the most slices. The
+        chosen record carries its provenance (+ ``qc_pass``/``qc_reasons``).
+        """
+        best = None  # (n_slices, series_dir, provenance)
         for series_dir in self._series_dirs(patient_id):
             dcm = glob(os.path.join(series_dir, "*.dcm"))
-            n = len(dcm)
-            if not (self.min_slices <= n <= self.max_slices):
+            if not dcm:
                 continue
             try:
                 ds = pydicom.dcmread(dcm[0], stop_before_pixels=True)
             except Exception:
                 continue
-            if self.require_ct and getattr(ds, "Modality", None) != "CT":
+            prov = params_from_header(ds, len(dcm))
+            qc_pass, reasons = check_quality(prov, self.qc_gates)
+            if not qc_pass:
+                if self.verbose:
+                    logger.info("  QC drop %s series (%s): %s", patient_id,
+                                os.path.basename(series_dir), ", ".join(reasons))
                 continue
-            if self.require_monochrome2 and getattr(ds, "PhotometricInterpretation", None) != "MONOCHROME2":
-                continue
-            if best is None or n > best[0]:
-                best = (n, series_dir, str(getattr(ds, "SeriesInstanceUID", "")))
+            if best is None or prov["n_slices"] > best[0]:
+                best = (prov["n_slices"], series_dir, prov)
         if best is None:
             return None
-        n, series_dir, series_uid = best
+        n, series_dir, prov = best
+        prov = dict(prov, qc_pass=True, qc_reasons=[])
         return CTRecord(
             dataset_name=self.name, anatomy=self.anatomy, patient_id=patient_id,
-            series_uid=series_uid, series_dir=series_dir, n_slices=n,
+            series_uid=prov["series_uid"], series_dir=series_dir, n_slices=n,
+            provenance=prov,
         )
 
     def __len__(self) -> int:

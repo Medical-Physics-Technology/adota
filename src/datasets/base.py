@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Iterator, List, Tuple
+from dataclasses import dataclass, field
+from typing import Dict, Iterator, List, Optional, Tuple
 
 import SimpleITK as sitk
 
@@ -22,6 +22,9 @@ class CTRecord:
     series_uid: str            # DICOM SeriesInstanceUID (stable id)
     series_dir: str            # directory holding the series' .dcm files
     n_slices: int
+    # Acquisition provenance + QC (pixel spacing, kVp, tube current, kernel, ...);
+    # None for synthetic sources. See src/provenance/dicom_qc.py.
+    provenance: Optional[Dict] = None
 
     @property
     def uid(self) -> str:

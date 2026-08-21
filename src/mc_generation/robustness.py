@@ -22,6 +22,7 @@ import SimpleITK as sitk
 from src.beamlets.bdl import BeamDataLibrary, angles_to_spot_position, spot_position_to_angles
 from src.beamlets.cropping import extract_beamlet_roi
 from src.beamlets.flux import flux_projection, flux_spatial_spread
+from src.beamlets.rotation import rotate_ct_around_isocenter
 from src.datasets.base import CTRecord
 from src.figures.mc_beamlet_qc import mc_beamlet_qc_figure
 from src.mc_generation.geometry import (
@@ -41,10 +42,13 @@ class RobustnessConfig:
     theta_x_range: Tuple[float, float] = (-2.0, 2.0)
     theta_y_range: Tuple[float, float] = (-2.0, 2.0)
     grid_n: int = 18
-    gantry_mode: str = "fixed"           # "fixed" | "bimodal_random"
+    gantry_mode: str = "fixed"           # "fixed" | "uniform_random" | "bimodal_random"
     gantry_value: float = 90.0
     gantry_ranges: Tuple[Tuple[float, float], Tuple[float, float]] = ((30.0, 120.0), (240.0, 330.0))
+    gantry_min: float = 0.0              # uniform_random bounds [min, max)
+    gantry_max: float = 360.0
     gantry_seed: int = 1234
+    rotate_to_canonical: bool = True     # rotate CT so beam is axis-aligned (gantry != 90)
     roi_size: Tuple[int, int, int] = (60, 60, 320)
     iso_spacing_mm: float = 1.0
     num_primaries: float = 1e7
@@ -58,6 +62,43 @@ class RobustnessConfig:
     overwrite: bool = False
 
 
+def robustness_config_from_dict(
+    r: dict, *, grid_n=None, num_primaries=None, make_figures=None, overwrite=None,
+    default_prefix: str = "beamlet_angle_robustness",
+) -> RobustnessConfig:
+    """Build a :class:`RobustnessConfig` from a config ``robustness`` sub-dict.
+
+    Shared by the robustness and patient-set CLIs so the (long) YAML->config
+    plumbing lives in one place. CLI flags override the matching YAML keys.
+    """
+    gr = r.get("gantry_ranges")
+    return RobustnessConfig(
+        energies=[float(e) for e in r.get("energies", [90.0, 140.0, 200.0])],
+        theta_x_range=tuple(r.get("theta_x_range", (-2.0, 2.0))),
+        theta_y_range=tuple(r.get("theta_y_range", (-2.0, 2.0))),
+        grid_n=int(grid_n if grid_n is not None else r.get("grid_n", 18)),
+        gantry_mode=r.get("gantry_mode", "fixed"),
+        gantry_value=float(r.get("gantry_value", 90.0)),
+        gantry_ranges=tuple(tuple(float(x) for x in pair) for pair in gr) if gr
+        else ((30.0, 120.0), (240.0, 330.0)),
+        gantry_min=float(r.get("gantry_min", 0.0)),
+        gantry_max=float(r.get("gantry_max", 360.0)),
+        gantry_seed=int(r.get("gantry_seed", 1234)),
+        rotate_to_canonical=bool(r.get("rotate_to_canonical", True)),
+        roi_size=tuple(r.get("roi_size", (60, 60, 320))),
+        iso_spacing_mm=float(r.get("iso_spacing_mm", 1.0)),
+        num_primaries=float(num_primaries if num_primaries is not None else r.get("num_primaries", 1e7)),
+        num_threads=int(r.get("num_threads", 0)),
+        rng_seed=int(r.get("rng_seed", 0)),
+        min_deposition_ratio=float(r.get("min_deposition_ratio", 0.5)),
+        output_root=r.get("output_root", "/scratch/mstryja/DoTA_dataset_v2"),
+        experiment_prefix=r.get("experiment_prefix", default_prefix),
+        experiment_version=r.get("experiment_version", 2),
+        make_figures=bool(make_figures if make_figures is not None else r.get("make_figures", False)),
+        overwrite=bool(overwrite if overwrite is not None else r.get("overwrite", False)),
+    )
+
+
 def build_angle_grid(tx_range, ty_range, n) -> List[Tuple[int, int, float, float]]:
     """Return the (ix, iy, theta_x, theta_y) grid (row-major over theta_x)."""
     txs = np.linspace(tx_range[0], tx_range[1], n)
@@ -67,9 +108,16 @@ def build_angle_grid(tx_range, ty_range, n) -> List[Tuple[int, int, float, float
 
 
 def resolve_gantry(cfg: RobustnessConfig, patient_uid: str) -> float:
-    """Gantry angle for a patient: fixed, or a seeded bimodal draw (reproducible)."""
+    """Gantry angle for a patient: fixed, or a seeded random draw (reproducible).
+
+    The draw is seeded per patient UID, so a given patient always gets the same
+    gantry across reruns (resumable, reproducible).
+    """
     if cfg.gantry_mode == "fixed":
         return float(cfg.gantry_value)
+    if cfg.gantry_mode == "uniform_random":
+        rng = random.Random(f"{cfg.gantry_seed}:{patient_uid}")
+        return rng.uniform(cfg.gantry_min, cfg.gantry_max)
     if cfg.gantry_mode == "bimodal_random":
         rng = random.Random(f"{cfg.gantry_seed}:{patient_uid}")
         lo1, hi1 = cfg.gantry_ranges[0]
@@ -91,15 +139,34 @@ def generate_for_record(
     """Generate all (energy x angle) beamlets for one patient CT."""
     d_nozzle, d_smx, d_smy = bdl.distances
     grid = build_angle_grid(cfg.theta_x_range, cfg.theta_y_range, cfg.grid_n)
-    gantry = resolve_gantry(cfg, rec.uid)
+    field_gantry = resolve_gantry(cfg, rec.uid)
 
     ct = resample_to_isotropic(rec.load_image(), cfg.iso_spacing_mm)
     ct = reduce_vacuum_to_air(ct)
+
+    # Random / non-90 gantry: rotate the CT into the gantry-aligned beam's-eye
+    # frame (A = -(gantry - 90) about the isocenter, grid-expanded so no anatomy
+    # is clipped) and run MC at the canonical 90 deg. The model consumes this
+    # canonical frame (gantry is metadata, not a geometric input), so extraction
+    # stays axis-aligned exactly as at gantry 90. Rotating around the grid-centre
+    # isocenter keeps it the centre of the expanded grid, so MC and extraction
+    # isocenters stay mutually consistent.
+    rotated = cfg.rotate_to_canonical and abs(field_gantry - 90.0) > 1e-6
+    if rotated:
+        ct_rotation_deg = -(field_gantry - 90.0)
+        ct = rotate_ct_around_isocenter(
+            ct, ct_rotation_deg, extraction_isocenter_physical(ct), expand=True)
+        mc_gantry = 90.0
+    else:
+        ct_rotation_deg = 0.0
+        mc_gantry = field_gantry
+
     ct_arr = sitk.GetArrayFromImage(ct)
     iso_mc = mc_isocenter(ct)
     iso_ext = extraction_isocenter_physical(ct)
 
-    stats = {"patient": rec.patient_id, "anatomy": rec.anatomy, "gantry": gantry,
+    stats = {"patient": rec.patient_id, "anatomy": rec.anatomy, "gantry": field_gantry,
+             "ct_rotation_deg": ct_rotation_deg, "grid_size": list(ct.GetSize()),
              "saved": 0, "skipped_existing": 0, "skipped_qa": 0, "energies": {}}
 
     for energy in cfg.energies:
@@ -116,7 +183,7 @@ def generate_for_record(
 
             spot = angles_to_spot_position(tx, ty, d_smx, d_smy)
             dose_img, sim_res = runner.run_beamlet(
-                ct, energy=energy, gantry_angle=gantry, spot_xy=spot,
+                ct, energy=energy, gantry_angle=mc_gantry, spot_xy=spot,
                 isocenter=iso_mc, num_primaries=cfg.num_primaries,
                 num_threads=cfg.num_threads, rng_seed=cfg.rng_seed,
             )
@@ -159,7 +226,11 @@ def generate_for_record(
                 "anatomy": rec.anatomy,
                 "patient_id": rec.patient_id,
                 "series_uid": rec.series_uid,
+                "ct_provenance": getattr(rec, "provenance", None),  # acq params + QC
                 "grid_index": [ix, iy],
+                "gantry_angle": float(field_gantry),   # physical field angle (model metadata)
+                "mc_gantry_angle": float(mc_gantry),   # angle actually simulated (90 when rotated)
+                "ct_rotation_deg": float(ct_rotation_deg),
                 "beamlet_angles": list(beamlet_angles),
                 "spot_position": [float(spot[0]), float(spot[1])],
                 "roi_size": list(cfg.roi_size),
@@ -180,7 +251,7 @@ def generate_for_record(
                 fig_dir.mkdir(parents=True, exist_ok=True)
                 mc_beamlet_qc_figure(
                     cropped_ct, cropped_dose, flux, str(fig_dir / stem),
-                    title=f"{rec.anatomy} {rec.patient_id}  E={energy:.0f} MeV  gantry={gantry:.1f}",
+                    title=f"{rec.anatomy} {rec.patient_id}  E={energy:.0f} MeV  gantry={field_gantry:.1f}",
                     info={"theta": f"({tx:+.2f},{ty:+.2f})", "dep_ratio": f"{ratio:.3f}",
                           "stat_unc%": f"{sim_res.get('stat_uncertainty', float('nan')):.2f}"},
                 )

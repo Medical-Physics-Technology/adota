@@ -104,7 +104,8 @@ def main(
     BARE_DIR = out_dir / "gamma_pass_rates_without_colorbars"
     EX_DIR = out_dir / "worst_cases"
     GRIDS_DIR = out_dir / "grids"
-    GRIDS_DIR.mkdir(parents=True, exist_ok=True)
+    for _d in (CBAR_DIR, BARE_DIR, EX_DIR, GRIDS_DIR):
+        _d.mkdir(parents=True, exist_ok=True)
 
     def _sub(base: Path, anatomy: str) -> Path:
         p = base / anatomy

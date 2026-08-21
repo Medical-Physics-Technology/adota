@@ -29,6 +29,7 @@ from src.datasets.tcia import TCIADataset
 _ALLOWED = {
     "name", "anatomy", "root", "collection", "n_patients", "selection", "seed",
     "patient_ids", "min_slices", "max_slices", "require_ct", "require_monochrome2",
+    "qc",
 }
 
 
@@ -48,6 +49,7 @@ def build_tcia_dataset(spec: dict) -> TCIADataset:
         max_slices=int(spec.get("max_slices", 1000)),
         require_ct=bool(spec.get("require_ct", True)),
         require_monochrome2=bool(spec.get("require_monochrome2", True)),
+        qc=spec.get("qc"),
     )
 
 
