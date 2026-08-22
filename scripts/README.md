@@ -33,6 +33,17 @@ options, config reference, outputs, and requirements.
 | [`rotation_performance_analysis.py`](rotation_performance_analysis.py) | CLI flags | Benchmark 3-D rotation (SciPy / CuPy / PyTorch) around a plan pivot; correctness + timings. | [docs/rotation_performance_analysis.md](docs/rotation_performance_analysis.md) |
 | [`beamlet_timing_comparison.py`](beamlet_timing_comparison.py) | CLI flags | Compare per-beamlet reinterpolation vs ADoTA projection timing on real samples. | [docs/beamlet_timing_comparison.md](docs/beamlet_timing_comparison.md) |
 
+## Development
+
+| Script | What it does |
+|---|---|
+| [`run-tests.py`](run-tests.py) | The repository test runner: `unit` (fast, no data), `integration` (needs the HDF5 dataset and a checkpoint), `e2e`, `all`. Extra arguments pass through to pytest. |
+
+```bash
+uv run python scripts/run-tests.py unit
+uv run python scripts/run-tests.py unit --fast   # skips the slow perf suite
+```
+
 ## Batch runners
 
 | Script | What it does |

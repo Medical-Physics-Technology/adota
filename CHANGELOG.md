@@ -3,6 +3,79 @@
 All notable changes to this project are documented in this file. This project
 adheres to [Semantic Versioning](https://semver.org).
 
+## [1.4.0] - 2026-08-22
+
+Repository alignment with the `an_instructions/` baselines. **No behaviour
+changes**: this release moves code, adds tooling and adds tests. Every dose
+number, metric and output format is unchanged. Planned and tracked in
+[`docs/baseline_alignment_refactor_plan.md`](docs/baseline_alignment_refactor_plan.md).
+
+### Changed
+
+- **`src/training/run.py` is gone**, split into four role-named modules. The old
+  name described runtime infrastructure, not an entry point (that is
+  `scripts/train_adota.py`). Update imports:
+  `CheckpointManager` -> `src.training.checkpoints`;
+  `GracefulShutdown`, `dump_nan_context`, `compute_grad_norm`,
+  `compute_param_norm` -> `src.training.diagnostics`;
+  `setup_training_logging`, `log_phase`, `log_banner`, `log_section`,
+  `format_duration`, `silence_pymedphys` -> `src.training.logging_utils`;
+  `setup_training_run_directory`, `write_manifest`, `save_resolved_config`,
+  `MetricsLog` -> `src.training.run_dir`.
+- `src.figures.single_beam` kept `publication_figure`; its shared helpers moved
+  to `src.figures.axes_utils` (`aligned_colorbar`, `identify_axes`,
+  `save_figure_as_publication_formats`), with `compare_two_inputs` in
+  `src.figures.input_comparison` and `beamlet_input_figure` in
+  `src.figures.beamlet_input`.
+- `plot_bp_estimation_diagnostic` moved to `src.figures.bp_diagnostic`.
+- `save_attention_snapshot` moved to `src.training.attention`; the energy-binning
+  and worst-K helpers to `src.training.binning`.
+- `src/adota/layers.py` and `src/beamlets/extraction.py` became packages. Their
+  import paths are unchanged -- every name is re-exported.
+- Version in `pyproject.toml` corrected from a stale `1.0.0` to match this file.
+
+### Added
+
+- **`scripts/run-tests.py`** -- the repository test runner:
+  `unit` / `integration` / `e2e` / `all`, with per-suite reporting and a
+  non-zero exit on failure. Extra arguments pass through to pytest.
+- **Registered pytest markers** (`integration`, `e2e`, `gpu`, `slow`). The
+  golden characterization suite is `integration`; the performance suite `slow`.
+- **`tests/utils/`** -- importable shared test helpers: `golden.py` (moved from
+  `tests/golden/_goldenlib.py`), `bdl.py` (one synthetic beam-data-library
+  builder replacing a fixture copied across eight modules), `deps.py`
+  (optional-dependency probes).
+- **Three data-free guard suites**: `test_import_smoke.py` (every module under
+  `src/` imports), `test_public_api.py` (the split modules still expose every
+  name they used to), `test_cli_smoke.py` (`--help` exits 0 on all 29 Typer
+  scripts).
+- **Committed ruff configuration** (`E`, `F`, `I`; py39; line length 120) and a
+  hatchling build backend, so the project installs editable and `src.*` resolves
+  from any directory.
+- **`.env.example`** documenting the five environment variables the code reads.
+- Module docstrings for the 21 modules and 11 packages that had none.
+
+### Fixed
+
+- Removed all 40 `sys.path` bootstraps, **including ten that hardcoded
+  `/home/mstryja/projects/adota`**, which made those scripts unrunnable from any
+  other checkout.
+- `ruff check .`: 508 errors to 0. Beyond formatting, this fixed 13 unused
+  variables and two ambiguous `l` identifiers.
+- The 7 pre-existing test failures now skip with actionable reasons instead of
+  failing: four need the external `datagenerator` package (set
+  `ADOTA_DATAGENERATOR_ROOT`), three need pymedphys's optional econforge
+  `interpolation` dependency.
+- Deleted `src/processing/plan_pencil.py`, an empty placeholder nothing imported.
+
+### Notes
+
+- Every file under `src/` is now within the mandatory 500-line limit. Sixteen
+  files under `scripts/` are not; the per-file proposal for those is Appendix A
+  of [`docs/scripts_refactor_plan.md`](docs/scripts_refactor_plan.md) and is not
+  yet executed.
+- Unit suite: 571 passed, 29 skipped, 0 failed (was 346 passed, 7 failed).
+
 ## [1.3.0] - 2026-08-07
 
 Two additions: a single unified physical model behind every heterogeneity metric,
