@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.ticker import MultipleLocator
 
-from src.figures.single_beam import save_figure_as_publication_formats
+from src.figures.axes_utils import save_figure_as_publication_formats
 
 __all__ = ["dose_comparison_metrics", "plan_dose_comparison"]
 

@@ -16,7 +16,7 @@ from typing import Annotated, List, Optional
 import numpy as np
 import typer
 
-from src.figures.single_beam import beamlet_input_figure
+from src.figures.beamlet_input import beamlet_input_figure
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 

@@ -25,7 +25,7 @@ import numpy as np
 from matplotlib.lines import Line2D
 
 from src.beamlets.dvh import DVH
-from src.figures.single_beam import save_figure_as_publication_formats
+from src.figures.axes_utils import save_figure_as_publication_formats
 
 __all__ = [
     "compute_structure_dvhs",

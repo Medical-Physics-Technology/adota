@@ -36,7 +36,7 @@ from matplotlib import pyplot as plt
 from src.adota.config import denormalize_energy
 from src.adota.utils import load_model
 from src.evaluation.cli import resolve_device
-from src.figures.single_beam import compare_two_inputs
+from src.figures.input_comparison import compare_two_inputs
 from src.image_processing.rotation import rotate_lateral_axes_sequential
 from src.loaders.dir_based import get_single_record
 from src.schemas.configs import EvaluationConfig

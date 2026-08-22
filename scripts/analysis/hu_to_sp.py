@@ -152,7 +152,7 @@ def plot_hu_material_density(
         output_path: Where to save the PNG figure.
         voxel_spacing_mm: Voxel spacing for axis labels [mm].
     """
-    from src.figures.single_beam import aligned_colorbar
+    from src.figures.axes_utils import aligned_colorbar
 
     D, H, W = ct_hu.shape
     axial_idx = H // 2

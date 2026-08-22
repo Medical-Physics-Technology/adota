@@ -17,7 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from src.figures.single_beam import save_figure_as_publication_formats
+from src.figures.axes_utils import save_figure_as_publication_formats
 
 
 def _overlay(ax, ct_slice, dose_slice, vmax, title, cmap="inferno"):

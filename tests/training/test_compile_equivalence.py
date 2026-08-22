@@ -18,8 +18,8 @@ from pathlib import Path
 import pytest
 import torch
 
+from src.training.checkpoints import CheckpointManager
 from src.training.factory import build_adota_model, maybe_compile_model
-from src.training.run import CheckpointManager
 
 from .conftest import make_synthetic_batches, make_tiny_config
 

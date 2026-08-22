@@ -13,6 +13,14 @@ and save the ADoTA inputs. Outputs land under ``<plan_dir>/adota_beamlets/``:
 The geometry follows ``src/beamlets/__init__.py``: isocenter via
 ``TransformContinuousIndexToPhysicalPoint``, rotation around the isocenter
 (SimpleITK), and the air-padded depth-from-entrance crop.
+Split by role to stay inside the 500-line limit; the public names are
+re-exported here, so ``from src.beamlets.extraction import run_extraction``
+keeps working.
+
+* this module -- config, per-field orchestration, run manifest;
+* :mod:`~src.beamlets.extraction.spot` -- the per-spot crop + flux projection;
+* :mod:`~src.beamlets.extraction.io` -- output tree and per-spot writes;
+* :mod:`~src.beamlets.extraction.overlay` -- the per-field sanity-check PNG.
 """
 
 from __future__ import annotations
@@ -20,7 +28,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import shutil
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
@@ -33,9 +40,10 @@ import numpy as np
 import SimpleITK as sitk
 
 from src.beamlets import ROI_SIZE, roi_for_factor
-from src.beamlets.bdl import BeamDataLibrary, spot_position_to_angles
-from src.beamlets.cropping import extract_beamlet_roi
-from src.beamlets.flux import flux_projection, flux_projection_gpu, flux_spatial_spread
+from src.beamlets.bdl import BeamDataLibrary
+from src.beamlets.extraction.io import _prepare_output_dir, _save_spot
+from src.beamlets.extraction.overlay import _save_field_overlay
+from src.beamlets.extraction.spot import _build_sim_res, _process_spot
 from src.beamlets.isocenter import isocenter_physical
 from src.beamlets.plan_spots import expand_plan_to_spots, group_by_field
 from src.beamlets.rotation import rotate_ct_around_isocenter
@@ -44,8 +52,24 @@ from src.utils.serialization import NumpyEncoder
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ExtractionConfig", "run_extraction", "run_extraction_pooled"]
-
+# Re-exported so the package presents the same surface the single module did.
+# The underscored names are internals, but tests and sibling code already import
+# some of them from here, so removing them would be a silent breaking change.
+__all__ = [
+    "ExtractionConfig",
+    "ROI_SIZE",
+    "_FieldTiming",
+    "_build_manifest",
+    "_build_sim_res",
+    "_extract_impl",
+    "_prepare_output_dir",
+    "_process_spot",
+    "_save_field_overlay",
+    "_save_spot",
+    "_union_seconds",
+    "run_extraction",
+    "run_extraction_pooled",
+]
 
 @dataclass
 class ExtractionConfig:
@@ -333,167 +357,6 @@ def _extract_impl(
     return manifest
 
 
-def _process_spot(
-    record: dict,
-    *,
-    rotated_ct: sitk.Image,
-    rotated_ct_array: np.ndarray,
-    iso_phys: tuple,
-    d_nozzle: float,
-    d_smx: float,
-    d_smy: float,
-    bdl: BeamDataLibrary,
-    image_origin: tuple,
-    image_spacing: tuple,
-    image_size: tuple,
-    config: ExtractionConfig,
-    output_dir: Path,
-    roi: tuple = ROI_SIZE,
-    flux_spacing: Optional[np.ndarray] = None,
-) -> dict:
-    """Crop + flux + save one spot; return its per-step timings and ``oob`` flag.
-
-    This is the single per-spot implementation shared by the serial
-    (:func:`run_extraction`) and pooled (:func:`run_extraction_pooled`) paths, so
-    both produce byte-identical outputs. It reads the shared ``rotated_ct`` /
-    ``rotated_ct_array`` (read-only) and writes only this spot's own files, so it
-    is safe to run concurrently across spots. ``roi`` and ``flux_spacing`` come
-    from the field-level resampling factor (``(60,60,320)`` + ``[1,1,1]`` at gf=1;
-    ``(30,30,160)`` + ``[2,2,2]`` at gf=2) -- the crop and flux are then built on
-    the same grid the model consumes.
-    """
-    if flux_spacing is None:
-        flux_spacing = np.asarray([1, 1, 1], dtype=np.float32)
-    sim_log = record["simulation_log"]
-    spot_position = sim_log["bixelgrid_shifts_xy"][0]
-    energy = sim_log["energy"][0]
-
-    crop_t0 = perf_counter()
-    cropped_ct, entrance, crp, oob = extract_beamlet_roi(
-        rotated_ct,
-        d_nozzle,
-        d_smx,
-        d_smy,
-        spot_position,
-        iso_phys,
-        roi,
-        ct_array=rotated_ct_array,
-    )
-    crop_t1 = perf_counter()
-
-    flux_t0 = perf_counter()
-    beamlet_angles = spot_position_to_angles(
-        spot_position[0], spot_position[1], d_smx, d_smy
-    )
-    sigmas = flux_spatial_spread(bdl, energy)
-    re_proj = [entrance[1], entrance[2], entrance[0]]
-    if config.flux_on_gpu:
-        flux = flux_projection_gpu(
-            re_proj, beamlet_angles, sigmas, cropped_ct.shape,
-            spacing=flux_spacing, device=config.flux_device,
-        )
-    else:
-        flux = flux_projection(
-            re_proj, beamlet_angles, sigmas, cropped_ct.shape, spacing=flux_spacing
-        )
-    flux_t1 = perf_counter()
-
-    sim_res = _build_sim_res(
-        record,
-        beamlet_angles,
-        entrance,
-        re_proj,
-        crp,
-        oob,
-        image_origin,
-        image_spacing,
-        image_size,
-        roi,
-    )
-
-    save_t0 = perf_counter()
-    _save_spot(output_dir, record["id"], cropped_ct, flux, sim_res)
-    save_t1 = perf_counter()
-
-    # Absolute (start, end) timestamps so concurrent intervals can be unioned
-    # into real wall-clock per-step times (see _union_seconds).
-    return {
-        "crop": (crop_t0, crop_t1),
-        "flux": (flux_t0, flux_t1),
-        "save": (save_t0, save_t1),
-        "oob": int(oob),
-    }
-
-
-def _prepare_output_dir(output_dir: Path, overwrite: bool) -> None:
-    """Create the output dir; on overwrite WIPE it first so no stale files survive.
-
-    Accumulation reads every ``*_sim_res.json`` in the directory, so per-spot
-    files left over from a previous run (e.g. a different grid / spot subset)
-    must be removed -- not just written over -- or they would be mixed into the
-    accumulated dose.
-    """
-    if output_dir.exists() and any(output_dir.iterdir()):
-        if not overwrite:
-            raise FileExistsError(
-                f"Output directory {output_dir} is not empty; pass overwrite=True "
-                "to extract into it anyway."
-            )
-        shutil.rmtree(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-
-def _build_sim_res(
-    record: dict,
-    beamlet_angles: tuple,
-    entrance: np.ndarray,
-    re_proj: list,
-    crp: tuple,
-    oob: bool,
-    image_origin: tuple,
-    image_spacing: tuple,
-    image_size: tuple,
-    roi_size: tuple,
-) -> dict:
-    """Assemble the per-spot metadata dict (notebook schema + extras)."""
-    sim_log = dict(record["simulation_log"])
-    sim_log["beamlet_angles"] = list(beamlet_angles)
-    return {
-        "id": record["id"],
-        "beam": record["beam"],
-        "layer": record["layer"],
-        "spot": record["spot"],
-        "field_id": record["field_id"],
-        "simulation_log": sim_log,
-        "initial_energy": float(sim_log["energy"][0]),
-        "gantry_angle": float(sim_log["gantry_angle"]),
-        "relative_weight": float(sim_log["relative_weight"]),
-        "roi_size": list(roi_size),
-        "image_origin": list(image_origin),
-        "image_spacing": list(image_spacing),
-        "image_size": list(image_size),
-        "rays_entrence_point": entrance.tolist(),
-        "rays_entrence_point_proj": [float(v) for v in re_proj],
-        "crp_numpy_ct": list(crp),
-        "oob": bool(oob),
-    }
-
-
-def _save_spot(
-    output_dir: Path,
-    spot_id_str: str,
-    cropped_ct: np.ndarray,
-    flux: np.ndarray,
-    sim_res: dict,
-) -> None:
-    """Write the CT crop, flux projection and metadata for one spot."""
-    np.save(output_dir / f"{spot_id_str}_ct.npy", cropped_ct)
-    np.save(output_dir / f"{spot_id_str}_flux.npy", flux)
-    (output_dir / f"{spot_id_str}_sim_res.json").write_text(
-        json.dumps(sim_res, indent=4, cls=NumpyEncoder)
-    )
-
-
 def _build_manifest(
     plan_directory: PlanDirectory,
     output_dir: Path,
@@ -538,81 +401,3 @@ def _build_manifest(
         },
         "spot_ids": [s["id"] for s in spots],
     }
-
-
-def _save_field_overlay(
-    overlays_dir: Path,
-    beam: int,
-    rotated_ct: sitk.Image,
-    field_spots: List[dict],
-    isocenter_physical: tuple,
-    bdl: BeamDataLibrary,
-    roi_size: tuple,
-) -> None:
-    """Save a visual sanity-check PNG for a field's most-weighted spot.
-
-    Left: the rotated CT axial slice through the isocenter with the isocenter and
-    the +x beam axis marked. Right: that spot's crop (depth x vs lateral y) with
-    the flux projection overlaid, to confirm the beam enters at x=0 and the flux
-    traces the ray.
-    """
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    # Representative spot = the most-weighted one in the field.
-    record = max(field_spots, key=lambda r: r["simulation_log"]["relative_weight"])
-    sim_log = record["simulation_log"]
-    spot_position = sim_log["bixelgrid_shifts_xy"][0]
-    energy = sim_log["energy"][0]
-    d_nozzle, d_smx, d_smy = bdl.distances
-
-    cropped_ct, entrance, crp, _oob = extract_beamlet_roi(
-        rotated_ct, d_nozzle, d_smx, d_smy, spot_position, isocenter_physical, roi_size
-    )
-    beamlet_angles = spot_position_to_angles(
-        spot_position[0], spot_position[1], d_smx, d_smy
-    )
-    sigmas = flux_spatial_spread(bdl, energy)
-    re_proj = [entrance[1], entrance[2], entrance[0]]
-    flux = flux_projection(re_proj, beamlet_angles, sigmas, cropped_ct.shape)
-
-    iso_idx = rotated_ct.TransformPhysicalPointToIndex(
-        [float(c) for c in isocenter_physical]
-    )
-    ct_arr = sitk.GetArrayFromImage(rotated_ct)  # (z, y, x)
-    iz, iy, ix = iso_idx[2], iso_idx[1], iso_idx[0]
-
-    fig, axes = plt.subplots(1, 2, figsize=(14, 6), dpi=120)
-
-    # Left: rotated CT axial slice through the isocenter.
-    axes[0].imshow(ct_arr[iz, :, :], cmap="gray", origin="lower")
-    axes[0].scatter([ix], [iy], color="red", s=30, label="isocenter")
-    axes[0].axhline(iy, color="cyan", lw=0.6, ls="--", label="beam axis (+x)")
-    axes[0].set_title(
-        f"beam {beam}: rotated CT axial @ iso z={iz}\n"
-        f"gantry(adj)={sim_log['gantry_angle']:.0f} deg"
-    )
-    axes[0].set_xlabel("x (depth ->)")
-    axes[0].set_ylabel("y")
-    axes[0].legend(loc="upper right", fontsize=8)
-
-    # Right: the spot's crop, depth (x) vs lateral (y) at mid-z, flux overlaid.
-    mid_z = cropped_ct.shape[0] // 2
-    axes[1].imshow(cropped_ct[mid_z, :, :], cmap="gray", origin="lower", aspect="auto")
-    flux_slice = flux[mid_z, :, :]
-    if float(flux_slice.max()) > 0:
-        axes[1].contour(
-            flux_slice,
-            levels=[flux_slice.max() * lvl for lvl in (0.1, 0.5, 0.9)],
-            colors="orange",
-            linewidths=0.8,
-        )
-    axes[1].set_title(f"spot {record['id']}: CT crop + flux (mid-z)\nE={energy:.1f} MeV")
-    axes[1].set_xlabel("x (depth, 0 = entrance)")
-    axes[1].set_ylabel("y (lateral)")
-
-    fig.tight_layout()
-    fig.savefig(overlays_dir / f"beam{beam:02d}_{record['id']}.png", bbox_inches="tight")
-    plt.close(fig)

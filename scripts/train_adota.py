@@ -49,12 +49,15 @@ import torch
 import typer
 
 from src.evaluation.cli import resolve_device
+from src.training.attention import save_attention_snapshot
+from src.training.checkpoints import CheckpointManager
 from src.training.data import (
     build_dataloaders,
     limited_loader,
     load_record_ids,
     train_val_split,
 )
+from src.training.diagnostics import GracefulShutdown
 from src.training.factory import (
     build_adota_model,
     build_config_from_yaml,
@@ -69,28 +72,24 @@ from src.training.gpr_pool import (
     pool_to_indices,
     save_gpr_pool,
 )
-from src.training.loop import resolve_weights, train_one_epoch
-from src.training.losses import LMSE, LPS, TwoObjectiveBalancer
-from src.training.run import (
-    CheckpointManager,
-    GracefulShutdown,
-    MetricsLog,
+from src.training.logging_utils import (
     format_duration,
     log_banner,
     log_phase,
     log_section,
-    save_resolved_config,
     setup_training_logging,
-    setup_training_run_directory,
     silence_pymedphys,
+)
+from src.training.loop import resolve_weights, train_one_epoch
+from src.training.losses import LMSE, LPS, TwoObjectiveBalancer
+from src.training.run_dir import (
+    MetricsLog,
+    save_resolved_config,
+    setup_training_run_directory,
     write_manifest,
 )
 from src.training.utils import get_lr
-from src.training.validation import (
-    evaluate_validation,
-    pick_canary,
-    save_attention_snapshot,
-)
+from src.training.validation import evaluate_validation, pick_canary
 
 logger = logging.getLogger(__name__)
 app = typer.Typer(help="ADoTA training tool")

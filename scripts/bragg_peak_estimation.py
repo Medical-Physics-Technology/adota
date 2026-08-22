@@ -31,7 +31,7 @@ from tqdm import tqdm
 
 # Add project root to path
 from src.adota.config import DEFAULT_SCALE
-from src.figures.ct_visualizations import plot_bp_estimation_diagnostic
+from src.figures.bp_diagnostic import plot_bp_estimation_diagnostic
 from src.loaders.generator import H5PYGenerator
 from src.processing.rsp import hu_to_rsp_density
 from src.utils.scallers import inverse_minmax

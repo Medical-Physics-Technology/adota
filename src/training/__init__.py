@@ -6,7 +6,9 @@ wires together.
 Modules:
 - ``data``, ``factory``: dataset/dataloader construction, model and optimizer.
 - ``loop``, ``losses``: the training step and its objectives.
-- ``validation``, ``gpr_pool``: per-epoch evaluation and gamma pass rate.
-- ``run``: run scaffolding (logging, run directory, checkpoints, diagnostics).
+- ``validation``, ``binning``, ``attention``, ``gpr_pool``: per-epoch evaluation.
+- ``logging_utils``, ``run_dir``, ``checkpoints``, ``diagnostics``: run
+  scaffolding (formatted logs, run directory and manifest, checkpoint retention
+  and resume, shutdown handling and numerical diagnostics).
 - ``utils``: small shared helpers.
 """
