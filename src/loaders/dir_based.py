@@ -1,15 +1,28 @@
-import torch
-import numpy as np
+"""Load a single beamlet record from a directory of numpy arrays.
 
+The directory layout is the one the paper's test sets ship in: one ``.npy`` per
+volume (CT, flux, dose) per sample id.
+
+Flow:
+1. Read the CT / flux / dose arrays for one sample id.
+2. Optionally downsample to the (160, 30, 30) model grid (interpolation or
+   average pooling).
+3. Min-max normalise with the training ``scale`` dict and stack into the
+   two-channel model input.
+4. ``postprocess_prediction`` / ``save_prediction`` invert that for output.
+"""
+
+import json
+import logging
+import os
 from time import perf_counter
 from typing import Optional, Tuple
-import os
-import json
+
+import numpy as np
+import torch
 import torch.nn.functional as F
 
 from src.utils.scallers import inverse_minmax
-
-import logging
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -76,7 +89,8 @@ def get_single_record(
         dose_grid = F.avg_pool3d(dose_grid, kernel_size=2, stride=2)
         flux_grid = F.avg_pool3d(flux_grid, kernel_size=2, stride=2)
         logger.info(
-            f"Downsampled using Average Pooling. New shape: CT: {ct_grid.shape}, Dose: {dose_grid.shape}, Flux: {flux_grid.shape}"
+            f"Downsampled using Average Pooling. New shape: CT: {ct_grid.shape}, "
+            f"Dose: {dose_grid.shape}, Flux: {flux_grid.shape}"
         )
 
     # Perform Interpolation using F.interpolate to resize to (160, 30, 30)

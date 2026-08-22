@@ -1,9 +1,12 @@
 """Toy illustrations for 4.3: (1) redundancy clustering, (2) Lasso sparsity path."""
 from pathlib import Path
+
+import matplotlib
 import numpy as np
-import matplotlib; matplotlib.use("Agg")
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from scipy.cluster.hierarchy import linkage, dendrogram
+from scipy.cluster.hierarchy import dendrogram, linkage
 from scipy.spatial.distance import squareform
 from sklearn.linear_model import lasso_path
 
@@ -29,7 +32,8 @@ feats = {
     "width_inch":   0.39*Wd + 0.05*rng.normal(size=n),
     "weight_kg":    rng.normal(size=n),
 }
-names = list(feats); X = np.column_stack([feats[k] for k in names])
+names = list(feats)
+X = np.column_stack([feats[k] for k in names])
 C = np.corrcoef(X.T)
 D = 1 - np.abs(C)
 Z = linkage(squareform(D, checks=False), method="average")
@@ -37,8 +41,10 @@ Z = linkage(squareform(D, checks=False), method="average")
 fig, (axm, axd) = plt.subplots(1, 2, figsize=(13, 4.8), gridspec_kw=dict(width_ratios=[1, 1.05]))
 fig.subplots_adjust(left=0.16, right=0.98, top=0.82, bottom=0.28, wspace=0.55)
 im = axm.imshow(np.abs(C), cmap="Reds", vmin=0, vmax=1)
-axm.set_xticks(range(6)); axm.set_xticklabels(names, rotation=45, ha="right", fontsize=9)
-axm.set_yticks(range(6)); axm.set_yticklabels(names, fontsize=9)
+axm.set_xticks(range(6))
+axm.set_xticklabels(names, rotation=45, ha="right", fontsize=9)
+axm.set_yticks(range(6))
+axm.set_yticklabels(names, fontsize=9)
 for i in range(6):
     for j in range(6):
         axm.text(j, i, f"{abs(C[i,j]):.2f}", ha="center", va="center",
@@ -56,11 +62,13 @@ axd.set_title("2) cluster them, then KEEP ONE PER GROUP\n"
 axd.spines["left"].set_visible(True)
 fig.suptitle("Remove redundancy — toy example: 6 metrics, but only 3 really-different things "
              "(length, width, weight)", fontsize=12.5, fontweight="bold", y=0.965)
-fig.savefig(OUT / "toy_redundancy.png", dpi=150); plt.close(fig)
+fig.savefig(OUT / "toy_redundancy.png", dpi=150)
+plt.close(fig)
 print("wrote toy_redundancy.png")
 
 # ============ TOY 2: Lasso sparsity path ============
-z1 = rng.normal(size=n); z2 = rng.normal(size=n)
+z1 = rng.normal(size=n)
+z2 = rng.normal(size=n)
 Z2 = np.column_stack([
     z1,                                   # informative (big weight)
     z2,                                   # informative (small weight)
@@ -83,12 +91,14 @@ for k in range(6):
     ax.plot(xa, coefs[k], color=cols[k], lw=2.4 if k < 3 else 1.6,
             ls="-" if k < 3 else ":", label=labels[k], zorder=5 if k < 3 else 3)
 ax.axhline(0, color=BASE, lw=1)
-ax.set_xlabel("← stronger penalty      (relax penalty →)"); ax.set_ylabel("metric weight in the score")
+ax.set_xlabel("← stronger penalty      (relax penalty →)")
+ax.set_ylabel("metric weight in the score")
 ax.set_title("Keep only what pays — toy Lasso path:\nuseless metrics are driven to exactly 0; "
              "of two redundant metrics, one is kept", fontsize=11.5)
 ax.legend(loc="center left", bbox_to_anchor=(1.02, 0.5), frameon=False, fontsize=9.5)
 ax.grid(color=GRID, lw=0.7)
 ax.text(1.15, 0.16, "useless & 1-of-2 redundant metrics  →  weight 0",
         fontsize=9.5, color=INK2, style="italic")
-fig.savefig(OUT / "toy_sparsity.png", dpi=150); plt.close(fig)
+fig.savefig(OUT / "toy_sparsity.png", dpi=150)
+plt.close(fig)
 print("wrote toy_sparsity.png")

@@ -256,7 +256,9 @@ def generate_for_record(
                           "stat_unc%": f"{sim_res.get('stat_uncertainty', float('nan')):.2f}"},
                 )
         stats["energies"][int(energy)] = {"saved": n_saved, "qa_skipped": n_qa, "existing": n_exist}
-        stats["saved"] += n_saved; stats["skipped_qa"] += n_qa; stats["skipped_existing"] += n_exist
+        stats["saved"] += n_saved
+        stats["skipped_qa"] += n_qa
+        stats["skipped_existing"] += n_exist
         logger.info("  %s e%d: saved=%d qa_skip=%d existing=%d -> %s",
                     rec.patient_id, int(energy), n_saved, n_qa, n_exist, out_dir)
     return stats

@@ -1,14 +1,29 @@
-import torch
-import numpy as np
-from torch.utils.data import Dataset
-import h5py
-import warnings
+"""HDF5-backed dataset of beamlet records.
 
-from typing import List, Dict, Tuple
+Defines :class:`H5PYGenerator`, the ``torch.utils.data.Dataset`` that training
+and the H5-based analysis scripts iterate.
+
+Flow (``__getitem__``):
+1. Open the HDF5 file and read one record's CT, flux and dose grids.
+2. Reject/repair records whose shape is not (160, 30, 30).
+3. Optionally apply geometric augmentation.
+4. Min-max normalise and return ``(input, energy, target)`` tensors.
+
+A hard-coded exclusion list drops records known to carry an empty dose
+distribution.
+"""
+
+import warnings
+from typing import Tuple
+
+import h5py
+import numpy as np
+import torch
+from torch.utils.data import Dataset
 
 from src.augmentation.geo_augmenations import (
-    moving_window_augmentation,
     cropp_around_index,
+    moving_window_augmentation,
 )
 from src.beamlets.centerline import BeamLine, render_centerline
 
@@ -62,7 +77,8 @@ class H5PYGenerator(Dataset):
         self.expected_shape = kwargs.get("expected_shape", (160, 30, 30))
 
         # Temorary solution, empty records handled here:
-        # Description: We investigated that mentioned records have an empty dose distributions. It cannot be taken into consideration into the training process.
+        # Description: We investigated that mentioned records have an empty dose
+        # distribution. It cannot be taken into consideration in the training process.
         invalid_records = []
         self.indexes_to_exclude_list_path = kwargs.get(
             "indexes_to_exclude_list",
@@ -232,7 +248,8 @@ class H5PYGenerator(Dataset):
                     f"ct={tuple(ct_grid.shape)}, dose={tuple(dose_grid.shape)}, flux={tuple(flux_grid.shape)}"
                 )
 
-            # Handle the incorect shape of ct_grid, flux_grid and dose_grid. Each of them must have shape of (160, 30, 30)
+            # Handle the incorect shape of ct_grid, flux_grid and dose_grid.
+            # Each of them must have shape of (160, 30, 30)
             if ct_grid.shape != self.expected_shape:
                 raise ValueError(
                     f"Incorrect shape for ct_grid: {ct_grid.shape}, expected {self.expected_shape}"

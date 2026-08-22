@@ -18,14 +18,10 @@ from __future__ import annotations
 
 import json
 import logging
-import sys
 from pathlib import Path
 from typing import Annotated, Optional
 
 import typer
-
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT))
 
 from src.adota.config import load_yaml_config
 from src.beamlets.bdl import BeamDataLibrary

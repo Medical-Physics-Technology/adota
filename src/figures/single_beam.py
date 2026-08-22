@@ -1,3 +1,15 @@
+"""Single-beamlet publication figures.
+
+Flow:
+1. ``publication_figure`` renders the main paper panel for one beamlet: axial,
+   sagittal and coronal views of ground-truth dose, prediction and their
+   difference, plus a depth-layer strip, over the CT.
+2. ``compare_two_inputs`` overlays CT with flux or dose before and after
+   rotation, for input-preparation QC.
+3. ``beamlet_input_figure`` shows just the model inputs (CT + flux).
+4. ``save_figure_as_publication_formats`` writes each figure as PNG/PDF/SVG.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -5,10 +17,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-import torch
-from src.utils.dose_grid_utils import estimate_bragg_peak
 
-from src.utils.scallers import inverse_minmax
+from src.utils.dose_grid_utils import estimate_bragg_peak
 from src.utils.unit_conversions import to_gy
 
 
@@ -180,28 +190,84 @@ def compare_two_inputs(
     ax_dict = fig.subplot_mosaic("AB;CD;EF;GH;II")
 
     flux_im = _plot_ct_overlay(
-        ax_dict["A"], original_ct, original_flux, "axial", "Original CT + flux | axial", "hot", flux_max, flux_alpha_threshold
+        ax_dict["A"],
+        original_ct,
+        original_flux,
+        "axial",
+        "Original CT + flux | axial",
+        "hot",
+        flux_max,
+        flux_alpha_threshold,
     )
     _plot_ct_overlay(
-        ax_dict["B"], original_ct, original_flux, "sagittal", "Original CT + flux | sagittal", "hot", flux_max, flux_alpha_threshold
+        ax_dict["B"],
+        original_ct,
+        original_flux,
+        "sagittal",
+        "Original CT + flux | sagittal",
+        "hot",
+        flux_max,
+        flux_alpha_threshold,
     )
     dose_im = _plot_ct_overlay(
-        ax_dict["C"], original_ct, original_dose, "axial", "Original CT + dose | axial", "jet", dose_max, dose_alpha_threshold
+        ax_dict["C"],
+        original_ct,
+        original_dose,
+        "axial",
+        "Original CT + dose | axial",
+        "jet",
+        dose_max,
+        dose_alpha_threshold,
     )
     _plot_ct_overlay(
-        ax_dict["D"], original_ct, original_dose, "sagittal", "Original CT + dose | sagittal", "jet", dose_max, dose_alpha_threshold
+        ax_dict["D"],
+        original_ct,
+        original_dose,
+        "sagittal",
+        "Original CT + dose | sagittal",
+        "jet",
+        dose_max,
+        dose_alpha_threshold,
     )
     _plot_ct_overlay(
-        ax_dict["E"], rotated_ct, rotated_flux, "axial", "Rotated CT + flux | axial", "hot", flux_max, flux_alpha_threshold
+        ax_dict["E"],
+        rotated_ct,
+        rotated_flux,
+        "axial",
+        "Rotated CT + flux | axial",
+        "hot",
+        flux_max,
+        flux_alpha_threshold,
     )
     _plot_ct_overlay(
-        ax_dict["F"], rotated_ct, rotated_flux, "sagittal", "Rotated CT + flux | sagittal", "hot", flux_max, flux_alpha_threshold
+        ax_dict["F"],
+        rotated_ct,
+        rotated_flux,
+        "sagittal",
+        "Rotated CT + flux | sagittal",
+        "hot",
+        flux_max,
+        flux_alpha_threshold,
     )
     _plot_ct_overlay(
-        ax_dict["G"], rotated_ct, rotated_dose, "axial", "Rotated CT + dose | axial", "jet", dose_max, dose_alpha_threshold
+        ax_dict["G"],
+        rotated_ct,
+        rotated_dose,
+        "axial",
+        "Rotated CT + dose | axial",
+        "jet",
+        dose_max,
+        dose_alpha_threshold,
     )
     _plot_ct_overlay(
-        ax_dict["H"], rotated_ct, rotated_dose, "sagittal", "Rotated CT + dose | sagittal", "jet", dose_max, dose_alpha_threshold
+        ax_dict["H"],
+        rotated_ct,
+        rotated_dose,
+        "sagittal",
+        "Rotated CT + dose | sagittal",
+        "jet",
+        dose_max,
+        dose_alpha_threshold,
     )
     aligned_colorbar(fig, flux_im, ax_dict["B"], "Flux [a.u.]", label_coords=(4.2, 0.5))
     aligned_colorbar(fig, dose_im, ax_dict["D"], "Dose [a.u.]", label_coords=(4.2, 0.5))
@@ -307,21 +373,20 @@ def publication_figure(
 
     diff = np.abs(ground_truth - prediction) / np.max(ground_truth) * 100
 
-    y_true_np = to_gy(ground_truth) * 1000 # Convert to Gy / 10^7 particles, which is a more intuitive unit for visualization (and is what we used in the paper). The scaling by 1000 is to convert from Gy to mGy, which is a common unit for dose visualization.
-    y_pred_np = to_gy(prediction) * 1000 # Convert to Gy / 10^7 particles, which is a more intuitive unit for visualization (and is what we used in the paper). The scaling by 1000 is to convert from Gy to mGy, which is a common unit for dose visualization.
+    # Convert to Gy / 10^7 particles, a more intuitive unit for visualization
+    # (and what the paper uses); the 1000 factor converts Gy to mGy.
+    y_true_np = to_gy(ground_truth) * 1000
+    y_pred_np = to_gy(prediction) * 1000
     x_np = ct_input.copy()
 
     true_min, true_max = np.min(y_true_np), np.max(y_true_np)
-    pred_min, pred_max = np.min(y_pred_np), np.max(y_pred_np)
     diff_min, diff_max = np.min(diff), np.max(diff)
     norm_true = plt.Normalize(vmin=true_min, vmax=true_max)
-    norm_pred = plt.Normalize(vmin=pred_min, vmax=pred_max)
-    norm_diff = plt.Normalize(vmin=diff_min, vmax=diff_max)
 
     # Axial view ------
     # Axial - GT
     ax = ax_dict["A"]
-    ax.set_title(f"Axial view", fontsize=20, pad=20)
+    ax.set_title("Axial view", fontsize=20, pad=20)
     ax.imshow(np.rot90(x_np[0][:, bp_idx_gt[1], :]), cmap="gray")
     for i in range(len(depth_layers_to_disp)):
         ax.axvline(x=depth_layers_to_disp[i], color="red", linewidth=2)
@@ -473,7 +538,7 @@ def publication_figure(
     # SAGGITAL VIEW
     # Saggital - GT
     ax = ax_dict["B"]
-    ax.set_title(f"Sagittal view", fontsize=20, pad=20)
+    ax.set_title("Sagittal view", fontsize=20, pad=20)
     ax.imshow(np.rot90(x_np[0][:, :, bp_idx_gt[2]]), cmap="gray")
     ct_ax = ax.imshow(
         np.rot90(y_true_np[:, :, bp_idx_gt[2]]),
@@ -664,7 +729,7 @@ def publication_figure(
         ax.grid(linestyle="--", linewidth=0.5, color="white")
         ax.set_xlabel(f"{depth_layers_to_disp[img_idx] * 2} mm", fontsize=16)
 
-    title = (
+    title = (  # noqa: F841 - used by the commented-out fig.suptitle below
         "Initial Energy: {:.2f} MeV\n"
         "MAPE: {:.2f} %, GPR({:.1f}%, {:.1f}mm, {:.1f}%): {:.2f} %"
     ).format(

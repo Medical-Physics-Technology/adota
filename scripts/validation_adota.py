@@ -21,7 +21,6 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-import sys
 from dataclasses import dataclass, fields
 from pathlib import Path
 from types import SimpleNamespace
@@ -32,35 +31,32 @@ import torch
 import typer
 from torch.utils.data import DataLoader
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
-from src.adota.config import (  # noqa: E402
+from src.adota.config import (
     denormalize_energy,
     load_yaml_config,
     setup_logging,
     setup_run_directory,
 )
-from src.adota.models import DoTA3D_v3  # noqa: E402
-from src.evaluation.cli import resolve_device  # noqa: E402
-from src.evaluation.engine import denorm_pair  # noqa: E402
-from src.evaluation.outputs import CsvColumn, save_results_csv  # noqa: E402
-from src.loaders.generator import H5PYGenerator  # noqa: E402
-from src.metrics.classic import (  # noqa: E402
+from src.adota.models import DoTA3D_v3
+from src.evaluation.cli import resolve_device
+from src.evaluation.engine import denorm_pair
+from src.evaluation.outputs import CsvColumn, save_results_csv
+from src.loaders.generator import H5PYGenerator
+from src.metrics.classic import (
     calculate_pure_mape,
     calculate_relative_dose_error,
     calculate_rmse,
 )
-from src.metrics.range_metrics import (  # noqa: E402
+from src.metrics.range_metrics import (
     compute_range_metrics,
     integrated_depth_dose,
     range_metric_deltas,
 )
-from src.schemas.configs import RunRef, ValidationExperimentConfig  # noqa: E402
-from src.tables.results import render_comparison_table  # noqa: E402
-from src.training.data import collate_h5, load_record_ids, train_val_split  # noqa: E402
-from src.training.losses import LMSE  # noqa: E402
-from src.utils.unit_conversions import to_gy  # noqa: E402
+from src.schemas.configs import RunRef, ValidationExperimentConfig
+from src.tables.results import render_comparison_table
+from src.training.data import collate_h5, load_record_ids, train_val_split
+from src.training.losses import LMSE
+from src.utils.unit_conversions import to_gy
 
 logger = logging.getLogger(__name__)
 app = typer.Typer(help="ADoTA cross-run validation experiment (inference only).")

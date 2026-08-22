@@ -1,3 +1,10 @@
+"""Pre-flight checks shared by the inference entry points.
+
+``validate_inputs`` asserts that the data directory, checkpoint and
+hyperparameter file all exist before a run starts, so a long job fails
+immediately and with a readable message rather than midway through.
+"""
+
 from pathlib import Path
 
 import typer

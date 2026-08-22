@@ -207,7 +207,7 @@ def rotate_volume_torch(
         if torch_device.type == "cuda":
             torch.cuda.synchronize(torch_device)
         start = perf_counter()
-        rotated_t = rotate_tensor(volume_t, theta)
+        rotate_tensor(volume_t, theta)
         if torch_device.type == "cuda":
             torch.cuda.synchronize(torch_device)
         pure_times.append(perf_counter() - start)

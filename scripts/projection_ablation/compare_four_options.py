@@ -19,13 +19,13 @@ import os
 from pathlib import Path
 
 import h5py
-import numpy as np
 import matplotlib
+import numpy as np
+
 matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
 
-import sys
-sys.path.insert(0, "/home/mstryja/projects/adota")
 from src.beamlets.centerline import beam_line_from_metadata, render_centerline
 
 H5 = "/scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5"
@@ -58,12 +58,15 @@ def norm01(a):
 
 def spot_sigma(flux):
     H, W, D = flux.shape
-    ii = np.arange(H)[:, None]; jj = np.arange(W)[None, :]
+    ii = np.arange(H)[:, None]
+    jj = np.arange(W)[None, :]
     sg = []
     for d in range(0, D, 10):
-        s = flux[:, :, d]; tot = s.sum()
+        s = flux[:, :, d]
+        tot = s.sum()
         if tot > 0:
-            c0 = (s * ii).sum() / tot; c1 = (s * jj).sum() / tot
+            c0 = (s * ii).sum() / tot
+            c1 = (s * jj).sum() / tot
             sg.append(np.sqrt(((s * ((ii - c0) ** 2 + (jj - c1) ** 2)).sum() / tot) / 2))
     return float(np.mean(sg))
 
@@ -109,7 +112,8 @@ def main():
                   interpolation="nearest", vmin=0, vmax=1)
         ax.plot(d, c0, color="#2ad1c9", lw=1.0, ls="-")
         ax.set_title(title, fontsize=10.5)
-        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_xticks([])
+        ax.set_yticks([])
         if c == 0:
             ax.set_ylabel("DIRECTION\naxis0 vs depth (MIP)", fontsize=9)
         # width view: axial slice at mid-depth (cropped window)
@@ -117,7 +121,8 @@ def main():
         ax.imshow(vol[sl[0], sl[1], dmid], origin="lower", cmap="magma",
                   interpolation="nearest", vmin=0, vmax=1)
         ax.plot(c1[dmid] - sl[1].start, c0[dmid] - sl[0].start, "+", color="#2ad1c9", ms=10)
-        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_xticks([])
+        ax.set_yticks([])
         if c == 0:
             ax.set_ylabel(f"WIDTH\naxial slice @ depth {dmid}", fontsize=9)
 

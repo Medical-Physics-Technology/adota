@@ -10,14 +10,12 @@ Shared helpers for the CT texture analysis pipeline:
 
 import logging
 import shutil
-import sys
-from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
-import yaml
 import typer
+import yaml
 
 logger = logging.getLogger(__name__)
 

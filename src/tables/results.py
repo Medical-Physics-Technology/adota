@@ -1,3 +1,13 @@
+"""Console result tables for evaluation runs.
+
+Flow:
+1. Take the per-sample metric lists an evaluation produced.
+2. Aggregate them (mean/std/min/max, and per-energy rows where relevant).
+3. Render a ``prettytable`` to the log.
+
+``render_comparison_table`` does the same for two runs side by side.
+"""
+
 import logging
 from typing import Dict, List, Optional
 

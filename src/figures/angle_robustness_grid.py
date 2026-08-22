@@ -54,12 +54,14 @@ def angle_robustness_panel(
     ax.set_ylabel("Beamlet angle Y [degrees]", fontsize=_FS_LABEL)
     lo, hi = float(tx.min()), float(tx.max())
     ticks = [t for t in (-2, -1, 0, 1, 2) if lo - 1e-6 <= t <= hi + 1e-6] or [lo, 0, hi]
-    ax.set_xticks(ticks); ax.set_yticks(ticks)
+    ax.set_xticks(ticks)
+    ax.set_yticks(ticks)
     ax.tick_params(axis="both", labelsize=_FS_TICK)
     ax.set_aspect("equal")
     ax.grid(True, ls=":", lw=0.5, alpha=0.6)
     pad = 0.15 * (hi - lo + 1e-6)
-    ax.set_xlim(lo - pad, hi + pad); ax.set_ylim(lo - pad, hi + pad)
+    ax.set_xlim(lo - pad, hi + pad)
+    ax.set_ylim(lo - pad, hi + pad)
     if with_colorbar:
         cb = fig.colorbar(sc, ax=ax, fraction=0.046, pad=0.04)
         cb.set_label(cbar_label, fontsize=_FS_CBAR)

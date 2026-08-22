@@ -10,17 +10,15 @@ Usage:
 """
 
 import json
-import sys
 from pathlib import Path
 from typing import Annotated, List, Optional
 
 import numpy as np
 import typer
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
 from src.figures.single_beam import beamlet_input_figure
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 app = typer.Typer(help="Render CT-crop + flux figures for extracted beamlets.")
 

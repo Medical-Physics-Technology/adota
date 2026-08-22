@@ -39,8 +39,9 @@ def test_shared_scale_spans_all_panels_ignoring_nan():
 
 
 def test_extreme_indices_picks_lowest_and_highest():
-    from src.mc_generation.angle_robustness_analysis import extreme_indices
     import numpy as np
+
+    from src.mc_generation.angle_robustness_analysis import extreme_indices
     g = np.array([[90.0, 70.0, np.nan],
                   [60.0, 99.0, 85.0],
                   [50.0, 95.0, 80.0]])

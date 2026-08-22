@@ -18,7 +18,6 @@ from src.processing.interface_severity import (
     compute_isi_metrics,
     interface_severity,
 )
-
 from src.processing.tissue_decomposition import N_TISSUE_CLASSES, segment_tissue
 
 RESOLUTION = (2.0, 2.0, 2.0)
@@ -212,7 +211,7 @@ class TestISIAggregation:
         """Sphere at centre with radius 4 mm on 2 mm grid → ~33 voxels (4/3·π·2³)."""
         mask = _build_sphere_mask(SHAPE, (80, 15, 15), 4.0, RESOLUTION)
         n_expected = 4.0 / 3.0 * np.pi * (4.0 / 2.0) ** 3  # r/dz = 2 voxels
-        assert 10 < mask.sum() < 60
+        assert 10 < mask.sum() < 60, f"expected roughly {n_expected:.0f} voxels"
         assert mask[80, 15, 15]
         # Outside-sphere voxels are False
         assert not mask[0, 0, 0]

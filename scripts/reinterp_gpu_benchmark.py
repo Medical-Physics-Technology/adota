@@ -27,7 +27,6 @@ import logging
 import os
 import platform
 import random
-import sys
 from pathlib import Path
 from time import perf_counter
 from typing import Annotated, Optional
@@ -40,16 +39,13 @@ import numpy as np
 import torch
 import typer
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
-
+# Reuse the trusted staged CPU extraction from the existing study.
+from scripts.beamlet_bev_rotation_timing import _load_beamlet, run_staged_cpu_extraction
 from src.adota.config import load_yaml_config, setup_logging, setup_run_directory
 from src.adota.utils import load_model
 from src.beamlets.bdl import BeamDataLibrary
 from src.beamlets.flux import (
     flux_projection,
-    flux_projection_gpu,
     flux_projection_gpu_batched,
     flux_spatial_spread,
 )
@@ -59,11 +55,9 @@ from src.image_processing.rotation import (
     rotate_beamlet_crop,
     rotate_beamlet_crops_batched,
 )
-from src.loaders.dir_based import DEFAULT_SCALE
 from src.loaders.plan_directory import load_plan_directory
 
-# Reuse the trusted staged CPU extraction from the existing study.
-from scripts.beamlet_bev_rotation_timing import _load_beamlet, run_staged_cpu_extraction
+ROOT_DIR = Path(__file__).resolve().parents[1]
 
 logger = logging.getLogger(__name__)
 app = typer.Typer(help="Fair optimized-GPU reinterpretation benchmark.")
@@ -227,8 +221,10 @@ def _time_gpu_batched_for_batch(items: list[dict], bs: int, repeats: int,
             lambda: flux_projection_gpu_batched(ents, angs, sigs, shape, spacing=spacing,
                                                 device=dev, return_numpy=True),
             repeats, on_cuda, device)
-        samples["flux_gpu_batched_pure"].append(fpure / n); totals["flux_gpu_batched_pure"] += fpure
-        samples["flux_gpu_batched_practical"].append(fprac / n); totals["flux_gpu_batched_practical"] += fprac
+        samples["flux_gpu_batched_pure"].append(fpure / n)
+        totals["flux_gpu_batched_pure"] += fpure
+        samples["flux_gpu_batched_practical"].append(fprac / n)
+        totals["flux_gpu_batched_practical"] += fprac
 
         # DoTA rotation batched: 2 resamples (fwd + inverse); kernels return medians.
         fwd = rotate_beamlet_crops_batched(crops, angs, inverse=False, device=dev,
@@ -237,8 +233,10 @@ def _time_gpu_batched_for_batch(items: list[dict], bs: int, repeats: int,
                                            dtype=torch.float32, repeats=repeats, return_numpy=True)
         rpure = fwd.pure_median + inv.pure_median
         rprac = fwd.practical_median + inv.practical_median
-        samples["rot_gpu_batched_pure"].append(rpure / n); totals["rot_gpu_batched_pure"] += rpure
-        samples["rot_gpu_batched_practical"].append(rprac / n); totals["rot_gpu_batched_practical"] += rprac
+        samples["rot_gpu_batched_pure"].append(rpure / n)
+        totals["rot_gpu_batched_pure"] += rpure
+        samples["rot_gpu_batched_practical"].append(rprac / n)
+        totals["rot_gpu_batched_practical"] += rprac
 
     n_spots = len(items)
     throughput = {k: (n_spots / v if v > 0 else float("nan")) for k, v in totals.items()}

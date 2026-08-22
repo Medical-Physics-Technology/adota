@@ -9,8 +9,8 @@ import pytest
 import torch
 
 from src.training.factory import build_adota_model, build_optimizer_scheduler
-from src.training.losses import LMSE, LPS, TwoObjectiveBalancer
 from src.training.loop import resolve_weights, train_one_epoch
+from src.training.losses import LMSE, LPS, TwoObjectiveBalancer
 
 from .conftest import make_synthetic_batches, make_tiny_config
 

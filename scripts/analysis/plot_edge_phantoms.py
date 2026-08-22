@@ -1,9 +1,12 @@
 """Phantom illustration of the edge metrics: shapes/orientations -> anisotropy, orientation."""
 from pathlib import Path
+
+import matplotlib
 import numpy as np
-import matplotlib; matplotlib.use("Agg")
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from scipy.ndimage import sobel, gaussian_filter
+from scipy.ndimage import gaussian_filter, sobel
 
 INK, MUTED, GRID, BASE, SURF = "#0b0b0b", "#898781", "#e1e0d9", "#c3c2b7", "#fcfcfb"
 BLUE, RED = "#2a78d6", "#e34948"
@@ -74,7 +77,8 @@ for j, (kind, label) in enumerate(CASES):
                  arrowprops=dict(arrowstyle="->", color=BLUE, lw=2))
     ax0.text(N*0.5, N*0.13, "beam", color=BLUE, fontsize=8.5, ha="center", va="bottom")
     for ax in (ax0, ax1):
-        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_xticks([])
+        ax.set_yticks([])
     # metrics under the sobel row (orientation is undefined when nearly isotropic)
     if A < 0.12:
         txt = f"anisotropy A = {A:.2f}  (low)\norientation θ = n/a (isotropic)\nno preferred edge direction"

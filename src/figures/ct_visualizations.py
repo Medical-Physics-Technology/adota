@@ -12,7 +12,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.colors import BoundaryNorm, ListedColormap
-from matplotlib.patches import Patch
 from scipy.ndimage import gaussian_filter, median_filter
 
 from src.figures.single_beam import aligned_colorbar

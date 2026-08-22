@@ -17,12 +17,12 @@ Run: uv run --with scikit-learn python scripts/analysis/acquisition_dev_analysis
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy.stats import pearsonr, spearmanr
@@ -30,9 +30,11 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import GroupKFold
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.analysis.acquisition_regression_study import (
-    ALL_FEATS, NO_DEPTH, percentile_matrix, RANGE_VALID_MAX_MM,
+    ALL_FEATS,
+    NO_DEPTH,
+    RANGE_VALID_MAX_MM,
+    percentile_matrix,
 )
 
 INK, MUTED, BASE, SURF, GRID = "#0b0b0b", "#898781", "#c3c2b7", "#fcfcfb", "#e1e0d9"
@@ -42,8 +44,12 @@ plt.rcParams.update({"figure.facecolor": SURF, "axes.facecolor": SURF, "savefig.
     "ytick.color": MUTED, "font.size": 11, "font.family": "sans-serif",
     "axes.spines.top": False, "axes.spines.right": False})
 
-ridge = lambda: Ridge(alpha=1.0)
-gbm = lambda: HistGradientBoostingRegressor(max_iter=300, learning_rate=0.05, random_state=0)
+def ridge():
+    return Ridge(alpha=1.0)
+
+
+def gbm():
+    return HistGradientBoostingRegressor(max_iter=300, learning_rate=0.05, random_state=0)
 
 
 def cv(df, cols, y, mask, groups, model_fn):
@@ -53,8 +59,10 @@ def cv(df, cols, y, mask, groups, model_fn):
     for tr_, te_ in GroupKFold(5).split(idx, groups=groups[idx]):
         tr, te = idx[tr_], idx[te_]
         Xtr, Xte = percentile_matrix(df, cols, tr, te)
-        m = model_fn().fit(Xtr, y[tr]); pr = m.predict(Xte)
-        pe.append(pearsonr(pr, y[te])[0]); sp.append(spearmanr(pr, y[te]).correlation)
+        m = model_fn().fit(Xtr, y[tr])
+        pr = m.predict(Xte)
+        pe.append(pearsonr(pr, y[te])[0])
+        sp.append(spearmanr(pr, y[te]).correlation)
     return float(np.mean(pe)), float(np.mean(sp))
 
 
@@ -66,7 +74,10 @@ def main():
     ap.add_argument("--mape", default=f"{base}/figures/acquisition/mape_metric.csv")
     ap.add_argument("--test-ids", default=f"{base}/figures/acquisition/frozen_test_ids.csv")
     ap.add_argument("--outdir", default=f"{base}/figures/acquisition")
-    ap.add_argument("--report-fig", default="/home/mstryja/projects/adota/research/figures/acquisition/fig1_achievability.png")
+    ap.add_argument(
+        "--report-fig",
+        default="/home/mstryja/projects/adota/research/figures/acquisition/fig1_achievability.png",
+    )
     args = ap.parse_args()
     out = Path(args.outdir)
 
@@ -106,7 +117,8 @@ def main():
     labels = [a["target"] for a in ach]
     lin = [a["linear_pearson"] for a in ach]
     gb = [a["gbm_pearson"] for a in ach]
-    x = np.arange(len(labels)); w = 0.36
+    x = np.arange(len(labels))
+    w = 0.36
     fig, axf = plt.subplots(figsize=(8.2, 4.8))
     fig.subplots_adjust(left=0.10, right=0.98, top=0.90, bottom=0.12)
     b1 = axf.bar(x - w/2, lin, w, color=BLUE, label="interpretable linear model")
@@ -117,10 +129,13 @@ def main():
         for r in bars:
             axf.text(r.get_x() + r.get_width()/2, r.get_height() + 0.012,
                      f"{r.get_height():.2f}", ha="center", va="bottom", fontsize=9.5, color=INK)
-    axf.set_xticks(x); axf.set_xticklabels(labels, fontsize=11)
+    axf.set_xticks(x)
+    axf.set_xticklabels(labels, fontsize=11)
     axf.set_ylabel("Pearson correlation (held-out)")
-    axf.set_ylim(0, 1.0); axf.set_yticks(np.arange(0, 1.01, 0.2))
-    axf.grid(axis="y", color=GRID, lw=0.7); axf.set_axisbelow(True)
+    axf.set_ylim(0, 1.0)
+    axf.set_yticks(np.arange(0, 1.01, 0.2))
+    axf.grid(axis="y", color=GRID, lw=0.7)
+    axf.set_axisbelow(True)
     axf.legend(loc="upper right", frameon=False, fontsize=9.5)
     axf.set_title("Achievable correlation between an input-only score and each error measure",
                   fontsize=12, fontweight="bold")
@@ -132,7 +147,8 @@ def main():
     # ---- target comparison (Table 4): RDE / MAPE, raw + log, linear + GBM P/S ----
     tc_targets = []
     for col in ["rde", "mape_5pct", "mape_10pct"]:
-        v = df[col].values.astype(float); m = np.isfinite(v)
+        v = df[col].values.astype(float)
+        m = np.isfinite(v)
         tc_targets.append((f"{col} raw", v, m))
         tc_targets.append((f"{col} log1p", np.log1p(v), m))
     rows = []

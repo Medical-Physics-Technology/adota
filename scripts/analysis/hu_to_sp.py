@@ -22,9 +22,8 @@ Usage examples:
 from __future__ import annotations
 
 import logging
-import sys
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -33,25 +32,22 @@ from matplotlib.colors import BoundaryNorm, ListedColormap
 from matplotlib.patches import Patch
 
 # ── Project root ────────────────────────────────────────────────────────────
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
 from src.adota.config import DEFAULT_SCALE, denormalize_energy, setup_run_directory
 from src.processing.tissue_decomposition import (
-    ELEMENT_DENSITIES,
     ELEMENT_NAMES,
-    MOL_WEIGHTS,
     N_ELEMENTS,
     N_TISSUE_CLASSES,
-    TISSUE_LABELS as _TISSUE_LABELS_SHARED,
-    TISSUE_LUT,
-    Z_ARRAY,
     hu_to_density,
     hu_to_rsp_schneider,
     mat_comp,
     segment_tissue,
 )
+from src.processing.tissue_decomposition import (
+    TISSUE_LABELS as _TISSUE_LABELS_SHARED,
+)
 from src.utils.scallers import inverse_minmax
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -195,7 +191,7 @@ def plot_hu_material_density(
     ax_dict["C"].imshow(seg_ax, cmap=_TISSUE_CMAP, norm=_TISSUE_NORM, aspect="auto")
     ax_dict["C"].set_title("Material class – centre axial slice", fontsize=11)
 
-    seg_im = ax_dict["D"].imshow(
+    ax_dict["D"].imshow(
         seg_sg, cmap=_TISSUE_CMAP, norm=_TISSUE_NORM, aspect="auto"
     )
     ax_dict["D"].set_title("Material class – centre sagittal slice", fontsize=11)
@@ -279,7 +275,6 @@ def hdf5_samples(
     seed: Annotated[int, typer.Option(help="Random seed")] = 42,
 ) -> None:
     """Load random samples from training HDF5 and compute decomposition."""
-    import torch
 
     from src.loaders.generator import H5PYGenerator
 

@@ -33,10 +33,16 @@ import subprocess
 import types
 from time import perf_counter
 
+import pytest
 import torch
 
 from src.adota.layers import PositionalEmbedding, TransformerEncoderLayerDoTA
 from src.adota.models import DoTA3D_v3
+
+# CPU-runnable and genuinely useful (each test A/Bs the optimized path against
+# a faithful pre-refactor reimplementation), so it stays in the default suite;
+# the marker only lets `run-tests.py unit --fast` skip it.
+pytestmark = pytest.mark.slow
 
 # Model config mirrors scripts/config_train_adota.yaml (the trained models).
 INPUT_SHAPE = (2, 160, 30, 30)

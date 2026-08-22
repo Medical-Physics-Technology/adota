@@ -1,8 +1,19 @@
+"""Laplacian-of-Gaussian / Difference-of-Gaussian edge detection on CT volumes.
+
+Flow:
+1. Compute the LoG or DoG response at a physical sigma (mm, converted per-axis
+   using the voxel spacing).
+2. Find zero crossings of that response to get candidate edges.
+3. Keep only crossings whose local gradient is significant against a robust
+   (MAD-based) noise estimate, and drop wrap-around border artefacts.
+
+Used by the heterogeneity metrics to quantify tissue interfaces along the beam.
+"""
+
 from __future__ import annotations
 
 import numpy as np
 from scipy import ndimage as ndi
-
 
 # -------------------------
 # Core LoG / DoG responses

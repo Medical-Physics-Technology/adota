@@ -22,17 +22,15 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import sys
 from pathlib import Path
 
 import numpy as np
 import SimpleITK as sitk
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT))
-
 from src.figures.mc_dose_comparison import mc_dose_comparison_figure
 from src.mc_generation.mcsquare_runner import MCSquareRunner
+
+ROOT = Path(__file__).resolve().parents[2]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("eqgate")

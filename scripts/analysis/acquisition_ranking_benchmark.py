@@ -131,7 +131,8 @@ def build_candidates(df, cols_learn, tr, te, tau_gpr, tau_rng, e_gpr, e_rng):
 
     # ── dual-target: rank-max of the two learned heads ──
     def rank01(a):
-        r = np.empty(len(a)); r[np.argsort(a)] = np.arange(len(a))
+        r = np.empty(len(a))
+        r[np.argsort(a)] = np.arange(len(a))
         return r / max(len(a) - 1, 1)
     scores["dual_rankmax (gpr,range)"] = np.maximum(rank01(s_gpr_te), rank01(s_rng_te))
     return scores
@@ -213,7 +214,8 @@ def main():
         rows.append(row)
     res = pd.DataFrame(rows).sort_values("gpr_lift10", ascending=False)
 
-    outdir = Path(args.outdir); outdir.mkdir(parents=True, exist_ok=True)
+    outdir = Path(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
     suffix = args.split
     res.to_csv(outdir / f"ranking_wave1_{suffix}.csv", index=False)
     # per-fold detail (matters for anatomy transfer, where folds are asymmetric)
@@ -229,7 +231,8 @@ def main():
     print(f"{df.shape[0]} beamlets\n")
     hdr = f"{'candidate':30} {'GPR AUROC':>11} {'GPR lift10':>11} {'GPR lift5':>10} " \
           f"{'RNG AUROC':>11} {'RNG lift10':>11}"
-    print(hdr); print("-" * len(hdr))
+    print(hdr)
+    print("-" * len(hdr))
     for name in res.candidate:
         print(f"{name:30} {fmt(name,'gpr_auroc'):>11} {fmt(name,'gpr_lift10'):>11} "
               f"{fmt(name,'gpr_lift5'):>10} {fmt(name,'rng_auroc'):>11} "

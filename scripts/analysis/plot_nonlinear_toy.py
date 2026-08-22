@@ -11,8 +11,9 @@ Run: uv run --with scikit-learn python scripts/analysis/plot_nonlinear_toy.py
 """
 from pathlib import Path
 
-import numpy as np
 import matplotlib
+import numpy as np
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy.stats import pearsonr
@@ -60,7 +61,8 @@ for ax, (title, S, _) in zip(axes, panels):
                    vmin=-vmax, vmax=vmax, aspect="auto")
     ax.set_title(title, fontsize=11)
     ax.set_xlabel("feature u  (e.g. depth percentile)")
-    ax.set_xticks([0, 0.5, 1]); ax.set_yticks([0, 0.5, 1])
+    ax.set_xticks([0, 0.5, 1])
+    ax.set_yticks([0, 0.5, 1])
 axes[0].set_ylabel("feature v  (e.g. heterogeneity percentile)")
 cax = fig.add_axes([0.915, 0.13, 0.015, 0.67])
 fig.colorbar(im, cax=cax, label="target / prediction")

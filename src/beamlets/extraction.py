@@ -22,7 +22,8 @@ import logging
 import os
 import shutil
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from functools import partial
 from pathlib import Path
 from time import perf_counter

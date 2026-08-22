@@ -77,6 +77,7 @@ def test_robustness_config_from_dict_defaults_and_overrides():
 def test_ct_rotation_preserves_isocenter_at_grid_center():
     """Rotate+expand about the grid-centre isocenter must keep it the new centre."""
     import SimpleITK as sitk
+
     from src.beamlets.rotation import rotate_ct_around_isocenter
     from src.mc_generation.geometry import extraction_isocenter_physical
 

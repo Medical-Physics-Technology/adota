@@ -55,23 +55,33 @@ def mc_beamlet_qc_figure(
     for c, (axis, idx, name) in enumerate(views):
         ct_s = np.rot90(take(cropped_ct, axis, idx))
         # row 0: CT + dose
-        ax = axes[0, c]; ax.imshow(ct_s, **ct_kw)
+        ax = axes[0, c]
+        ax.imshow(ct_s, **ct_kw)
         ax.imshow(np.rot90(take(cropped_dose, axis, idx)), cmap="inferno", alpha=0.55,
                   vmin=0, vmax=dmax, aspect="auto")
-        ax.set_title(f"CT+dose | {name}", fontsize=10); ax.set_xticks([]); ax.set_yticks([])
+        ax.set_title(f"CT+dose | {name}", fontsize=10)
+        ax.set_xticks([])
+        ax.set_yticks([])
         # row 1: CT + flux
-        ax = axes[1, c]; ax.imshow(ct_s, **ct_kw)
+        ax = axes[1, c]
+        ax.imshow(ct_s, **ct_kw)
         ax.imshow(np.rot90(take(flux, axis, idx)), cmap="viridis", alpha=0.55,
                   vmin=0, vmax=fmax, aspect="auto")
-        ax.set_title(f"CT+flux | {name}", fontsize=10); ax.set_xticks([]); ax.set_yticks([])
+        ax.set_title(f"CT+flux | {name}", fontsize=10)
+        ax.set_xticks([])
+        ax.set_yticks([])
 
     # row 2: profiles
     ax = axes[2, 0]
     ax.plot(dd / (dd.max() + 1e-12), color="#e34948", label="dose (depth)")
-    fd = flux.sum(axis=tuple(lat)); ax.plot(fd / (fd.max() + 1e-12), color="#2a78d6",
+    fd = flux.sum(axis=tuple(lat))
+    ax.plot(fd / (fd.max() + 1e-12), color="#2a78d6",
                                             ls="--", label="flux (depth)")
-    ax.axvline(bragg, color="grey", ls=":"); ax.set_title("depth profiles (norm.)", fontsize=10)
-    ax.set_xlabel("depth voxel"); ax.legend(fontsize=8); ax.grid(True, ls=":", lw=0.5)
+    ax.axvline(bragg, color="grey", ls=":")
+    ax.set_title("depth profiles (norm.)", fontsize=10)
+    ax.set_xlabel("depth voxel")
+    ax.legend(fontsize=8)
+    ax.grid(True, ls=":", lw=0.5)
 
     # lateral profiles at the Bragg peak (dose vs flux alignment)
     dose_bragg = take(cropped_dose, depth, bragg)
@@ -83,7 +93,9 @@ def mc_beamlet_qc_figure(
         ax.plot(pd_ / (pd_.max() + 1e-12), color="#e34948", label="dose")
         ax.plot(pf_ / (pf_.max() + 1e-12), color="#2a78d6", ls="--", label="flux")
         ax.set_title(f"lateral profile axis {axl} @ Bragg", fontsize=10)
-        ax.set_xlabel("voxel"); ax.legend(fontsize=8); ax.grid(True, ls=":", lw=0.5)
+        ax.set_xlabel("voxel")
+        ax.legend(fontsize=8)
+        ax.grid(True, ls=":", lw=0.5)
 
     sub = title
     if info:

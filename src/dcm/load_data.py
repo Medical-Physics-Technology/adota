@@ -1,3 +1,12 @@
+"""Discover and classify medical image files on disk.
+
+Flow:
+1. ``list_all_files`` walks the given paths to an optional maximum depth.
+2. ``get_file_type`` classifies each by format (DICOM, MHD, ...).
+3. The result is a dict of format -> list of paths, which the DICOM loaders
+   consume.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -80,7 +89,8 @@ def list_all_files(inputPaths: str | List[str], maxDepth: int = -1):
     Returns
     -------
     fileLists: dictionary
-        The function returns a dictionary containing lists of data files classified according to their file format (Dicom, MHD).
+        The function returns a dictionary containing lists of data files classified
+        according to their file format (Dicom, MHD).
 
     """
 

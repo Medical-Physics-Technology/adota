@@ -48,15 +48,18 @@ RANGE_VALID_MAX_MM = 20.0
 
 
 def fit_percentiles(train_vals):
-    srt = np.sort(train_vals); n = len(srt)
+    srt = np.sort(train_vals)
+    n = len(srt)
     return lambda v: np.searchsorted(srt, v, side="right") / n
 
 
 def percentile_matrix(df, cols, tr, te):
-    Ptr = np.empty((len(tr), len(cols))); Pte = np.empty((len(te), len(cols)))
+    Ptr = np.empty((len(tr), len(cols)))
+    Pte = np.empty((len(te), len(cols)))
     for j, c in enumerate(cols):
         f = fit_percentiles(df[c].values[tr])
-        Ptr[:, j] = f(df[c].values[tr]); Pte[:, j] = f(df[c].values[te])
+        Ptr[:, j] = f(df[c].values[tr])
+        Pte[:, j] = f(df[c].values[te])
     return Ptr, Pte
 
 
@@ -67,8 +70,11 @@ def cv_eval(df, cols, y, mask, groups, model_fn):
     for tr_, te_ in gkf.split(idx, groups=groups[idx]):
         tr, te = idx[tr_], idx[te_]
         Xtr, Xte = percentile_matrix(df, cols, tr, te)
-        m = model_fn(); m.fit(Xtr, y[tr]); pr = m.predict(Xte)
-        pe.append(pearsonr(pr, y[te])[0]); sp.append(spearmanr(pr, y[te]).correlation)
+        m = model_fn()
+        m.fit(Xtr, y[tr])
+        pr = m.predict(Xte)
+        pe.append(pearsonr(pr, y[te])[0])
+        sp.append(spearmanr(pr, y[te]).correlation)
     return np.mean(pe), np.std(pe), np.mean(sp), np.std(sp)
 
 
@@ -85,7 +91,10 @@ MODELS = {
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--results", default="/scratch/mstryja/adota_runs/20260707_124010/results.csv")
-    ap.add_argument("--prov", default="/scratch/mstryja/adota_runs/20260707_124010/figures/acquisition/uuid_provenance_map.csv")
+    ap.add_argument(
+        "--prov",
+        default="/scratch/mstryja/adota_runs/20260707_124010/figures/acquisition/uuid_provenance_map.csv",
+    )
     ap.add_argument("--outdir", default="/scratch/mstryja/adota_runs/20260707_124010/figures/acquisition")
     ap.add_argument("--formula-target", default="log1p_rde",
                     help="target to print the interpretable Ridge(basis) formula for")
@@ -124,7 +133,8 @@ def main():
     idx = np.where(mask)[0]
     P = np.empty((len(idx), len(BASIS)))
     for j, c in enumerate(BASIS):
-        f = fit_percentiles(df[c].values[idx]); P[:, j] = f(df[c].values[idx])
+        f = fit_percentiles(df[c].values[idx])
+        P[:, j] = f(df[c].values[idx])
     ridge = Ridge(alpha=1.0).fit(P, y[idx])
     order = np.argsort(-np.abs(ridge.coef_))
     print(f"\nInterpretable Ridge(basis) coefficients for target='{args.formula_target}' "

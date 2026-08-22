@@ -11,14 +11,10 @@ from __future__ import annotations
 
 import json
 import logging
-import sys
 from pathlib import Path
 from typing import Annotated, Optional
 
 import typer
-
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT))
 
 from src.adota.config import load_yaml_config
 from src.beamlets.bdl import BeamDataLibrary
@@ -49,7 +45,10 @@ def main(
             d["n_patients"] = n_patients
     dataset = build_dataset_from_config(ds_cfg)
     logger.info("Dataset: %d patients | by anatomy: %s", len(dataset),
-                getattr(dataset, "counts_by_anatomy", lambda: {})() if hasattr(dataset, "counts_by_anatomy") else dataset.anatomy)
+                getattr(dataset, "counts_by_anatomy", lambda: {})()
+                if hasattr(dataset, "counts_by_anatomy")
+                else dataset.anatomy,
+            )
 
     engine = cfg["engine"]
     runner = MCSquareRunner(

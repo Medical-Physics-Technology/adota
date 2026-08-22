@@ -74,7 +74,6 @@ def generate_figures_for_records(
         # De-normalise CT and dose
         ct_norm = x[0].cpu().numpy()
         ct_hu = inverse_minmax(ct_norm, scale["min_ct"], scale["max_ct"])
-        flux_np = x[1].cpu().numpy()
 
         gt_dose_norm = y.cpu().numpy()
         gt_dose = inverse_minmax(

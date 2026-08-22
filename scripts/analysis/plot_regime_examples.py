@@ -9,21 +9,18 @@ annotated errors match results.csv.
 
 Run: uv run python scripts/analysis/plot_regime_examples.py
 """
-import sys
 from pathlib import Path
 
-import numpy as np
 import torch
 
-sys.path.insert(0, "/home/mstryja/projects/adota")
 from src.adota.config import get_device
 from src.adota.utils import load_model
+from src.figures.single_beam import publication_figure
 from src.loaders.generator import H5PYGenerator
+from src.metrics.classic import calculate_pure_mape, calculate_rmse
+from src.schemas.configs import AdvancedAnalysisConfig
 from src.utils.scallers import inverse_minmax
 from src.utils.unit_conversions import to_gy
-from src.metrics.classic import calculate_rmse, calculate_pure_mape
-from src.figures.single_beam import publication_figure
-from src.schemas.configs import AdvancedAnalysisConfig
 
 H5 = "/scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5"
 MODEL_DIR = Path("/home/mstryja/projects/adota/models/DoTA_v3_grid_search_v11")
@@ -40,7 +37,8 @@ for label, uuid, gpr in BEAMS:
     ds = H5PYGenerator(file_path=H5, indexes=[uuid], augmentation=False, cropp=True,
                        normalize=False, normalize_flux_only=True)
     x, energy, y = ds[0]
-    x = x.to(device); energy = energy.to(device)
+    x = x.to(device)
+    energy = energy.to(device)
     with torch.no_grad():
         y_pred = model(x.unsqueeze(0), energy.unsqueeze(0))[0]
     gt = inverse_minmax(y.unsqueeze(0).cpu().numpy(), scale["min_ds"], scale["max_ds"]).squeeze()

@@ -1,10 +1,15 @@
 """Build UUID -> (anatomy, patient/CT key) map for the trainset, from source metadata."""
-import os, json
+import json
+import os
+
 import pandas as pd
 
 R = "/RadiotherapyData/dataset_v0"
 SRC = {"trainset_pelvis": "pelvic_abdominal", "initial_test_one_ct": "thorax"}
-OUT = "/tmp/claude-634202/-home-mstryja-projects-adota/d51f677e-63c0-4b1d-b867-bdccd2d5e730/scratchpad/uuid_provenance_map.csv"
+OUT = (
+    "/tmp/claude-634202/-home-mstryja-projects-adota/"
+    "d51f677e-63c0-4b1d-b867-bdccd2d5e730/scratchpad/uuid_provenance_map.csv"
+)
 
 rows = []
 for folder, anat in SRC.items():

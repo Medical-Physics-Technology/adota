@@ -39,27 +39,23 @@ from __future__ import annotations
 
 import logging
 import shutil
-import sys
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
-from typing import Annotated, Any, Dict, Optional
+from typing import Annotated, Dict, Optional
 
 import numpy as np
 import torch
 import typer
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
-from src.evaluation.cli import resolve_device  # noqa: E402
-from src.training.data import (  # noqa: E402
+from src.evaluation.cli import resolve_device
+from src.training.data import (
     build_dataloaders,
     limited_loader,
     load_record_ids,
     train_val_split,
 )
-from src.training.factory import (  # noqa: E402
+from src.training.factory import (
     build_adota_model,
     build_config_from_yaml,
     build_optimizer_scheduler,
@@ -67,15 +63,15 @@ from src.training.factory import (  # noqa: E402
     maybe_compile_model,
     set_determinism,
 )
-from src.training.gpr_pool import (  # noqa: E402
+from src.training.gpr_pool import (
     build_gpr_pool,
     load_gpr_pool,
     pool_to_indices,
     save_gpr_pool,
 )
-from src.training.loop import resolve_weights, train_one_epoch  # noqa: E402
-from src.training.losses import LMSE, LPS, TwoObjectiveBalancer  # noqa: E402
-from src.training.run import (  # noqa: E402
+from src.training.loop import resolve_weights, train_one_epoch
+from src.training.losses import LMSE, LPS, TwoObjectiveBalancer
+from src.training.run import (
     CheckpointManager,
     GracefulShutdown,
     MetricsLog,
@@ -89,8 +85,8 @@ from src.training.run import (  # noqa: E402
     silence_pymedphys,
     write_manifest,
 )
-from src.training.utils import get_lr  # noqa: E402
-from src.training.validation import (  # noqa: E402
+from src.training.utils import get_lr
+from src.training.validation import (
     evaluate_validation,
     pick_canary,
     save_attention_snapshot,

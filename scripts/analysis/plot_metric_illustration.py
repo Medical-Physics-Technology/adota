@@ -1,23 +1,27 @@
 """Visual illustration of how the key metrics are computed on one beamlet."""
-import sys
 from pathlib import Path
+
+import matplotlib
 import numpy as np
-import matplotlib; matplotlib.use("Agg")
+from scipy.ndimage import sobel as ndsobel
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
-sys.path.insert(0, "/home/mstryja/projects/adota")
+
+from scripts.training_set_analysis_advanced_metrics import analyse_density_regions, compute_advanced_metrics
+from src.figures.ct_visualizations import HU_LUT, segment_hu
 from src.loaders.generator import H5PYGenerator
-from src.utils.scallers import inverse_minmax
-from src.figures.ct_visualizations import segment_hu, HU_LUT
-from src.utils.dose_grid_utils import estimate_bp_range
-from src.processing.pflugfelder_hi import compute_wepl_map, compute_pflugfelder_hi
-from scripts.training_set_analysis_advanced_metrics import (
-    analyse_density_regions, compute_advanced_metrics)
 from src.metrics.sobel import compute_sobel_metrics
+from src.processing.pflugfelder_hi import compute_pflugfelder_hi, compute_wepl_map
+from src.utils.dose_grid_utils import estimate_bp_range
+from src.utils.scallers import inverse_minmax
 
 UUID = "10432ff0-e33b-48f4-ba14-29e771718abb"
 H5 = "/scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5"
-S = dict(min_ct=-1024., max_ct=3071., min_ds=0., max_ds=25277028.); RES = (2., 2., 2.); DZ = RES[0]
+S = dict(min_ct=-1024., max_ct=3071., min_ds=0., max_ds=25277028.)
+RES = (2., 2., 2.)
+DZ = RES[0]
 OUT = Path("/home/mstryja/projects/adota/research/figures/acquisition")
 INK, INK2, MUTED, GRID, BASE, SURF = "#0b0b0b", "#52514e", "#898781", "#e1e0d9", "#c3c2b7", "#fcfcfb"
 BLUE, RED = "#2a78d6", "#e34948"
@@ -29,7 +33,8 @@ plt.rcParams.update({"figure.facecolor": SURF, "axes.facecolor": SURF, "savefig.
 ds = H5PYGenerator(file_path=H5, augmentation=False, cropp=True, normalize=False, normalize_flux_only=True)
 i = list(ds.record_ids).index(UUID)
 x, _e, y = ds[i]
-ct = inverse_minmax(x[0].numpy(), S["min_ct"], S["max_ct"]); flux = x[1].numpy()
+ct = inverse_minmax(x[0].numpy(), S["min_ct"], S["max_ct"])
+flux = x[1].numpy()
 dose = inverse_minmax(np.squeeze(y.numpy()), S["min_ds"], S["max_ds"])
 
 z_min, z_max = estimate_bp_range(ct, dose)
@@ -40,8 +45,11 @@ bp_idx = int(np.argmax(dose.sum(axis=(1, 2))))
 depths = np.arange(k0, k1 + 1) * DZ
 mean_hu = np.zeros(k1 - k0 + 1)
 for j, k in enumerate(range(k0, k1 + 1)):
-    fs = np.abs(flux[k]); fm = fs.max()
-    if fm < 1e-12: mean_hu[j] = ct[k].mean(); continue
+    fs = np.abs(flux[k])
+    fm = fs.max()
+    if fm < 1e-12:
+        mean_hu[j] = ct[k].mean()
+        continue
     m = fs >= 0.10 * fm
     mean_hu[j] = np.average(ct[k][m], weights=fs[m]) if m.sum() else ct[k].mean()
 cls = segment_hu(mean_hu)
@@ -78,7 +86,8 @@ if len(regions) >= 2:
              color=RED, fontsize=9.5, va="center", fontweight="bold")
 axA.axvline(bp_idx * DZ, color=BLUE, ls="--", lw=1.8, zorder=4)
 axA.text(bp_idx * DZ, axA.get_ylim()[1], " Bragg peak", color=BLUE, fontsize=9.5, va="top", ha="left")
-axA.set_xlabel("depth along beam  [mm]"); axA.set_ylabel("flux-weighted mean HU")
+axA.set_xlabel("depth along beam  [mm]")
+axA.set_ylabel("flux-weighted mean HU")
 axA.set_title("HU-along-beam profile  H(k)  —  drives total_hu_change, max_hu_jump, sigma_hu_bp, hetero_fraction",
               fontsize=12.5, color=INK, pad=8)
 axA.grid(axis="y", color=GRID, lw=0.7)
@@ -90,7 +99,8 @@ axA.text(0.40, 0.70, txt, transform=axA.transAxes, fontsize=9.5, va="top", ha="l
          bbox=dict(boxstyle="round", fc="white", ec=BASE, alpha=0.9))
 # tissue legend
 seen = {}
-for r in regions: seen[r["class_idx"]] = HU_LUT[r["class_idx"]][0]
+for r in regions:
+    seen[r["class_idx"]] = HU_LUT[r["class_idx"]][0]
 handles = [plt.Rectangle((0,0),1,1, color=HU_LUT[c][3]) for c in seen]
 axA.legend(handles, list(seen.values()), title="tissue", loc="upper left",
            fontsize=8.5, title_fontsize=9, frameon=True, ncol=len(seen))
@@ -103,19 +113,22 @@ im = axB.imshow(wepl_show, cmap="viridis", origin="lower", aspect="auto")
 axB.set_title(f"WEPL map to Bragg peak  —  wepl_std = {pf['wepl_std']:.1f} mm\n"
               f"(lateral spread of water-equiv. path length; wepl_mean = {pf['wepl_mean']:.0f} mm)",
               fontsize=11, color=INK)
-axB.set_xlabel("lateral x [voxel]"); axB.set_ylabel("lateral y [voxel]")
-cb = fig.colorbar(im, ax=axB, fraction=0.046, pad=0.04); cb.set_label("WEPL [mm]", fontsize=9)
+axB.set_xlabel("lateral x [voxel]")
+axB.set_ylabel("lateral y [voxel]")
+cb = fig.colorbar(im, ax=axB, fraction=0.046, pad=0.04)
+cb.set_label("WEPL [mm]", fontsize=9)
 
 # Panel C: Sobel gradient magnitude (sagittal slice through BP zone)
-from scipy.ndimage import sobel as ndsobel
 gmag = np.sqrt(ndsobel(ct,0)**2 + ndsobel(ct,1)**2 + ndsobel(ct,2)**2)
 midy = ct.shape[1] // 2
 axC = fig.add_subplot(gs[1, 1])
 imc = axC.imshow(gmag[k0:k1+1, midy, :].T, cmap="hot", origin="lower", aspect="auto")
 axC.set_title("Sobel edge magnitude |∇HU| near the Bragg peak\n"
               "(tissue edges the beam crosses — feeds sum_sobel_bp / lateral_edge_energy)", fontsize=11, color=INK)
-axC.set_xlabel("depth along beam [slice]"); axC.set_ylabel("lateral x [voxel]")
-cbc = fig.colorbar(imc, ax=axC, fraction=0.046, pad=0.04); cbc.set_label("|∇HU|", fontsize=9)
+axC.set_xlabel("depth along beam [slice]")
+axC.set_ylabel("lateral x [voxel]")
+cbc = fig.colorbar(imc, ax=axC, fraction=0.046, pad=0.04)
+cbc.set_label("|∇HU|", fontsize=9)
 
 fig.suptitle(f"How the metrics are computed — one heterogeneous beamlet ({UUID[:8]}, 174.6 MeV)",
              fontsize=14, fontweight="bold", color=INK, y=0.965)

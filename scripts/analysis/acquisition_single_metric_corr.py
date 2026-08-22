@@ -14,20 +14,19 @@ Run: uv run --with scikit-learn python scripts/analysis/acquisition_single_metri
 """
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 import pandas as pd
-import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from scipy.stats import spearmanr
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from scripts.analysis.acquisition_dev_analysis import cv, gbm, ridge
 from scripts.analysis.acquisition_regression_study import ALL_FEATS
-from scripts.analysis.acquisition_dev_analysis import cv, ridge, gbm
 
 INK, MUTED, GRID, BASE, SURF = "#0b0b0b", "#898781", "#e1e0d9", "#c3c2b7", "#fcfcfb"
 BLUE, ORANGE, RED, GREEN = "#2a78d6", "#eb6834", "#e34948", "#008300"
@@ -53,9 +52,24 @@ def main():
     print(f"dev pool: {len(df)} beamlets, {len(pd.unique(groups))} patients")
 
     targets = [
-        ("rde",       "relative dose error (RDE)",                       df["rde"].values.astype(float),        "single_corr_rde.png"),
-        ("mape_5pct", "mean absolute percentage error (MAPE, 5% mask)",  df["mape_5pct"].values.astype(float),  "single_corr_mape.png"),
-        ("egpr",      "gamma pass-rate error (100 - GPR)",               100.0 - df["gpr"].values.astype(float), "single_corr_gamma.png"),
+        (
+            "rde",
+            "relative dose error (RDE)",
+            df["rde"].values.astype(float),
+            "single_corr_rde.png",
+        ),
+        (
+            "mape_5pct",
+            "mean absolute percentage error (MAPE, 5% mask)",
+            df["mape_5pct"].values.astype(float),
+            "single_corr_mape.png",
+        ),
+        (
+            "egpr",
+            "gamma pass-rate error (100 - GPR)",
+            100.0 - df["gpr"].values.astype(float),
+            "single_corr_gamma.png",
+        ),
     ]
 
     summary = []
@@ -93,7 +107,8 @@ def main():
         ax.barh(yy, [abs(v) for v in vals], color=colors, height=0.66, zorder=3)
         for i, v in enumerate(vals):
             ax.text(abs(v) + 0.008, i, f"{v:+.2f}", va="center", ha="left", fontsize=9.5, color=INK)
-        ax.set_yticks(yy); ax.set_yticklabels(names, fontsize=10)
+        ax.set_yticks(yy)
+        ax.set_yticklabels(names, fontsize=10)
         ax.set_xlabel("|Spearman rank correlation| with the target")
         xmax = max(abs(gbm_s), max(abs(v) for v in vals)) + 0.12
         ax.set_xlim(0, xmax)
@@ -105,11 +120,13 @@ def main():
                    Line2D([0], [0], color=GREEN, ls=":", lw=1.8,
                           label=f"non-linear reference = {gbm_s:.2f}")]
         ax.legend(handles=handles, loc="lower right", frameon=True, fontsize=9.5, borderpad=0.7)
-        ax.grid(axis="x", color=GRID, lw=0.7); ax.set_axisbelow(True)
+        ax.grid(axis="x", color=GRID, lw=0.7)
+        ax.set_axisbelow(True)
         ax.set_title(f"Single metrics vs {label}\nbest single metric reaches "
                      f"{abs(best_s):.2f}; the fitted combination reaches {abs(lin_s):.2f}",
                      fontsize=12.5, fontweight="bold")
-        fig.savefig(OUT / fname, dpi=150); plt.close(fig)
+        fig.savefig(OUT / fname, dpi=150)
+        plt.close(fig)
         print(f"  wrote {OUT/fname}")
 
     pd.DataFrame(summary).to_csv(f"{ACQ}/single_metric_corr_summary.csv", index=False)

@@ -1,3 +1,11 @@
+"""Texture-homogeneity scores for CT patches.
+
+``glcm_homogeneity_idm`` quantises the patch to a fixed number of grey levels,
+builds grey-level co-occurrence matrices over the requested distances and
+angles, and returns the inverse-difference-moment homogeneity averaged over
+them. Used as an input-only difficulty signal for beamlet selection.
+"""
+
 from __future__ import annotations
 
 import numpy as np

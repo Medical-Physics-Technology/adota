@@ -10,10 +10,8 @@ Output: runs/{timestamp}/ with CSV, scatter plots, error histograms,
 and energy-stratified breakdown.
 """
 
-import csv
 import logging
 import shutil
-import sys
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
@@ -32,21 +30,15 @@ from scipy.stats import pearsonr, spearmanr
 from tqdm import tqdm
 
 # Add project root to path
-PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
 from src.adota.config import DEFAULT_SCALE
 from src.figures.ct_visualizations import plot_bp_estimation_diagnostic
 from src.loaders.generator import H5PYGenerator
 from src.processing.rsp import hu_to_rsp_density
 from src.utils.scallers import inverse_minmax
 
+PROJECT_ROOT = Path(__file__).parent.parent
 logger = logging.getLogger(__name__)
-
 app = typer.Typer(help="Bragg-peak estimation – multi-method comparison")
-
-
-from src.schemas.results import BPRecord
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Estimator protocol & registry
@@ -653,7 +645,7 @@ def main(
     # ── Setup run directory & logging ───────────────────────────────────
     runs_dir = PROJECT_ROOT / "runs"
     run_dir = setup_run_directory(runs_dir)
-    log_file = setup_logging(run_dir, verbose=verbose)
+    setup_logging(run_dir, verbose=verbose)
 
     if config_path is not None:
         shutil.copy2(config_path, run_dir / config_path.name)

@@ -17,13 +17,13 @@ import os
 from pathlib import Path
 
 import h5py
-import numpy as np
 import matplotlib
+import numpy as np
+
 matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
 
-import sys
-sys.path.insert(0, "/home/mstryja/projects/adota")
 from src.beamlets.centerline import beam_line_from_metadata, render_centerline
 
 H5 = "/scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5"
@@ -70,7 +70,8 @@ def overlay(ax, ct_mip, chan_mip, cmap, title=None, ylabel=None):
         alpha = np.where(chan_mip > 0.01 * m, 0.72, 0.0)
         ax.imshow(chan_mip, cmap=cmap, alpha=alpha, origin="lower", aspect="auto",
                   vmin=0, vmax=m)
-    ax.set_xticks([]); ax.set_yticks([])
+    ax.set_xticks([])
+    ax.set_yticks([])
     ax.grid(ls="--", lw=0.4, color="white")
     if title:
         ax.set_title(title, fontsize=13, weight="bold")
@@ -86,7 +87,9 @@ def main():
         fig, axes = plt.subplots(6, 5, figsize=(19, 16))
         for si, (k, e, ba) in enumerate(recs):
             g = f[k]
-            ct = g["ct"][:]; flux = g["flux"][:]; dose = g["dose"][:]
+            ct = g["ct"][:]
+            flux = g["flux"][:]
+            dose = g["dose"][:]
             meta = json.load(open(find_json(k)))
             roi = meta.get("roi_size")
             ds = (roi[0] / ct.shape[0]) if roi else 2.0

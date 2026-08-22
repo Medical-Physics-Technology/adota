@@ -21,7 +21,7 @@ def _si(rows):
 
 def test_assert_join_ok_and_mismatch():
     si = _si([(0, 0, 0), (0, 1, 0), (0, 1, 1)])
-    recs = [{"id": spot_id(b, l, s)} for b, l, s in [(0, 0, 0), (0, 1, 0), (0, 1, 1)]]
+    recs = [{"id": spot_id(b, layer, s)} for b, layer, s in [(0, 0, 0), (0, 1, 0), (0, 1, 1)]]
     assert_join(si, recs)  # no raise
     bad = [{"id": spot_id(0, 0, 0)}, {"id": spot_id(9, 9, 9)}, {"id": spot_id(0, 1, 1)}]
     with pytest.raises(ValueError):
@@ -52,7 +52,6 @@ def test_mc_support_bbox_reshape_and_placement():
 
 def test_per_spot_metrics_identical_crops():
     # identical MC and ADoTA crops -> perfect agreement
-    rng = np.random.default_rng(0)
     D, H, W = 40, 12, 12
     depth = np.exp(-((np.arange(D) - 25) ** 2) / (2 * 5.0**2))  # Bragg-like along depth
     lat = np.exp(-((np.arange(H)[:, None] - 6) ** 2 + (np.arange(W)[None, :] - 6) ** 2) / (2 * 2.0**2))

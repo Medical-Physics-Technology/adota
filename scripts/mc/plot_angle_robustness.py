@@ -18,7 +18,6 @@ for _v in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXP
 
 import json
 import logging
-import sys
 from collections import defaultdict
 from glob import glob
 from pathlib import Path
@@ -27,14 +26,10 @@ from typing import Annotated, List, Optional
 import numpy as np
 import typer
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT))
-
-from src.adota.config import load_yaml_config
+from src.adota.config import DEFAULT_SCALE, load_yaml_config
 from src.adota.utils import load_model
 from src.evaluation.cli import resolve_device
 from src.figures.angle_robustness_grid import angle_robustness_panel, standalone_colorbar
-from src.adota.config import DEFAULT_SCALE
 from src.mc_generation.angle_robustness_analysis import (
     GammaCriterion,
     Panel,
@@ -45,6 +40,8 @@ from src.mc_generation.angle_robustness_analysis import (
     score_dir_grids,
     shared_scale_per_criterion,
 )
+
+ROOT = Path(__file__).resolve().parents[2]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("robustness_plot")
@@ -74,7 +71,8 @@ def main(
     run_mode = mode or cfg.get("mode", "per_patient")
     cmap = cfg.get("cmap", "viridis")
     emit = cfg.get("emit", {"bare": True, "with_colorbar": True, "standalone_colorbar": True})
-    out_dir = Path(cfg["output_dir"]); out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = Path(cfg["output_dir"])
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     inputs: List[str] = list(cfg.get("inputs", []))
     if cfg.get("input_glob"):

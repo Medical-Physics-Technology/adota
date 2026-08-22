@@ -1,8 +1,23 @@
+"""Gamma pass rate (GPR) between a predicted and a reference dose distribution.
+
+Flow:
+1. ``gamma_index_torch`` takes normalised (N, C, D, H, W) tensors straight from
+   the model, de-normalises them with the training ``scale`` dict, and moves
+   them to numpy.
+2. ``gamma_index`` wraps ``pymedphys.gamma`` for plain 1D/2D/3D arrays.
+3. Both return the percentage of voxels passing the criterion, after applying
+   the low-dose ``cutoff``.
+
+``relative_dose_error`` is here for convenience because it shares the same
+threshold/masking conventions.
+
+Note: ``pymedphys.gamma`` needs the optional econforge ``interpolation``
+package; without it the call fails.
+"""
+
 import numpy as np
 import torch
 from pymedphys import gamma
-
-from src.utils.unit_conversions import to_gy
 
 
 def gamma_index_torch(
@@ -32,7 +47,10 @@ def gamma_index_torch(
     ), "Shape mismatch between ground truth and prediction"
     assert (
         len(ground_truth.shape) == 5
-    ), "For torch version, the shape should be 5D in the format (N, C, D, H, W). To work directly on 3D arrays, please use metrics.gamma_index() function."
+    ), (
+        "For torch version, the shape should be 5D in the format (N, C, D, H, W). "
+        "To work directly on 3D arrays, please use metrics.gamma_index() function."
+    )
 
     if ground_truth.shape[0] > 1:
         raise ValueError(
@@ -81,7 +99,8 @@ def gamma_index(
     resolution: tuple = (1.0, 1.0, 1.0),
     cutoff: float = 0,
 ) -> tuple:
-    """Calculate gamma index between ground truth and predicted dose distributions. Dose distributions are expected 1D, 2D or 3D arrays.
+    """Calculate gamma index between ground truth and predicted dose distributions.
+    Dose distributions are expected 1D, 2D or 3D arrays.
 
     Example of gamma params dictionary:
     gamma_params = {
@@ -101,7 +120,9 @@ def gamma_index(
         scale (dict): Dictionary containing the scalling factors, must containt 'y_max' and 'y_min' keys.
         gamma_params (dict): Dictionary with gamma parameters.
         resolution (tuple, optional): Resolution of the dose arrays. Defaults to (1., 1., 1.).
-        cutoff (float, optional): Value from range [0, 100], represents the percantage value of dose in ground truth since which the cutoff is applied. Defaults to 0.
+        cutoff (float, optional): Value from range [0, 100], represents the
+            percantage value of dose in ground truth since which the cutoff is
+            applied. Defaults to 0.
 
     Returns:
         tuple: Tuple containing the gamma values and gamma pass rate.
@@ -149,7 +170,8 @@ def relative_dose_error(
     Args:
         target (torch.Tensor): Target tensor.
         pred (torch.Tensor): Prediction tensor.
-        tr (float, optional): Threshold value. Defaults to 0.1. Threshold controls the min value of the target tensor, to prevent division by zero.
+        tr (float, optional): Threshold value. Defaults to 0.1. Threshold controls
+            the min value of the target tensor, to prevent division by zero.
 
     Returns:
         torch.Tensor: Relative dose error tensor.

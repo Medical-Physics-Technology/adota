@@ -1,16 +1,19 @@
 """Real low/med/high edge-gradient beamlets: CT -> Sobel edges -> model error."""
-import sys
 from pathlib import Path
-import numpy as np, torch
-import matplotlib; matplotlib.use("Agg")
+
+import matplotlib
+import numpy as np
+import torch
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from scipy.ndimage import sobel
-sys.path.insert(0, "/home/mstryja/projects/adota")
+
 from src.adota.config import get_device
 from src.adota.utils import load_model
 from src.loaders.generator import H5PYGenerator
-from src.utils.scallers import inverse_minmax
 from src.schemas.configs import AdvancedAnalysisConfig
+from src.utils.scallers import inverse_minmax
 
 INK, MUTED, BASE, SURF = "#0b0b0b", "#898781", "#c3c2b7", "#fcfcfb"
 plt.rcParams.update({"figure.facecolor": SURF, "axes.facecolor": SURF, "savefig.facecolor": SURF,
@@ -34,7 +37,9 @@ col_titles = ["CT (input)", "edge magnitude |∇HU|", "model error |ADoTA − MC
 for r, (label, uuid, ssk, gpr) in enumerate(ROWS):
     ds = H5PYGenerator(file_path=H5, indexes=[uuid], augmentation=False, cropp=True,
                        normalize=False, normalize_flux_only=True)
-    x, energy, y = ds[0]; x = x.to(device); energy = energy.to(device)
+    x, energy, y = ds[0]
+    x = x.to(device)
+    energy = energy.to(device)
     with torch.no_grad():
         y_pred = model(x.unsqueeze(0), energy.unsqueeze(0))[0]
     ct = inverse_minmax(x[0].cpu().numpy(), scale["min_ct"], scale["max_ct"])

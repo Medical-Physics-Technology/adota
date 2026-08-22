@@ -27,7 +27,6 @@ the run directory for reproducibility.
 import logging
 import os
 import shutil
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -41,9 +40,6 @@ import typer
 from scipy.stats import gaussian_kde, pearsonr
 
 # Add project root to path
-PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
 from src.adota.config import (
     DEFAULT_SCALE,
     denormalize_energy,
@@ -63,6 +59,8 @@ from src.metrics.range_metrics import (
 )
 from src.schemas.configs import EvaluationConfig
 from src.schemas.results import RangeRecord
+
+PROJECT_ROOT = Path(__file__).parent.parent
 
 logger = logging.getLogger(__name__)
 

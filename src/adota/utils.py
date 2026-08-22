@@ -1,16 +1,26 @@
-import torch
-from torch.nn import functional as F
-from .models import DoTA3D_v3
+"""Checkpoint loading and parameter accounting for the ADoTA model.
+
+Flow:
+1. ``load_model`` reads a ``hyperparams.json`` + ``best_model.pth`` pair,
+   rebuilds :class:`DoTA3D_v3` and restores the weights onto a target device.
+2. ``count_total_parameters`` / ``count_parameters_per_block`` report model size,
+   the latter broken down per named top-level block for the paper tables.
+"""
+
 import json
-from pathlib import Path
 import logging
+from pathlib import Path
+
+import torch
+
+from .models import DoTA3D_v3
 
 logger = logging.getLogger(__name__)
 
 
 def count_parameters_per_block(model: torch.nn.Module):
     from collections import defaultdict
-    import torch.nn as nn
+
 
     block_params = defaultdict(int)
 

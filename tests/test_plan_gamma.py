@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from src.metrics.plan_gamma import criterion_label, parse_criteria, plan_gamma
+from tests.utils.deps import requires_pymedphys_gamma
 
 
 def _gaussian_dose(shape=(12, 16, 16)):
@@ -32,6 +33,7 @@ def test_parse_criteria_rejects_bad_shape() -> None:
         parse_criteria([[1, 1]])
 
 
+@requires_pymedphys_gamma
 def test_near_match_passes_fully() -> None:
     # A tiny 0.1% scaling is well inside a 2%/2mm criterion -> all evaluated
     # voxels pass (gamma > 0 but <= 1), so the pass rate is 100%. (Exactly equal
@@ -45,6 +47,7 @@ def test_near_match_passes_fully() -> None:
     assert results[0]["gamma_map"].shape == ref.shape
 
 
+@requires_pymedphys_gamma
 def test_perturbed_dose_lowers_pass_rate() -> None:
     ref = _gaussian_dose()
     # A large, tight perturbation that a 1%/1mm criterion cannot tolerate.
@@ -55,6 +58,7 @@ def test_perturbed_dose_lowers_pass_rate() -> None:
     assert results[0]["pass_rate_pct"] < 100.0
 
 
+@requires_pymedphys_gamma
 def test_inputs_not_mutated() -> None:
     ref = _gaussian_dose()
     eval_dose = ref * 1.02

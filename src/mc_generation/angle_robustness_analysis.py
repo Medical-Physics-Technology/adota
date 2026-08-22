@@ -102,7 +102,8 @@ def _score_stem(task: tuple) -> tuple:
     result = {}
     for c in criteria:
         if peak <= 0:
-            result[c.key] = float("nan"); continue
+            result[c.key] = float("nan")
+            continue
         gp = {"dose_percent_threshold": c.dose, "distance_mm_threshold": c.dist,
               "interp_fraction": _INTERP_FRACTION, "max_gamma": 2,
               "lower_percent_dose_cutoff": c.cutoff, "random_subset": None,

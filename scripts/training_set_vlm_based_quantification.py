@@ -19,8 +19,6 @@ import json
 import logging
 import shutil
 import statistics
-import sys
-from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Annotated, Optional
@@ -29,21 +27,15 @@ import h5py
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 import torch
 import typer
-import yaml
 from scipy.ndimage import sobel as ndimage_sobel
 from scipy.stats import pearsonr, spearmanr
 from tqdm import tqdm
 
 # Add project root to path
-PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
 from src.adota.config import (
     DEFAULT_GAMMA_PARAMS,
-    DEFAULT_SCALE,
     denormalize_energy,
     get_device,
     load_yaml_config,
@@ -60,14 +52,11 @@ from src.figures.ct_visualizations import (
 from src.loaders.generator import H5PYGenerator
 from src.loaders.utils import validate_inputs
 from src.metrics.gamma_pass_rate import gamma_index_torch
-from src.utils.scallers import inverse_minmax
-from src.utils.unit_conversions import to_gy
-
-logger = logging.getLogger(__name__)
-app = typer.Typer(help="VLM-based difficulty quantification of training set beamlets")
-
 
 # ── Defaults ────────────────────────────────────────────────────────────────
+from src.schemas.configs import VLMConfig
+from src.schemas.results import VLMResult
+from src.utils.scallers import inverse_minmax
 
 DEFAULT_VLM_PROMPT = """\
 You are an expert in proton therapy physics.  You are shown a \
@@ -99,8 +88,9 @@ Respond ONLY with valid JSON:
 """
 
 
-from src.schemas.configs import VLMConfig
-from src.schemas.results import VLMResult
+PROJECT_ROOT = Path(__file__).parent.parent
+logger = logging.getLogger(__name__)
+app = typer.Typer(help="VLM-based difficulty quantification of training set beamlets")
 
 # ── Helpers (shared with advanced metrics script) ───────────────────────────
 
@@ -277,7 +267,7 @@ def _parse_vlm_response(text: str) -> dict:
     # Strip markdown code fences if present
     if text.startswith("```"):
         lines = text.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
+        lines = [line for line in lines if not line.strip().startswith("```")]
         text = "\n".join(lines).strip()
 
     try:
@@ -882,7 +872,7 @@ def main(
     # ── Run directory ───────────────────────────────────────────────
     runs_dir = PROJECT_ROOT / "runs"
     run_dir = setup_run_directory(runs_dir, subdirs=("figures", "panels"))
-    log_file = setup_logging(
+    setup_logging(
         run_dir, verbose=verbose, log_filename="vlm_evaluation.log"
     )
 

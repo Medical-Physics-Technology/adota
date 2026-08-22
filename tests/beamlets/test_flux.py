@@ -3,31 +3,21 @@
 from __future__ import annotations
 
 from pathlib import Path
-from textwrap import dedent
 
 import numpy as np
 import pytest
 
 from src.beamlets.bdl import BeamDataLibrary
 from src.beamlets.flux import flux_projection, flux_spatial_spread
+from tests.utils.bdl import build_bdl_text
 
-_SYNTH_BDL = """\
-    Nozzle exit to Isocenter distance
-    400.0
-    SMX to Isocenter distance
-    2000.0
-    SMY to Isocenter distance
-    2500.0
-    NominalEnergy MeanEnergy EnergySpread ProtonsMU Weight1 SpotSize1x Divergence1x Correlation1x SpotSize1y Divergence1y Correlation1y
-    100.0 100.0 1.0 1000.0 1.0 4.0 0.003 0.5 3.0 0.004 0.6
-    200.0 200.0 0.5 2000.0 1.0 3.0 0.002 0.3 2.0 0.003 0.4
-"""
+_SYNTH_BDL = build_bdl_text()
 
 
 @pytest.fixture()
 def synth_bdl(tmp_path: Path) -> BeamDataLibrary:
     path = tmp_path / "bdl.txt"
-    path.write_text(dedent(_SYNTH_BDL))
+    path.write_text(_SYNTH_BDL)
     return BeamDataLibrary.from_file(path)
 
 

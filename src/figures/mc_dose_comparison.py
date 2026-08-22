@@ -25,7 +25,8 @@ def _overlay(ax, ct_slice, dose_slice, vmax, title, cmap="inferno"):
     im = ax.imshow(np.rot90(dose_slice), cmap=cmap, alpha=0.55, vmin=0.0, vmax=vmax,
                    aspect="auto")
     ax.set_title(title, fontsize=11)
-    ax.set_xticks([]); ax.set_yticks([])
+    ax.set_xticks([])
+    ax.set_yticks([])
     return im
 
 
@@ -67,7 +68,8 @@ def mc_dose_comparison_figure(
         im_diff = ax.imshow(np.rot90(sl(diff)), cmap="RdBu_r", vmin=-dmax, vmax=dmax,
                             aspect="auto")
         ax.set_title(f"{label_a}-{label_b} | {pname}", fontsize=11)
-        ax.set_xticks([]); ax.set_yticks([])
+        ax.set_xticks([])
+        ax.set_yticks([])
 
     # shared colorbars
     fig.colorbar(im_dose, ax=axes[0:2, :].ravel().tolist(), fraction=0.02, pad=0.01,

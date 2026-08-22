@@ -32,5 +32,47 @@ dev = [
     "ruff>=0.15.0",
 ]
 
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# The importable package root is `src/`, so scripts and tests can `import src.*`
+# from anywhere without a sys.path bootstrap.
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+target-version = "py39"
+# 120 rather than 100: the stricter width would reflow 234 pre-existing lines in
+# files this refactor does not otherwise touch. 120 still catches the genuinely
+# unreadable ones (the longest line in the repository was 258 characters).
+line-length = 120
+
+[tool.ruff.lint]
+# E/F: pycodestyle errors + pyflakes. I: import ordering, which PYTHON_CODE_STYLE
+# section 1 requires (standard library, then third-party, then local).
+select = ["E", "F", "I"]
+
+# E402 is correct everywhere except where an import is deliberately deferred:
+# both files must run setup code before the heavy scientific imports, and doing
+# it afterwards is a no-op.
+[tool.ruff.lint.per-file-ignores]
+# Pins BLAS to one thread before numpy/torch load, so the gamma process pool
+# can scale across cores.
+"scripts/mc/plot_angle_robustness.py" = ["E402"]
+# Preloads the CUDA shared objects via ctypes before torch imports them;
+# mutating LD_LIBRARY_PATH from inside Python is too late.
+"scripts/rotation_performance_analysis.py" = ["E402"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# `src` resolves via the editable install; `.` additionally exposes `scripts.*`,
+# which several tests import directly. Replaces the sys.path bootstrap that used
+# to live in tests/conftest.py.
+pythonpath = ["."]
+markers = [
+    "integration: needs a real local dependency (dataset, checkpoint, external package)",
+    "e2e: full workflow across multiple components; opt-in",
+    "gpu: needs CUDA",
+    "slow: long-running; excluded from the default suite",
+]

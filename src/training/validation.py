@@ -24,7 +24,6 @@ from __future__ import annotations
 import csv
 import json
 import logging
-from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter

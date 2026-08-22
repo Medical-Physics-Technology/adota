@@ -14,7 +14,9 @@ This first iteration wires up the foundation only:
 6. Accumulate the predicted dose into a single 3D dose grid (Dose_ADoTA.mhd),
 7. Generate comparison figures (plan dose comparison, DVH comparison, gamma map) and metrics. 
 
-Different running modes supported: stream, extract+infer+accumulate, or any subset of the stages. The streaming mode fuses all three stages into a single pass, avoiding disk I/O and saving time.
+Different running modes supported: stream, extract+infer+accumulate, or any subset
+of the stages. The streaming mode fuses all three stages into a single pass,
+avoiding disk I/O and saving time.
 
 Usage:
     uv run python scripts/run_plan_opentps.py \\
@@ -26,7 +28,6 @@ For detailed usage, see the ./scripts/README.md and the --help output.
 import gc
 import json
 import logging
-import sys
 from pathlib import Path
 from time import perf_counter
 from typing import Annotated, Optional
@@ -37,9 +38,6 @@ import torch
 import typer
 
 # Add the project root to the path for imports.
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
 from src.adota.config import load_yaml_config, setup_logging, setup_run_directory
 from src.adota.utils import load_model
 from src.beamlets.accumulation import AccumulationConfig, run_accumulation
@@ -49,7 +47,6 @@ from src.beamlets.beamlet_analysis import (
     default_beamlet_dir,
     run_beamlet_analysis,
 )
-from src.beamlets.plan_spots import expand_plan_to_spots
 from src.beamlets.dose_scaling import load_dose_gy
 from src.beamlets.extraction import (
     ExtractionConfig,
@@ -58,6 +55,7 @@ from src.beamlets.extraction import (
 )
 from src.beamlets.inference import InferenceConfig, run_inference
 from src.beamlets.isocenter import isocenter_index_zyx
+from src.beamlets.plan_spots import expand_plan_to_spots
 from src.beamlets.streaming import StreamingConfig, run_streaming_pipeline
 from src.beamlets.structures import load_oriented_structures
 from src.dcm.load_data import list_all_files
@@ -69,6 +67,8 @@ from src.figures.plan_comparison import plan_dose_comparison
 from src.loaders.plan_directory import load_plan_directory
 from src.metrics.plan_gamma import parse_criteria, plan_gamma
 from src.metrics.plan_metrics import plan_dose_metrics
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # Pipeline stages, in execution order. "extract", "infer", "accumulate", "stream",
 # "dvh", "gamma" and "beamlets" are implemented; "compare" is reserved for a later

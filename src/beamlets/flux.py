@@ -261,16 +261,20 @@ def flux_projection_gpu_batched(
         c, s = torch.cos(theta), torch.sin(theta)
         m = torch.zeros((n_batch, 3, 3), dtype=dt, device=dev)
         m[:, 0, 0] = 1.0
-        m[:, 1, 1] = c; m[:, 1, 2] = -s
-        m[:, 2, 1] = s; m[:, 2, 2] = c
+        m[:, 1, 1] = c
+        m[:, 1, 2] = -s
+        m[:, 2, 1] = s
+        m[:, 2, 2] = c
         return m
 
     def _rot_x(theta: "torch.Tensor") -> "torch.Tensor":  # matches R_x in the single-spot path
         c, s = torch.cos(theta), torch.sin(theta)
         m = torch.zeros((n_batch, 3, 3), dtype=dt, device=dev)
-        m[:, 0, 0] = c; m[:, 0, 2] = s
+        m[:, 0, 0] = c
+        m[:, 0, 2] = s
         m[:, 1, 1] = 1.0
-        m[:, 2, 0] = -s; m[:, 2, 2] = c
+        m[:, 2, 0] = -s
+        m[:, 2, 2] = c
         return m
 
     rot = torch.bmm(_rot_y(theta_x), _rot_x(theta_y))  # (B, 3, 3)

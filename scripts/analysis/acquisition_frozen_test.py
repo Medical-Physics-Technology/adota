@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -32,7 +31,6 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.linear_model import Lasso, Ridge
 from sklearn.model_selection import GroupKFold
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.analysis.acquisition_regression_study import ALL_FEATS
 
 SEED = 42
@@ -62,10 +60,14 @@ def make_model(name):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--results", default="/scratch/mstryja/adota_runs/20260707_124010/results.csv")
-    ap.add_argument("--prov", default="/scratch/mstryja/adota_runs/20260707_124010/figures/acquisition/uuid_provenance_map.csv")
+    ap.add_argument(
+        "--prov",
+        default="/scratch/mstryja/adota_runs/20260707_124010/figures/acquisition/uuid_provenance_map.csv",
+    )
     ap.add_argument("--outdir", default="/scratch/mstryja/adota_runs/20260707_124010/figures/acquisition")
     args = ap.parse_args()
-    out = Path(args.outdir); out.mkdir(parents=True, exist_ok=True)
+    out = Path(args.outdir)
+    out.mkdir(parents=True, exist_ok=True)
 
     df = (pd.read_csv(args.results)
           .merge(pd.read_csv(args.prov), on="sample_id", how="left")
@@ -106,7 +108,8 @@ def main():
             G = grids(df, rtr)
             m = make_model(name).fit(transform(df, rtr, G), y[rtr])
             pr = m.predict(transform(df, rte, G))
-            pe.append(pearsonr(pr, y[rte])[0]); sp.append(spearmanr(pr, y[rte]).correlation)
+            pe.append(pearsonr(pr, y[rte])[0])
+            sp.append(spearmanr(pr, y[rte]).correlation)
         return float(np.mean(pe)), float(np.mean(sp))
 
     # ---- final fit on all dev, frozen evaluation on test ----

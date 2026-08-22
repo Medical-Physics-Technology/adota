@@ -12,13 +12,13 @@ import os
 from pathlib import Path
 
 import h5py
-import numpy as np
 import matplotlib
+import numpy as np
+
 matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
 
-import sys
-sys.path.insert(0, "/home/mstryja/projects/adota")
 from src.beamlets.centerline import beam_line_from_metadata, render_centerline
 
 H5 = "/scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5"
@@ -41,12 +41,16 @@ def find_json(uid):
 
 def flux_ridge(flux):
     H, W, D = flux.shape
-    ii = np.arange(H)[:, None]; jj = np.arange(W)[None, :]
-    c0 = np.full(D, np.nan); c1 = np.full(D, np.nan)
+    ii = np.arange(H)[:, None]
+    jj = np.arange(W)[None, :]
+    c0 = np.full(D, np.nan)
+    c1 = np.full(D, np.nan)
     for d in range(D):
-        s = flux[:, :, d]; tot = s.sum()
+        s = flux[:, :, d]
+        tot = s.sum()
         if tot > 0:
-            c0[d] = (s * ii).sum() / tot; c1[d] = (s * jj).sum() / tot
+            c0[d] = (s * ii).sum() / tot
+            c1[d] = (s * jj).sum() / tot
     return c0, c1
 
 
@@ -67,19 +71,23 @@ def main():
         print(f"{'uuid[:8]':10} {'steer(θx,θy)':20} {'max|dev| axis0,axis1 [vox]':28} {'mean|dev|':10}")
         for r, k in enumerate(picks):
             g = f[k]
-            ct = g["ct"][:]; flux = g["flux"][:]
+            ct = g["ct"][:]
+            flux = g["flux"][:]
             ba = np.array(g.attrs["beamlet_angles"], dtype=float)
-            jp = find_json(k); meta = json.load(open(jp))
+            jp = find_json(k)
+            meta = json.load(open(jp))
             roi = meta.get("roi_size")
             ds = (roi[0] / ct.shape[0]) if roi else 2.0
             line = beam_line_from_metadata(meta["rays_entrence_point"], ba, ds)
 
             # agreement vs flux ridge
-            D = flux.shape[2]; d = np.arange(D)
+            D = flux.shape[2]
+            d = np.arange(D)
             c0f, c1f = flux_ridge(flux)
             c0l, c1l = line.lateral_center(d)
             m = np.isfinite(c0f)
-            dev0 = np.abs(c0l[m] - c0f[m]); dev1 = np.abs(c1l[m] - c1f[m])
+            dev0 = np.abs(c0l[m] - c0f[m])
+            dev1 = np.abs(c1l[m] - c1f[m])
             print(f"{k[:8]:10} {str(np.round(ba,2).tolist()):20} "
                   f"{f'{dev0.max():.3f}, {dev1.max():.3f}':28} "
                   f"{f'{dev0.mean():.3f}, {dev1.mean():.3f}'}")
@@ -105,7 +113,8 @@ def main():
                     ax.set_title(title, fontsize=11)
                 if c == 0:
                     ax.set_ylabel(f"{k[:8]}\nsteer={np.round(ba,2).tolist()}", fontsize=8)
-                ax.set_xticks([]); ax.set_yticks([])
+                ax.set_xticks([])
+                ax.set_yticks([])
         fig.suptitle("Analytic centerline (blue dashed) vs flux — raw record frame; "
                      "axis0 vs depth (flux/centerline shown as MIP over axis1)",
                      fontsize=12, y=0.995)

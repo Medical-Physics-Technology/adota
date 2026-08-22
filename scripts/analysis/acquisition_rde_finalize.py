@@ -21,7 +21,9 @@ import json
 from pathlib import Path
 
 import matplotlib
+
 matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -30,9 +32,7 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import GroupKFold
 
-import sys
-sys.path.insert(0, "/home/mstryja/projects/adota")
-from scripts.analysis.acquisition_regression_study import ALL_FEATS, fit_percentiles
+from scripts.analysis.acquisition_regression_study import ALL_FEATS
 
 COMPACT_K = 8
 
@@ -51,10 +51,14 @@ def apply_grid(vals, grid):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--results", default="/scratch/mstryja/adota_runs/20260707_124010/results.csv")
-    ap.add_argument("--prov", default="/scratch/mstryja/adota_runs/20260707_124010/figures/acquisition/uuid_provenance_map.csv")
+    ap.add_argument(
+        "--prov",
+        default="/scratch/mstryja/adota_runs/20260707_124010/figures/acquisition/uuid_provenance_map.csv",
+    )
     ap.add_argument("--outdir", default="/scratch/mstryja/adota_runs/20260707_124010/figures/acquisition")
     args = ap.parse_args()
-    out = Path(args.outdir); out.mkdir(parents=True, exist_ok=True)
+    out = Path(args.outdir)
+    out.mkdir(parents=True, exist_ok=True)
 
     df = pd.read_csv(args.results).merge(pd.read_csv(args.prov), on="sample_id", how="left")
     groups = df["patient_key"].values
@@ -77,9 +81,11 @@ def main():
 
     print("=== held-out (patient-grouped OOF) correlation vs log1p(RDE) ===")
     for k, p in oof.items():
-        pe, sp = corr(p); print(f"  {k:12} Pearson {pe:.3f}   Spearman {sp:.3f}")
+        pe, sp = corr(p)
+        print(f"  {k:12} Pearson {pe:.3f}   Spearman {sp:.3f}")
     # correlation against RAW rde too (interpretability)
-    pe_raw, sp_raw = pearsonr(oof["linear_all"], df["rde"].values)[0], spearmanr(oof["linear_all"], df["rde"].values).correlation
+    pe_raw = pearsonr(oof["linear_all"], df["rde"].values)[0]
+    sp_raw = spearmanr(oof["linear_all"], df["rde"].values).correlation
     print(f"  linear_all vs RAW rde: Pearson {pe_raw:.3f}  Spearman {sp_raw:.3f}")
 
     # ---- compact interpretable model: top-K features by |coef| of full linear fit ----
@@ -98,7 +104,8 @@ def main():
     print("\n=== cross-anatomy (linear_all) ===")
     anat = df["anatomy"].values
     for held in sorted(pd.unique(anat)):
-        te = np.where(anat == held)[0]; tr = np.where(anat != held)[0]
+        te = np.where(anat == held)[0]
+        tr = np.where(anat != held)[0]
         Ptr = np.column_stack([apply_grid(df[c].values[tr], percentile_grid(df[c].values[tr])) for c in feats])
         Pte = np.column_stack([apply_grid(df[c].values[te], percentile_grid(df[c].values[tr])) for c in feats])
         pr = Ridge(alpha=1.0).fit(Ptr, y[tr]).predict(Pte)
@@ -116,11 +123,15 @@ def main():
     fig, ax = plt.subplots(figsize=(5, 5))
     idx = np.random.default_rng(0).choice(n, min(6000, n), replace=False)
     ax.scatter(oof["linear_all"][idx], y[idx], s=3, alpha=0.15)
-    lo, hi = y.min(), y.max(); ax.plot([lo, hi], [lo, hi], "r--", lw=1)
+    lo, hi = y.min(), y.max()
+    ax.plot([lo, hi], [lo, hi], "r--", lw=1)
     pe, sp = corr(oof["linear_all"])
-    ax.set_xlabel("predicted difficulty (linear, held-out)"); ax.set_ylabel("log1p(RDE)")
+    ax.set_xlabel("predicted difficulty (linear, held-out)")
+    ax.set_ylabel("log1p(RDE)")
     ax.set_title(f"RDE combined score: Pearson {pe:.2f}, Spearman {sp:.2f}")
-    fig.tight_layout(); fig.savefig(out / "rde_combined_scatter.png", dpi=140); plt.close(fig)
+    fig.tight_layout()
+    fig.savefig(out / "rde_combined_scatter.png", dpi=140)
+    plt.close(fig)
 
     # ---- persist deployable interpretable scorer ----
     scorer = {

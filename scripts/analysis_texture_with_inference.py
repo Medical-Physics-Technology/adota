@@ -24,8 +24,6 @@ import json
 import logging
 import os
 import shutil
-import sys
-from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Annotated, Optional
@@ -37,14 +35,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import typer
-import yaml
 from scipy import stats
 from tqdm import tqdm
 
 # Add project root to path
-PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
 from src.adota.config import (
     DEFAULT_GAMMA_PARAMS,
     DEFAULT_SCALE,
@@ -55,40 +49,34 @@ from src.adota.config import (
     setup_run_directory,
 )
 from src.adota.models import DoTA3D_v3
-from src.adota.utils import count_parameters_per_block, count_total_parameters
+from src.figures.single_beam import publication_figure
 from src.image_processing.heterogeneity import (
     beam_aligned_global_heterogeneity,
-    beam_axis_roughness,
-    beam_weighted_gradient,
-    gradient_magnitude_3d,
 )
 from src.image_processing.homogeneity_scores import glcm_homogeneity_idm
 from src.image_processing.intensity_heterogeneity import (
     GlobalIntensityHeterogeneity,
     global_intensity_heterogeneity,
 )
-from src.loaders.dir_based import get_single_record, save_prediction
+from src.loaders.dir_based import get_single_record
 from src.metrics.classic import (
     calculate_pure_mape,
     calculate_relative_dose_error,
     calculate_rmse,
 )
 from src.metrics.gamma_pass_rate import gamma_index_torch
-from src.figures.single_beam import publication_figure
+from src.schemas.configs import EvaluationConfig, MetricsConfig
+from src.schemas.results import SampleResult
 from src.tables.results import print_results_table
 from src.utils.scallers import inverse_minmax
 from src.utils.unit_conversions import to_gy
 
+PROJECT_ROOT = Path(__file__).parent.parent
 logger = logging.getLogger(__name__)
-
 app = typer.Typer(
     help="CT Texture & Model Inference Analysis — correlate model performance "
     "with CT heterogeneity metrics.",
 )
-
-
-from src.schemas.configs import EvaluationConfig, MetricsConfig
-from src.schemas.results import SampleResult
 
 
 # ---------------------------------------------------------------------------

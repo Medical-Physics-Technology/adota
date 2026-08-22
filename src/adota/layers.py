@@ -1,3 +1,16 @@
+"""The ``nn.Module`` building blocks that :class:`DoTA3D_v3` is assembled from.
+
+Contents:
+- ``Conv3D``, ``ConvBlock3D_v2``: weight-standardised 3D convolutions and the
+  down/up-sampling block built on them.
+- ``ConvEncoder3D``, ``ConvDecoder3D``: the encoder/decoder stacks, including
+  the skip ("history") tensors that connect them.
+- ``TransformerEncoderLayerDoTA``, ``PositionalEmbedding``, ``LinearProj``: the
+  causal-masked attention stack over the slice sequence.
+- ``Permute``, ``ReshapeLayer``, ``CroppingLayer``: shape adapters between the
+  convolutional (B, C, D, H, W) and token (B, D, H, W, C) conventions.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -72,15 +85,21 @@ class Permute(nn.Module):
 
 class ConvEncoder3D(nn.Module):
     """Class ConvEncoder3D.
-    General-purpose DoTA Encoder, responsible for convert the input tensor to the latent space. This layer do not include zero padding.
-    ConvEncoder3D by default perform the permute on the last layer, in order to convert the shape from (B, C, D, H, W) to (B, D, H, W, C).
+    General-purpose DoTA Encoder, responsible for convert the input tensor to the
+    latent space. This layer do not include zero padding.
+    ConvEncoder3D by default perform the permute on the last layer, in order to
+    convert the shape from (B, C, D, H, W) to (B, D, H, W, C).
 
     Attributes:
         - num_levels: int - number of levels in the encoder.
         - enc_features: int - number of channels at the flattened output from the encoder.
-        - conv_steps_per_block: int | tuple - number of convolutional steps per block. If int is passed, the same number of steps will be used for all blocks.
-        - conv_hidden_channels: int | tuple - number of hidden channels per block. If int is passed, the same number of channels will be used for all blocks.
-        - kernel_size: int | tuple - kernel size per block. If int is passed, the same kernel size will be used for all blocks.
+        - conv_steps_per_block: int | tuple - number of convolutional steps per
+          block. If int is passed, the same number of steps will be used for all
+          blocks.
+        - conv_hidden_channels: int | tuple - number of hidden channels per block.
+          If int is passed, the same number of channels will be used for all blocks.
+        - kernel_size: int | tuple - kernel size per block. If int is passed, the
+          same kernel size will be used for all blocks.
 
         - input_shape: tuple - input shape of the tensor. Default: (2, 160, 32, 32)
     """
@@ -485,7 +504,8 @@ class LinearProj(nn.Module):
 
 
 class ConvBlock3D_v2(nn.Module):
-    """Class repreenting a ConvBlock3D layer. ConvBlock is responsible for processing an input signal and perform downsampling / upsampling.
+    """Class repreenting a ConvBlock3D layer. ConvBlock is responsible for
+    processing an input signal and perform downsampling / upsampling.
     In the paper nomenclature, this class represents both Convolutional Encoder Layer and Convolutional Decoder Layer.
 
     Args:
@@ -506,8 +526,10 @@ class ConvBlock3D_v2(nn.Module):
         Args:
             in_channels (int): Number of input channels (C_in in paper).
             out_channels (int): Number of output channels (C_out in paper).
-            kernel_size (int | tuple): Kernel size (k). If int is passed, the isotropic kernel is constructed with the same size in all dimensions.
-            token_size (tuple[int, int]): The (height, width) of the feature map at this depth, used to build the LayerNorm shape.
+            kernel_size (int | tuple): Kernel size (k). If int is passed, the
+                isotropic kernel is constructed with the same size in all dimensions.
+            token_size (tuple[int, int]): The (height, width) of the feature map at
+                this depth, used to build the LayerNorm shape.
             num_slices (int): Number of slices (D in paper).
             **kwargs: Additional arguments:
                 - steps (int): Number of convolutional steps in the block.
@@ -572,7 +594,8 @@ class ConvBlock3D_v2(nn.Module):
         if self.layer_norm:
             self.conv_block.append(
                 nn.LayerNorm([self.out_channels, self.num_slices, *self.token_size])
-                # nn.BatchNorm3d([self.out_channels, self.num_slices, *self.token_size]) # Test with BatchNorm3d instead of LayerNorm
+                # Test with BatchNorm3d instead of LayerNorm:
+                # nn.BatchNorm3d([self.out_channels, self.num_slices, *self.token_size])
             )
 
         if self.flatten:

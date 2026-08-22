@@ -10,14 +10,12 @@ Run: uv run python scripts/projection_ablation/build_centerline_sidecar.py
 import argparse
 import json
 import os
-import sys
 from pathlib import Path
 
 import h5py
 import numpy as np
 import pandas as pd
 
-sys.path.insert(0, "/home/mstryja/projects/adota")
 from src.beamlets.centerline import beam_line_from_metadata
 
 JDIRS = ["/RadiotherapyData/dataset_v0/trainset_pelvis",

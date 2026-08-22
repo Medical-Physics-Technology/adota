@@ -6,17 +6,33 @@ PlanPencil.txt, so an MCsquare run from this port is the same run. The remaining
 tests parse the written files back and assert the actual physical values
 (energy, spot x/y/weight, gantry, isocenter, primaries, seed) are correct.
 """
+import os
 import re
 import sys
 
 import pytest
 
-sys.path.insert(0, "/home/mstryja/projects/datagenerator")
-
 from src.mc_generation.config_writer import (
-    build_single_beamlet_plan_text,
     build_simulation_config,
+    build_single_beamlet_plan_text,
     write_config,
+)
+
+# Every test here compares against `datagenerator`, the external OpenTPS-side
+# package that produced the DoTA training set. It is not on PyPI and lives
+# outside this repository, so the whole module skips when it is absent.
+DATAGENERATOR_ROOT = os.environ.get(
+    "ADOTA_DATAGENERATOR_ROOT", "/home/mstryja/projects/datagenerator"
+)
+if DATAGENERATOR_ROOT not in sys.path:
+    sys.path.insert(0, DATAGENERATOR_ROOT)
+
+pytest.importorskip(
+    "datagenerator",
+    reason=(
+        "the external `datagenerator` repository is required for MCsquare byte-parity; "
+        f"clone it and set ADOTA_DATAGENERATOR_ROOT (currently {DATAGENERATOR_ROOT!r})"
+    ),
 )
 
 

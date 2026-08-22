@@ -12,7 +12,6 @@ the skeleton for future advanced-metric experiments.
 import logging
 import math
 import shutil
-import sys
 from dataclasses import asdict
 from pathlib import Path
 from time import perf_counter
@@ -31,9 +30,6 @@ from scipy.spatial.distance import squareform
 from scipy.stats import pearsonr, spearmanr
 
 # Add project root to path
-PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
 from src.adota.config import (
     DEFAULT_GAMMA_PARAMS,
     denormalize_energy,
@@ -41,19 +37,19 @@ from src.adota.config import (
     setup_logging,
     setup_run_directory,
 )
-from src.evaluation.cli import resolve_device
 from src.adota.models import DoTA3D_v3
 from src.adota.utils import (
     count_parameters_per_block,
     count_total_parameters,
     load_model,
 )
+from src.evaluation.cli import resolve_device
+from src.evaluation.engine import InferenceContext, evaluate
+from src.evaluation.sources import H5Source
 from src.figures.advanced_metrics import (
     generate_beam_angle_figures,
     generate_figures_for_selection,
 )
-from src.evaluation.engine import InferenceContext, evaluate
-from src.evaluation.sources import H5Source
 from src.figures.ct_visualizations import segment_hu, smooth_ct
 from src.loaders.generator import H5PYGenerator
 from src.loaders.utils import validate_inputs
@@ -71,17 +67,15 @@ from src.metrics.sobel import (
 )
 from src.processing.interface_severity import interface_severity
 from src.processing.pflugfelder_hi import pflugfelder_hi
+from src.schemas.configs import AdvancedAnalysisConfig as AnalysisConfig
+from src.schemas.results import SampleRecord
 from src.utils.dose_grid_utils import estimate_bp_range
 from src.utils.scallers import inverse_minmax
 from src.utils.unit_conversions import to_gy
 
+PROJECT_ROOT = Path(__file__).parent.parent
 logger = logging.getLogger(__name__)
-
 app = typer.Typer(help="Training-set advanced-metrics analysis")
-
-
-from src.schemas.configs import AdvancedAnalysisConfig as AnalysisConfig
-from src.schemas.results import SampleRecord
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -300,7 +294,6 @@ def compute_advanced_metrics(
         max_hu_jump, sigma_hu_bp, max_hu_gradient,
         lateral_hu_var_bp, hetero_fraction, interface_bp_distance.
     """
-    from src.figures.ct_visualizations import HU_LUT
 
     k_start = int(np.ceil(z_min))
     k_end = int(np.floor(z_max))
@@ -1015,7 +1008,7 @@ def generate_energy_stratified_analysis(
     (``gpr`` for model accuracy, ``abs_r80_delta_mm`` for the clinical range
     error, etc.). Outputs go to ``output_dir/energy_stratified/<target_col>/``.
     """
-    from scipy.stats import spearmanr, pearsonr
+    from scipy.stats import pearsonr, spearmanr
 
     strat_dir = output_dir / "energy_stratified" / target_col
     strat_dir.mkdir(parents=True, exist_ok=True)

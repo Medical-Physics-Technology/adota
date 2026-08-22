@@ -21,7 +21,7 @@ The Phase-2 registry builder can verify true inter-slice spacing via SimpleITK.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from glob import glob
 from os.path import join
 from typing import Dict, List, Optional, Sequence, Tuple

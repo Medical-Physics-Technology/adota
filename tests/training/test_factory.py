@@ -17,7 +17,6 @@ from src.training.factory import (
 
 from .conftest import TINY_INPUT_SHAPE, make_synthetic_batches, make_tiny_config
 
-
 # ── build_optimizer_scheduler ───────────────────────────────────────────────
 
 

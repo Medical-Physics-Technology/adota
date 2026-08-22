@@ -23,21 +23,20 @@ from src.beamlets.cropping import extract_beamlet_roi
 from src.beamlets.extraction import ExtractionConfig, run_extraction
 from src.loaders.plan_directory import PlanDirectory
 from src.loaders.plan_parser import ControlPoint, Field, Fraction, Plan, Spot
+from tests.utils.bdl import build_bdl_text
 
 ROI = (4, 4, 8)
 DISTANCES = (420.0, 2014.9, 2584.1)
 
-_BDL = """\
-Nozzle exit to Isocenter distance
-420.0
-SMX to Isocenter distance
-2014.9
-SMY to Isocenter distance
-2584.1
-NominalEnergy MeanEnergy EnergySpread ProtonsMU Weight1 SpotSize1x Divergence1x Correlation1x SpotSize1y Divergence1y Correlation1y
-100.0 100.0 1.0 1000.0 1.0 4.0 0.003 0.5 3.0 0.004 0.6
-150.0 150.0 0.8 1500.0 1.0 3.5 0.003 0.4 2.8 0.004 0.5
-"""
+_BDL = build_bdl_text(
+    nozzle_isocenter=420.0,
+    smx=2014.9,
+    smy=2584.1,
+    energy_rows=(
+        "100.0 100.0 1.0 1000.0 1.0 4.0 0.003 0.5 3.0 0.004 0.6",
+        "150.0 150.0 0.8 1500.0 1.0 3.5 0.003 0.4 2.8 0.004 0.5",
+    ),
+)
 
 
 def test_deposit_crop_placement() -> None:

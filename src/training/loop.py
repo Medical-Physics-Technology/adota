@@ -21,6 +21,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
+from src.schemas.configs import TrainingConfig
 from src.training.losses import LMSE, LPS, TwoObjectiveBalancer
 from src.training.run import (
     compute_grad_norm,
@@ -29,7 +30,6 @@ from src.training.run import (
     log_phase,
 )
 from src.training.utils import validate_tensor_ranges
-from src.schemas.configs import TrainingConfig
 
 logger = logging.getLogger(__name__)
 

@@ -1,6 +1,5 @@
 """Remove a single record from an HDF5 file by its ID."""
 
-import sys
 from pathlib import Path
 
 import h5py

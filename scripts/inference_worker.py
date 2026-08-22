@@ -37,13 +37,9 @@ import logging
 import sys
 from pathlib import Path
 
-import numpy as np
 import torch
 
 # Make project root importable
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
 from src.adota.utils import load_model
 from src.loaders.dir_based import get_single_record_no_gt, save_prediction
 

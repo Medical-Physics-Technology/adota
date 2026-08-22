@@ -146,9 +146,12 @@ def mc_support_bbox_gy(
     rows = M.indices[s:e]
     vals = M.data[s:e].astype(np.float64) * (float(si.mu.iloc[i]) * float(si.opentps_rescaling.iloc[i]))
     x, y, z = np.unravel_index(rows, (nx, ny, nz), order="F")  # F-order flat -> (x,y,z)
-    z0 = max(int(z.min()) - margin, 0); z1 = min(int(z.max()) + margin + 1, nz)
-    y0 = max(int(y.min()) - margin, 0); y1 = min(int(y.max()) + margin + 1, ny)
-    x0 = max(int(x.min()) - margin, 0); x1 = min(int(x.max()) + margin + 1, nx)
+    z0 = max(int(z.min()) - margin, 0)
+    z1 = min(int(z.max()) + margin + 1, nz)
+    y0 = max(int(y.min()) - margin, 0)
+    y1 = min(int(y.max()) + margin + 1, ny)
+    x0 = max(int(x.min()) - margin, 0)
+    x1 = min(int(x.max()) + margin + 1, nx)
     box = np.zeros((z1 - z0, y1 - y0, x1 - x0), dtype=np.float64)
     box[z - z0, y - y0, x - x0] = vals
     return box, (z0, y0, x0), int(len(vals))
@@ -164,15 +167,18 @@ def mc_crop_gy(mc_bbox: np.ndarray, bbox_origin, sim_res: dict, beam: _Beam, ct:
     z0, y0, x0 = bbox_origin
     img = sitk.GetImageFromArray(mc_bbox.astype(np.float32))
     img.SetOrigin(ct.TransformIndexToPhysicalPoint([int(x0), int(y0), int(z0)]))
-    img.SetSpacing(ct.GetSpacing()); img.SetDirection(ct.GetDirection())
+    img.SetSpacing(ct.GetSpacing())
+    img.SetDirection(ct.GetDirection())
 
     ex_nx, ex_ny, ex_nz = beam.image_size
     full = sitk.Image(int(ex_nx), int(ex_ny), int(ex_nz), sitk.sitkFloat32)
-    full.SetOrigin(beam.image_origin); full.SetSpacing(beam.image_spacing)
+    full.SetOrigin(beam.image_origin)
+    full.SetSpacing(beam.image_spacing)
     full.SetDirection(ct.GetDirection())
     height, width, depth = sim_res["roi_size"]
     iz, iy, _ix = sim_res["crp_numpy_ct"]
-    czlo = max(iz - height // 2, 0); cylo = max(iy - width // 2, 0)
+    czlo = max(iz - height // 2, 0)
+    cylo = max(iy - width // 2, 0)
     crop_ref = sitk.RegionOfInterest(full, size=[int(depth), int(width), int(height)],
                                      index=[0, int(cylo), int(czlo)])  # sitk (x,y,z)
     rot = rotate_ct_around_isocenter(img, beam.angle, beam.iso_phys,

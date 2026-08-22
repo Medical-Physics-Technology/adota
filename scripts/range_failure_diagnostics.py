@@ -22,16 +22,12 @@ Usage:
 """
 
 import logging
-import sys
 from dataclasses import fields
 from pathlib import Path
 from typing import Annotated, Optional
 
 import pandas as pd
 import typer
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.adota.config import DEFAULT_GAMMA_PARAMS, load_yaml_config, setup_logging
 from src.adota.utils import load_model
@@ -40,6 +36,8 @@ from src.figures.advanced_metrics import generate_figures_for_records
 from src.loaders.generator import H5PYGenerator
 from src.schemas.configs import AdvancedAnalysisConfig as AnalysisConfig
 from src.schemas.results import SampleRecord
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 logger = logging.getLogger(__name__)
 app = typer.Typer(help="Regenerate CT+Sobel and 3D-dose figures for worst-range beamlets")

@@ -16,13 +16,11 @@ Skipped unless the checkpoint and HDF5 dataset are present.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import _goldenlib as gl  # noqa: E402
+from tests.utils import golden as gl
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 H5_PATH = Path(
@@ -39,10 +37,15 @@ HP_PATH = MODEL_DIR / "hyperparams.json"
 
 N_SLICE = 5
 
-pytestmark = pytest.mark.skipif(
-    not (MODEL_PATH.exists() and HP_PATH.exists() and H5_PATH.exists()),
-    reason="golden test requires the checkpoint + HDF5 dataset on /scratch",
-)
+# integration: needs the real HDF5 dataset and a trained checkpoint, so it is
+# excluded from the default (unit) suite; skipif keeps it clean without data.
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not (MODEL_PATH.exists() and HP_PATH.exists() and H5_PATH.exists()),
+        reason="golden test requires the checkpoint + HDF5 dataset on /scratch",
+    ),
+]
 
 
 def _fixed_record_ids() -> list[str]:

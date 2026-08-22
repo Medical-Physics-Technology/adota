@@ -13,14 +13,11 @@ Skipped unless the checkpoint and dataset are present (mirrors the smoke test).
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import pytest
 
-# Make the sibling _goldenlib importable regardless of how pytest is invoked.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import _goldenlib as gl  # noqa: E402
+from tests.utils import golden as gl
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 LUNG = Path("/scratch/mstryja/DoTA_dataset_v2/lung_testset_paper")
@@ -30,10 +27,15 @@ HP_PATH = MODEL_DIR / "hyperparams.json"
 
 N_SLICE = 5
 
-pytestmark = pytest.mark.skipif(
-    not (MODEL_PATH.exists() and HP_PATH.exists() and LUNG.is_dir()),
-    reason="golden test requires the checkpoint + lung dataset on /scratch",
-)
+# integration: needs the real HDF5 dataset and a trained checkpoint, so it is
+# excluded from the default (unit) suite; skipif keeps it clean without data.
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not (MODEL_PATH.exists() and HP_PATH.exists() and LUNG.is_dir()),
+        reason="golden test requires the checkpoint + lung dataset on /scratch",
+    ),
+]
 
 
 def test_run_model_golden(tmp_path):

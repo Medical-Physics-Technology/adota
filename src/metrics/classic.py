@@ -1,3 +1,10 @@
+"""Scalar dose-comparison metrics: RMSE, MAPE and relative dose error.
+
+All three take de-normalised dose arrays of identical shape and return a single
+float. They are the metric core shared by every evaluation script; the gamma
+pass rate lives in :mod:`src.metrics.gamma_pass_rate`.
+"""
+
 import numpy as np
 
 
