@@ -4,7 +4,7 @@
 #       --config scripts/mc/config_robustness_multipatient.yaml
 #
 # 5 thoracic (Lung-PET-CT-Dx) + 5 abdominal (StageII-Colorectal) patients, all at
-# FIXED gantry 90 deg, same 18x18 beamlet-angle grid, energies 80/120/140 MeV.
+# FIXED gantry 90 deg, 10x10 beamlet-angle grid (accelerated), energies 80/120/140 MeV.
 # Deliverables: per-patient GPR grids AND the mean pass rate across the 5 patients
 # per energy (plot_angle_robustness.py `mode: aggregate`).
 #
@@ -37,7 +37,7 @@ robustness:
   energies: [80.0, 120.0, 140.0]
   theta_x_range: [-2.0, 2.0]
   theta_y_range: [-2.0, 2.0]
-  grid_n: 18                     # 18x18 = 324 beamlet angles
+  grid_n: 10                    # 10x10 = 100 beamlet angles (accelerated)
   gantry_mode: fixed             # same gantry for every patient
   gantry_value: 90.0
   roi_size: [60, 60, 320]

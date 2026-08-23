@@ -174,6 +174,11 @@ def extract_beamlet_roi(
     ranges = [(o, m) for o, m in zip(origin, max_coords)]
 
     entrance_domain = intersect_line_with_cube(ranges, dc_nozzle_s, dc_iso_s)
+    if len(entrance_domain) == 0:
+        # The beam ray does not cross the CT volume at all (beamlet aimed past the
+        # patient, e.g. an extreme steering angle on a small FOV). Flag as
+        # out-of-bounds so the caller's QA gate skips it, rather than crashing.
+        return cropped_ct, np.zeros(3, dtype=float), np_indexes, True
     entrance_physical = entrance_domain[0][1:]
 
     # Crop lower corner in physical coords: x at the grid origin (crop x starts

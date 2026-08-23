@@ -154,6 +154,12 @@ def main(
     # don't wash out the high-GPR bulk); vmax capped at 100.
     low_pct = float(cfg.get("scale_low_percentile", 0.0))
     scales = shared_scale_per_criterion(panels, criteria, low_percentile=low_pct, vmax_cap=100.0)
+    # Optional per-criterion fixed scale override (e.g. to match another figure set's
+    # colorbar so panels are directly comparable). Keyed by criterion.key.
+    for k, v in (cfg.get("fixed_scale") or {}).items():
+        if k in scales:
+            scales[k] = (float(v[0]), float(v[1]))
+            logger.info("fixed scale override %s -> [%.3f, %.3f]", k, float(v[0]), float(v[1]))
     logger.info("shared scales (low_pct=%.1f): %s", low_pct,
                 {k: (round(v[0], 2), round(v[1], 2)) for k, v in scales.items()})
 
