@@ -85,3 +85,16 @@ def test_gates_from_dict_merges_over_base():
     assert g.min_slices == 50 and g.max_spacing_z == 6.0
     assert g.kvp_range == (80.0, 140.0)
     assert g.max_spacing_xy is None       # not set -> stays off
+
+
+def test_z_extent_and_xy_extent_gates():
+    g = QCGates(min_z_extent_mm=260.0, min_xy_extent_mm=300.0)
+    # 218 slices x 1.0mm = 218mm z-extent -> fails; 400 slices -> passes
+    assert check_quality(_good_params(n_slices=218, slice_thickness=1.0), g)[0] is False
+    assert check_quality(_good_params(n_slices=400, slice_thickness=1.0,
+                                      columns=512, rows=512, pixel_spacing_x=0.8, pixel_spacing_y=0.8), g)[0] is True
+    # 5mm slices: 60 slices -> 300mm z ok; but small in-plane fails xy gate
+    p = _good_params(n_slices=60, slice_thickness=5.0, columns=256, rows=256,
+                     pixel_spacing_x=1.0, pixel_spacing_y=1.0)   # xy extent 256 < 300
+    ok, reasons = check_quality(p, g)
+    assert not ok and any("xy_extent" in r for r in reasons)

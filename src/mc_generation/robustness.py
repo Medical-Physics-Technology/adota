@@ -26,11 +26,15 @@ from src.beamlets.rotation import rotate_ct_around_isocenter
 from src.datasets.base import CTRecord
 from src.figures.mc_beamlet_qc import mc_beamlet_qc_figure
 from src.mc_generation.geometry import (
+    body_mask,
+    dose_in_body_fraction,
     extraction_isocenter_physical,
+    isocenters_from_world,
     mc_isocenter,
     reduce_vacuum_to_air,
     resample_to_isotropic,
 )
+from src.metrics.range_metrics import compute_range_metrics
 from src.mc_generation.mcsquare_runner import MCSquareRunner
 
 logger = logging.getLogger(__name__)
@@ -49,6 +53,9 @@ class RobustnessConfig:
     gantry_max: float = 360.0
     gantry_seed: int = 1234
     rotate_to_canonical: bool = True     # rotate CT so beam is axis-aligned (gantry != 90)
+    isocenter_mode: str = "grid_center"  # "grid_center" | "body_com" (aim at patient COM)
+    body_hu_threshold: float = -500.0    # body mask threshold (includes lung, excludes air)
+    border_only: bool = False            # generate only the border (corner/edge) beamlets
     roi_size: Tuple[int, int, int] = (60, 60, 320)
     iso_spacing_mm: float = 1.0
     num_primaries: float = 1e7
@@ -85,6 +92,9 @@ def robustness_config_from_dict(
         gantry_max=float(r.get("gantry_max", 360.0)),
         gantry_seed=int(r.get("gantry_seed", 1234)),
         rotate_to_canonical=bool(r.get("rotate_to_canonical", True)),
+        isocenter_mode=r.get("isocenter_mode", "grid_center"),
+        body_hu_threshold=float(r.get("body_hu_threshold", -500.0)),
+        border_only=bool(r.get("border_only", False)),
         roi_size=tuple(r.get("roi_size", (60, 60, 320))),
         iso_spacing_mm=float(r.get("iso_spacing_mm", 1.0)),
         num_primaries=float(num_primaries if num_primaries is not None else r.get("num_primaries", 1e7)),
@@ -139,6 +149,9 @@ def generate_for_record(
     """Generate all (energy x angle) beamlets for one patient CT."""
     d_nozzle, d_smx, d_smy = bdl.distances
     grid = build_angle_grid(cfg.theta_x_range, cfg.theta_y_range, cfg.grid_n)
+    if cfg.border_only:  # only the corner/edge beamlets (fast, extreme-angle test)
+        n = cfg.grid_n
+        grid = [g for g in grid if g[0] in (0, n - 1) or g[1] in (0, n - 1)]
     field_gantry = resolve_gantry(cfg, rec.uid)
 
     ct = resample_to_isotropic(rec.load_image(), cfg.iso_spacing_mm)
@@ -162,8 +175,15 @@ def generate_for_record(
         mc_gantry = field_gantry
 
     ct_arr = sitk.GetArrayFromImage(ct)
-    iso_mc = mc_isocenter(ct)
-    iso_ext = extraction_isocenter_physical(ct)
+    body_mask_arr = body_mask(ct, cfg.body_hu_threshold)     # (z,y,x) 1.0 = in patient
+    if cfg.isocenter_mode == "body_com":
+        com_zyx = np.argwhere(body_mask_arr > 0).mean(axis=0)
+        com = np.asarray(ct.TransformContinuousIndexToPhysicalPoint(
+            [float(com_zyx[2]), float(com_zyx[1]), float(com_zyx[0])]))
+        iso_mc, iso_ext = isocenters_from_world(ct, com)
+    else:
+        iso_mc = mc_isocenter(ct)
+        iso_ext = extraction_isocenter_physical(ct)
 
     stats = {"patient": rec.patient_id, "anatomy": rec.anatomy, "gantry": field_gantry,
              "ct_rotation_deg": ct_rotation_deg, "grid_size": list(ct.GetSize()),
@@ -218,9 +238,19 @@ def generate_for_record(
             flux = flux_projection(re_proj, beamlet_angles, sigmas, cropped_ct.shape,
                                    spacing=np.asarray([1, 1, 1], dtype=np.float32))
 
+            # --- numerical support: dose-in-patient + clean-Bragg-peak metrics ---
+            body_crop, _, _, _ = extract_beamlet_roi(
+                ct, d_nozzle, d_smx, d_smy, spot, iso_ext, cfg.roi_size, ct_array=body_mask_arr)
+            dib = dose_in_body_fraction(cropped_dose, body_crop)
+            idd = np.asarray(cropped_dose.sum(axis=(0, 1)), dtype=float)  # depth = axis 2
+            rm = compute_range_metrics(idd, dz_mm=1.0)
+
             record_id = str(uuid.uuid4())
             sim_res.update({
                 "id": record_id,
+                "dose_in_body_fraction": float(dib),
+                "r100_mm": float(rm.r100_mm), "r80_mm": float(rm.r80_mm),
+                "dfw_mm": float(rm.dfw_mm), "peak_dose": float(rm.peak_dose),
                 "provenance_uid": rec.uid,
                 "dataset_name": rec.dataset_name,
                 "anatomy": rec.anatomy,

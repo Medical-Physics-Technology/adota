@@ -1,0 +1,11 @@
+dataset,anatomy,patient_id,role,range_deg,screen_energy,min_corner_dep,n_slices,slice_thickness,z_extent_mm
+Lung-PET-CT-Dx,thoracic,Lung_Dx-G0035,robustness_clean,1.5,140.0,0.946,312,1.0,312.0
+Lung-PET-CT-Dx,thoracic,Lung_Dx-G0051,robustness_clean,1.5,140.0,0.955,411,1.0,411.0
+Lung-PET-CT-Dx,thoracic,Lung_Dx-G0036,robustness_clean,1.5,140.0,0.96,300,1.0,300.0
+Lung-PET-CT-Dx,thoracic,Lung_Dx-G0060,robustness_clean,1.5,140.0,0.908,411,1.0,411.0
+Lung-PET-CT-Dx,thoracic,Lung_Dx-G0048,robustness_clean,1.5,140.0,0.976,455,1.0,455.0
+StageII-Colorectal,abdominal,StageII-Colorectal-CT-207,robustness_clean,1.5,140.0,0.987,59,5.0,295.0
+StageII-Colorectal,abdominal,StageII-Colorectal-CT-227,robustness_clean,1.5,140.0,0.949,58,5.0,290.0
+StageII-Colorectal,abdominal,StageII-Colorectal-CT-221,robustness_clean,1.5,140.0,0.987,61,5.0,305.0
+StageII-Colorectal,abdominal,StageII-Colorectal-CT-206,robustness_clean,1.5,140.0,0.979,55,5.0,275.0
+StageII-Colorectal,abdominal,StageII-Colorectal-CT-224,robustness_clean,1.5,140.0,0.982,66,5.0,330.0
