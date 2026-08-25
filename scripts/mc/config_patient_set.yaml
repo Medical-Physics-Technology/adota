@@ -71,10 +71,10 @@ robustness:
   rotate_to_canonical: true      # rotate CT so beam is axis-aligned (gantry != 90)
   roi_size: [60, 60, 320]
   iso_spacing_mm: 1.0
-  num_primaries: 1.0e6
+  num_primaries: 1.0e7
   num_threads: 0
   rng_seed: 0
-  min_deposition_ratio: 0.5
+  min_deposition_ratio: 0.95
   output_root: /scratch/mstryja/DoTA_dataset_v2
   experiment_prefix: patient_set
   experiment_version: 2
