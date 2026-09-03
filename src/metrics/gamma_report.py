@@ -41,6 +41,11 @@ ACCEPTANCE: Dict[Tuple[str, str], float] = {
     ("3", "1"): 0.01,
 }
 
+# Measured and reported, never gated: rung 1 against rung 0 is how far the
+# pymedphys 0.40 -> 0.41 interpolator change moved the already-published pass
+# rates. That is a finding about the existing results, not about this backend.
+REPORTED_ONLY: Tuple[Tuple[str, str], ...] = (("1", "0"),)
+
 
 def _load_rungs(paths: Sequence[Path]) -> Dict[str, dict]:
     """Read the rung JSONs, keyed by their ``rung`` label.
@@ -108,15 +113,23 @@ def build_report(rung_paths: Sequence[Path]) -> dict:
     indices = {label: _entry_index(payload) for label, payload in rungs.items()}
     recorded = _rung0_index(rungs)
 
-    keys = sorted({key for index in indices.values() for key in index})
-    # Preserve corpus order rather than alphabetical, so plans read as they do
-    # in the brief's table.
+    # Order rows as the corpus records them -- plans in run order, criteria in
+    # the order each plan's gamma_metrics.json lists them -- rather than
+    # alphabetically, which would interleave 1%/2mm between 1%/1mm and 2%/2mm.
     plan_order: List[str] = []
+    criterion_order: List[str] = []
     for payload in rungs.values():
-        for plan in payload["plans"]:
+        for plan, plan_result in payload["plans"].items():
             if plan not in plan_order:
                 plan_order.append(plan)
-    keys.sort(key=lambda key: (plan_order.index(key[0]), key[1]))
+            for entry in plan_result["criteria"]:
+                if entry["label"] not in criterion_order:
+                    criterion_order.append(entry["label"])
+
+    keys = sorted(
+        {key for index in indices.values() for key in index},
+        key=lambda key: (plan_order.index(key[0]), criterion_order.index(key[1])),
+    )
 
     deviation = [_deviation_row(key, indices, recorded) for key in keys]
     performance = [_performance_row(key, indices, rungs) for key in keys]
@@ -221,9 +234,12 @@ def _voxel_rows(keys, indices) -> List[dict]:
 
 
 def _acceptance_summary(deviation: List[dict]) -> List[dict]:
-    """Worst |delta| per gated rung pair and whether it clears the threshold."""
+    """Worst |delta| per rung pair, with a verdict for the gated ones."""
+    pairs = [(pair, tolerance) for pair, tolerance in ACCEPTANCE.items()]
+    pairs += [(pair, None) for pair in REPORTED_ONLY]
+
     summary: List[dict] = []
-    for (later, baseline), tolerance in ACCEPTANCE.items():
+    for (later, baseline), tolerance in pairs:
         field = f"d{later}_{baseline}"
         deltas = [
             (abs(row[field]), row["plan"], row["criterion"])
@@ -241,7 +257,7 @@ def _acceptance_summary(deviation: List[dict]) -> List[dict]:
                 "max_abs_delta_pp": worst,
                 "worst_plan": plan,
                 "worst_criterion": criterion,
-                "passed": bool(worst <= tolerance),
+                "passed": None if tolerance is None else bool(worst <= tolerance),
             }
         )
     return summary
@@ -254,9 +270,17 @@ def _totals(rungs: Dict[str, dict]) -> Dict[str, dict]:
         total = sum(
             plan_result["total_elapsed_s"] for plan_result in payload["plans"].values()
         )
+        # Warm-up is the CUDA context and first-kernel cost, paid once per plan
+        # outside the timed region. Reported, never folded into the totals.
+        warm_up = [
+            plan_result.get("warm_up_s")
+            for plan_result in payload["plans"].values()
+            if plan_result.get("warm_up_s")
+        ]
         totals[f"rung{label}"] = {
             "total_elapsed_s": total,
             "n_plans": len(payload["plans"]),
+            "warm_up_s_max": max(warm_up) if warm_up else None,
         }
     for payload in rungs.values():
         recorded = [
@@ -322,7 +346,7 @@ def render_markdown(report: dict) -> str:
     parts.append("")
     parts.append(
         _table(
-            ["comparison", "pairs", "tolerance (pp)", "max |delta| (pp)", "worst", "verdict"],
+            ["comparison", "pairs", "tolerance (pp)", "max abs delta (pp)", "worst", "verdict"],
             [
                 [
                     item["comparison"],
@@ -330,7 +354,9 @@ def render_markdown(report: dict) -> str:
                     _fmt(item["tolerance_pp"], 3),
                     _fmt(item["max_abs_delta_pp"], 6),
                     f"{item['worst_plan']} {item['worst_criterion']}",
-                    "PASS" if item["passed"] else "FAIL",
+                    "reported, not gated"
+                    if item["passed"] is None
+                    else ("PASS" if item["passed"] else "FAIL"),
                 ]
                 for item in report["acceptance"]
             ],
@@ -342,7 +368,9 @@ def render_markdown(report: dict) -> str:
     parts.append("")
     rung_keys = [key for key in ("rung0", "rung1", "rung2", "rung3", "rung4")]
     delta_keys = ["d1_0", "d2_1", "d3_1", "d3_2", "d4_2"]
-    header = ["plan", "criterion"] + rung_keys + [f"D {k}" for k in delta_keys]
+    header = ["plan", "criterion"] + rung_keys + [
+        "d({}-{})".format(*k[1:].split("_")) for k in delta_keys
+    ]
     parts.append(
         _table(
             header,
@@ -396,12 +424,13 @@ def render_markdown(report: dict) -> str:
     parts.append("")
     parts.append(
         _table(
-            ["rung", "plans", "total wall time (s)", "note"],
+            ["rung", "plans", "total wall time (s)", "warm-up (s, excluded)", "note"],
             [
                 [
                     label,
                     str(info["n_plans"]),
                     _fmt(info["total_elapsed_s"], 1),
+                    _fmt(info.get("warm_up_s_max"), 1),
                     info.get("note", ""),
                 ]
                 for label, info in sorted(totals.items())
@@ -417,7 +446,7 @@ def render_markdown(report: dict) -> str:
             _table(
                 [
                     "plan", "criterion", "rungs", "evaluated",
-                    "max |dg|", "p99.9 |dg|", "g=1 crossings", "crossing frac",
+                    "max abs dg", "p99.9 abs dg", "g=1 crossings", "crossing frac",
                     "eval-mask disagreements",
                 ],
                 [

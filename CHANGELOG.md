@@ -3,6 +3,92 @@
 All notable changes to this project are documented in this file. This project
 adheres to [Semantic Versioning](https://semver.org).
 
+## [1.5.0] - 2026-09-03
+
+A GPU gamma index. `pymedphys.gamma` dominated gamma pass rate evaluation --
+it is why `src/training/gpr_pool.py` exists at all, computing GPR on a frozen
+*subset* of the validation set. `src/metrics/gamma_torch/` replaces the kernel
+with a torch implementation that keeps both dose grids on the device. **The
+reported metric is unchanged**: the backend is opt-in and defaults to
+pymedphys, and the `gamma_values -> gamma_pass_rate` arithmetic is shared
+verbatim between the two paths, quirky denominator included.
+
+### Changed
+
+- **Python floor raised to 3.10** (`requires-python`, `.python-version`, ruff
+  `target-version`), which moves `pymedphys` from 0.40 to 0.41 and its
+  interpolation from the econforge `interpolation` package to an in-house numba
+  kernel. `numba` is now an explicit dependency: pymedphys ships it only as an
+  optional extra and `pymedphys.gamma` raises without it.
+- **`torch` pinned `>=2.8.0,<2.9`.** The 3.10 resolution would otherwise take
+  torch 2.11, whose CUDA build does not load on the 535.x driver these machines
+  run.
+- The pymedphys 0.40 -> 0.41 interpolator change **moves published gamma pass
+  rates**, by up to 0.056 pp in absolute value across the eight-plan benchmark
+  corpus, in both directions (mean 0.0075 pp over the 40 plan x criterion
+  pairs). This affects previously reported numbers regardless of the GPU work.
+  It also makes the CPU path about 4.9x faster on its own. See
+  [`docs/gamma_gpu/`](docs/gamma_gpu/) for the full 40-row comparison.
+- `gamma_index`, `gamma_index_torch` and `plan_gamma` take `backend`
+  (`"pymedphys"` by default, or `"torch"`) and `backend_options`. Existing
+  callers are unaffected. Under the torch backend `gamma_index_torch`
+  de-normalises and thresholds on the tensors' own device instead of copying
+  two full volumes to the host first.
+
+### Added
+
+- **`src/metrics/gamma_torch/`** -- the gamma shell method in torch, for 1D, 2D
+  and 3D, supporting `local_gamma`, `max_gamma`, `skip_once_passed`,
+  `lower_percent_dose_cutoff`, `global_normalisation`, `interp_fraction` and
+  `random_subset`. Scalar thresholds only; the sequence form that
+  `pymedphys.gamma` answers with a dict raises `NotImplementedError`.
+  Apache-2.0 rather than the repository's MIT, and free of every `src.` import,
+  because it is written for contribution back to PyMedPhys.
+- **`scripts/gamma_benchmark.py`** plus `src/metrics/gamma_benchmark.py`,
+  `gamma_rungs.py` and `gamma_report.py` -- the deviation ladder and the
+  performance benchmark over the OpenTPS plan corpus at `$ADOTA_GAMMA_CORPUS`.
+  Guide: [`scripts/docs/gamma_benchmark.md`](scripts/docs/gamma_benchmark.md).
+- [`docs/gamma_gpu/`](docs/gamma_gpu/) -- the recorded results: the 40-row
+  deviation ladder, the voxel-level parity table and the performance table,
+  plus a `README.md` reading them.
+- `tests/test_gamma_torch.py` (synthetic parity against `pymedphys.gamma`) and
+  `tests/test_gamma_torch_corpus.py` (the same at plan scale; `integration`,
+  `slow`, `gpu`, and skips when the corpus is absent).
+
+### Measured
+
+Across all 40 (plan x criterion) pairs of the benchmark corpus, on one A40:
+
+| comparison | tolerance | max abs delta | verdict |
+|---|---|---|---|
+| rung 2 (torch-CPU float64) vs rung 1 (pymedphys) | 0.01 pp | 0.000000 pp | PASS |
+| rung 3 (GPU float64) vs rung 2 | 0.001 pp | 0.000000 pp | PASS |
+| rung 4 (GPU float32) vs rung 2 | 0.1 pp | 0.047677 pp | PASS |
+| rung 1 vs rung 0 (recorded) | reported | 0.056401 pp | not gated |
+
+The float64 backend reproduces the pymedphys pass rate exactly on every pair,
+on CPU and GPU alike, with zero gamma = 1 boundary crossings over the 9.3 M
+evaluated voxels whose maps were compared.
+
+Wall time for the whole corpus, same machine, warm-up excluded: pymedphys
+3016.0 s, torch-CPU 1767.9 s, **one A40 159.0 s in float64 (19.0x) and 111.3 s
+in float32**. Peak device memory 2.1 to 2.8 GiB. The 4.13 h in the recorded
+JSONs is provenance from another machine, not a controlled measurement, and no
+speedup is quoted against it.
+
+### Known gaps
+
+- `gamma_torch` requires uniformly spaced axes on both grids, which it checks
+  on entry.
+- Sequence thresholds are not implemented.
+- One deliberate numerical difference from pymedphys: it stores the per-shell
+  minimum relative dose difference in an array shaped like the reference dose,
+  so a float32 dose quantises that minimum. `gamma_torch` keeps it at the
+  working dtype. On float64 input the two agree to 1e-14; on the float32 doses
+  the plan pipeline uses, this accounts for a ~1e-7 difference in gamma, far
+  below the 0.01 pp pass-rate gate. Reproducing it would defeat the float64
+  mode.
+
 ## [1.4.0] - 2026-08-22
 
 Repository alignment with the `an_instructions/` baselines. **No behaviour

@@ -1,7 +1,7 @@
 # gamma_benchmark.py
 
 > **Reproducibility / portability.** The paths in the examples below are the
-> original development environment's locations — replace them with your own. The
+> original development environment's locations -- replace them with your own. The
 > plan corpus is found through `$ADOTA_GAMMA_CORPUS` (default
 > `/scratch/mstryja/opentps_plans`), and every output path is a CLI argument, so
 > nothing is hard-coded to a specific machine. Keep the gamma maps off your home
@@ -28,17 +28,17 @@ each rung is measured against the one above it:
 
 | Rung | What it is | Isolates |
 |---|---|---|
-| 0 | the recorded `gamma_metrics.json` (pymedphys 0.40, Python 3.9) | — |
+| 0 | the recorded `gamma_metrics.json` (pymedphys 0.40, Python 3.9) | n/a |
 | 1 | a CPU re-run on this machine at the current pymedphys | the interpolator |
 | 2 | `gamma_torch` on torch-CPU, float64 | the implementation |
 | 3 | `gamma_torch` on one GPU, float64 | the device |
 | 4 | `gamma_torch` on one GPU, float32 | precision |
 
-Acceptance, on `pass_rate_pct` across every (plan × criterion) pair:
+Acceptance, on `pass_rate_pct` across every (plan x criterion) pair:
 
-* rung 2 vs rung 1 — |Δ| ≤ 0.01 pp (the correctness gate)
-* rung 3 vs rung 2 — |Δ| ≤ 0.001 pp
-* rung 4 vs rung 2 — |Δ| ≤ 0.1 pp
+* rung 2 vs rung 1: max abs delta <= 0.01 pp (the correctness gate)
+* rung 3 vs rung 2: max abs delta <= 0.001 pp
+* rung 4 vs rung 2: max abs delta <= 0.1 pp
 * rung 1 vs rung 0 is **reported, not gated**: that shift belongs to pymedphys.
 
 Rung 3 vs rung 1 is reported as well. Rungs 2 and 3 run the same code at the same
@@ -86,10 +86,10 @@ uv run python scripts/gamma_benchmark.py report \
 
 ### Outputs
 
-* **`<out>.json`** per rung — grid size, the recipe used, the recorded rung-0 pass
+* **`<out>.json`** per rung -- grid size, the recipe used, the recorded rung-0 pass
   rates, and per criterion the pass rate, wall time, evaluated-voxel count,
   interpolated-sample count, peak GPU memory and (optionally) the gamma-map path.
-* **`gamma_gpu_results.md` / `.json`** from `report` — the deviation table, the
+* **`gamma_gpu_results.md` / `.json`** from `report` -- the deviation table, the
   acceptance verdicts, the performance table with totals, and the voxel-level
   table for whichever plans have persisted maps on both sides.
 
@@ -98,16 +98,17 @@ uv run python scripts/gamma_benchmark.py report \
 * The plan corpus at `$ADOTA_GAMMA_CORPUS`. Each plan directory needs `CT.mhd`,
   `PlanPencil.txt`, `config.txt`, `bdl.txt`, `Dose.mhd` (MCsquare), and
   `Dose_ADoTA.mhd` plus `gamma_metrics.json` from a previous pipeline run.
-* A CUDA device for rungs 3 and 4. Peak device memory is roughly 7–11 GiB for a
-  100 M-voxel plan in float64; lower `tile_elements` if that does not fit.
-* Disk for the maps: a 500 × 500 × 402 float32 map is 402 MB, so five criteria on
+* A CUDA device for rungs 3 and 4. Peak device memory is 2.1 to 2.8 GiB for the
+  67.5 M to 100.5 M-voxel plans in this corpus, in float64; lower `tile_elements`
+  if that does not fit.
+* Disk for the maps: a 500 x 500 x 402 float32 map is 402 MB, so five criteria on
   two plans is about 3 GB.
 
 ### Related
 
-* [`src/metrics/gamma_torch/`](../../src/metrics/gamma_torch/) — the kernel.
+* [`src/metrics/gamma_torch/`](../../src/metrics/gamma_torch/) -- the kernel.
   Apache-2.0 and free of adota imports, because it is written for contribution
   back to PyMedPhys.
-* `tests/test_gamma_torch.py` — synthetic parity against `pymedphys.gamma`.
-* `tests/test_gamma_torch_corpus.py` — the same at plan scale; marked
+* `tests/test_gamma_torch.py` -- synthetic parity against `pymedphys.gamma`.
+* `tests/test_gamma_torch_corpus.py` -- the same at plan scale; marked
   `integration`, `slow`, `gpu`, and skips when the corpus is absent.
