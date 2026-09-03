@@ -9,7 +9,11 @@ the same operations as the staged path (it reuses the shared
 :func:`src.loaders.dir_based.prepare_input_from_arrays` /
 :func:`~src.loaders.dir_based.postprocess_prediction` and
 :func:`src.beamlets.accumulation.deposit_crop`), so the accumulated dose is
-numerically identical to the staged pipeline. Only one batch is ever live, so peak
+numerically identical to the staged pipeline. On the ``grid_factor != 1`` path the
+post-processing runs through the batched
+:func:`~src.loaders.dir_based.postprocess_predictions_batched` instead, which is
+bit-identical to the per-spot loop but de-normalizes and reorders on the device and
+returns the batch in one pinned copy. Only one batch is ever live, so peak
 memory is bounded (~one batch + a few CT-sized grids) regardless of spot count --
 which is what the per-beamlet disk round-trip was originally working around.
 
@@ -43,14 +47,36 @@ from src.beamlets.flux import (
 )
 from src.beamlets.isocenter import isocenter_physical
 from src.beamlets.plan_spots import expand_plan_to_spots, group_by_field
-from src.beamlets.rotation import rotate_ct_around_isocenter
+from src.beamlets.rotation import derotation_subgrid, rotate_ct_around_isocenter
 from src.image_processing.rotation import rotate_beamlet_crops_batched
-from src.loaders.dir_based import postprocess_prediction, prepare_input_from_arrays
+from src.loaders.dir_based import (
+    postprocess_prediction,
+    postprocess_predictions_batched,
+    prepare_input_from_arrays,
+    prepare_inputs_from_arrays_batched,
+)
 from src.loaders.plan_directory import PlanDirectory
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["StreamingConfig", "run_streaming_pipeline"]
+
+
+def _nonzero_bounds(grid: np.ndarray):
+    """Inclusive ``((z,y,x) lo, (z,y,x) hi)`` bounds of ``grid``'s non-zero voxels.
+
+    ``None`` when the grid is entirely zero. Tests ``!= 0`` rather than ``> 0``
+    because the model may predict negative dose (clipping happens once, at the end).
+    """
+    nonzero = grid != 0
+    if not nonzero.any():
+        return None
+    axes = ((1, 2), (0, 2), (0, 1))
+    found = [np.where(nonzero.any(axis=ax))[0] for ax in axes]
+    return (
+        tuple(int(f[0]) for f in found),
+        tuple(int(f[-1]) for f in found),
+    )
 
 
 @dataclass
@@ -73,6 +99,20 @@ class StreamingConfig:
     path byte-identical to the staged pipeline; ``True`` is the optimized ADoTA
     reinterpretation used for the fair DoTA-vs-ADoTA plan timing (the counterpart
     to the batched GPU BEV rotation)."""
+    flux_batched_dtype: str = "float64"
+    """Compute dtype of the batched flux (``flux_batched`` only). ``"float64"``
+    (default) reproduces the per-spot :func:`flux_projection_gpu` exactly -- it is
+    the same float64 math, only evaluated for the whole batch at once -- so the
+    batched path stays numerically equivalent to the production one at a few
+    tenths of a second per plan. ``"float32"`` is ~2x faster on the flux alone and
+    agrees to ~5e-7 relative; use it only where that has been validated."""
+    batched_prep: bool = False
+    """Build the whole batch's model input in one
+    :func:`~src.loaders.dir_based.prepare_inputs_from_arrays_batched` call instead
+    of per-spot. The ``B`` CT crops are staged into one contiguous pinned block and
+    copied host-to-device **once**, and when ``flux_batched`` is on the flux tensor
+    is consumed straight off the device, so the flux never makes a device -> host
+    -> device round trip. ``False`` (default) keeps the per-spot loop."""
     flux_device: str = "cuda"
     normalize_flux: bool = True
     downsampling_method: str = "interpolation"
@@ -145,11 +185,14 @@ def run_streaming_pipeline(
     grouped = group_by_field(spots)
 
     logger.info(
-        "Streaming %d spots across %d field(s) (batch=%d, flux_on_gpu=%s) on %s",
+        "Streaming %d spots across %d field(s) (batch=%d, flux_on_gpu=%s, "
+        "flux_batched=%s, batched_prep=%s) on %s",
         len(spots),
         len(grouped),
         config.batch_size,
         config.flux_on_gpu,
+        config.flux_batched,
+        config.batched_prep,
         device,
     )
 
@@ -167,6 +210,18 @@ def run_streaming_pipeline(
     use_fp16 = config.precision == "fp16" and device.type == "cuda"
     if config.precision not in ("fp32", "fp16"):
         raise ValueError(f"precision must be 'fp32' or 'fp16', got {config.precision!r}")
+
+    # Batched host<->device staging. The flux only stays resident when it was
+    # actually built on the device in one call; otherwise the batched prep still
+    # helps (one pinned CT copy instead of B pageable ones) but takes host arrays.
+    if config.flux_batched_dtype not in ("float32", "float64"):
+        raise ValueError(
+            "flux_batched_dtype must be 'float32' or 'float64', got "
+            f"{config.flux_batched_dtype!r}"
+        )
+    flux_dtype = getattr(torch, config.flux_batched_dtype)
+    batched_flux = bool(config.flux_on_gpu and config.flux_batched)
+    keep_flux_on_device = bool(batched_flux and config.batched_prep)
 
     model.eval()
     dota_mode = config.reinterpretation_mode == "dota_rotation"
@@ -190,6 +245,13 @@ def run_streaming_pipeline(
         )
     }
     n_spots = 0
+    # Reused pinned host buffer for the batched post-processing copy (gf != 1 on
+    # CUDA); allocated on the first batch, once the prediction's shape is known.
+    post_buffer: Optional[torch.Tensor] = None
+    # Reused pinned host staging buffer for the batched CT host->device copy
+    # (``batched_prep`` on CUDA); allocated on the first batch, once the crop
+    # shape is known.
+    prep_buffer: Optional[torch.Tensor] = None
     started = perf_counter()
 
     for beam, field_spots in grouped.items():
@@ -237,9 +299,14 @@ def run_streaming_pipeline(
                 deposits.append((crp, float(sim_log["relative_weight"])))
 
                 if not dota_mode:
+                    # Charged to "flux": resolving the spot sigmas is part of
+                    # building the flux channel, and leaving it untimed hid ~18%
+                    # of the stream stage from the timing table.
+                    sig_t = perf_counter()
                     sigmas = flux_spatial_spread(bdl, energy)
                     re_proj = [entrance[1], entrance[2], entrance[0]]
                     flux_params.append((re_proj, beamlet_angles, sigmas))
+                    timing["flux"] += perf_counter() - sig_t
 
             # ADoTA reinterpretation: analytical flux (the charged cost). Batched
             # (one GPU call) when flux_batched, else per-spot; both feed the model
@@ -247,13 +314,16 @@ def run_streaming_pipeline(
             if not dota_mode:
                 shape = crops[0].shape
                 flux_t = perf_counter()
-                if config.flux_on_gpu and config.flux_batched:
-                    flux_arr = flux_projection_gpu_batched(
+                if batched_flux:
+                    flux_batch = flux_projection_gpu_batched(
                         [p[0] for p in flux_params], [p[1] for p in flux_params],
                         [p[2] for p in flux_params], shape, spacing=flux_spacing,
-                        device=config.flux_device, return_numpy=True,
+                        device=config.flux_device, dtype=flux_dtype,
+                        return_numpy=not keep_flux_on_device,
                     )
-                    flux_list = list(flux_arr)
+                    # Handed to the batched prep as a device tensor (no host round
+                    # trip); only materialised on the host for the per-spot path.
+                    flux_list = flux_batch if keep_flux_on_device else list(flux_batch)
                 elif config.flux_on_gpu:
                     flux_list = [
                         flux_projection_gpu(p[0], p[1], p[2], shape,
@@ -283,20 +353,40 @@ def run_streaming_pipeline(
                 flux_list = [np.zeros_like(c) for c in model_cts]
                 normalize_flux = False
 
-            for cropped_ct, flux, energy in zip(model_cts, flux_list, energy_list):
+            if config.batched_prep:
+                # One contiguous pinned host->device copy for the CT channel and
+                # (with flux_batched) zero copies for the flux, instead of 2*B
+                # per-spot transfers. Numerically the same as the loop below.
                 prep_t = perf_counter()
-                x, e = prepare_input_from_arrays(
-                    cropped_ct, flux, energy, scale=config.scale,
+                if prep_buffer is None and device.type == "cuda":
+                    prep_buffer = torch.empty(
+                        (config.batch_size, *model_cts[0].shape),
+                        dtype=torch.float32, pin_memory=True,
+                    )
+                x_batch, e_batch = prepare_inputs_from_arrays_batched(
+                    model_cts, flux_list, energy_list, scale=config.scale,
                     normalize_flux=normalize_flux,
                     downsampling_method=config.downsampling_method, device=device,
-                    resize=(gf == 1),
+                    resize=(gf == 1), ct_buffer=prep_buffer,
                 )
+                if device.type == "cuda":
+                    torch.cuda.synchronize(device)
                 timing["prep"] += perf_counter() - prep_t
-                inputs.append(x)
-                energies.append(e)
+            else:
+                for cropped_ct, flux, energy in zip(model_cts, flux_list, energy_list):
+                    prep_t = perf_counter()
+                    x, e = prepare_input_from_arrays(
+                        cropped_ct, flux, energy, scale=config.scale,
+                        normalize_flux=normalize_flux,
+                        downsampling_method=config.downsampling_method, device=device,
+                        resize=(gf == 1),
+                    )
+                    timing["prep"] += perf_counter() - prep_t
+                    inputs.append(x)
+                    energies.append(e)
 
-            x_batch = torch.stack(inputs).to(device)
-            e_batch = torch.stack(energies).to(device)
+                x_batch = torch.stack(inputs).to(device)
+                e_batch = torch.stack(energies).to(device)
             if device.type == "cuda":
                 torch.cuda.synchronize(device)
             fwd_t = perf_counter()
@@ -312,16 +402,39 @@ def run_streaming_pipeline(
             timing["forward"] += perf_counter() - fwd_t
 
             dose_crops = []
-            for i in range(len(deposits)):
+            if gf == 1:
+                # 1mm path: the per-beamlet trilinear up-sample to (320,60,60) is
+                # per-spot and its batch would not fit a pinned buffer, so this
+                # stays the original loop (and stays byte-identical).
+                for i in range(len(deposits)):
+                    post_t = perf_counter()
+                    dose_pred = postprocess_prediction(
+                        pred[i : i + 1], config.scale, upsample=True
+                    )
+                    # (1,1,D,H,W) -> (H,W,D) = (z,y,x) crop, as accumulation does.
+                    dose_crop = np.moveaxis(np.squeeze(dose_pred), 0, -1)
+                    timing["post"] += perf_counter() - post_t
+                    dose_crops.append(dose_crop)
+            else:
+                # Field-grid path: de-normalize and reorder to (z,y,x) on the
+                # device, then bring the whole batch back in one copy into a
+                # reused pinned buffer. Bit-identical to the loop above, but it
+                # replaces B pageable copies with one pinned copy and hands the
+                # deposit a contiguous crop instead of a strided moveaxis view.
                 post_t = perf_counter()
-                dose_pred = postprocess_prediction(
-                    pred[i : i + 1], config.scale, upsample=(gf == 1)
+                if post_buffer is None and device.type == "cuda":
+                    post_buffer = torch.empty(
+                        (config.batch_size, pred.shape[3], pred.shape[4], pred.shape[2]),
+                        dtype=torch.float32,
+                        pin_memory=True,
+                    )
+                dose_batch = postprocess_predictions_batched(
+                    pred, config.scale, out=post_buffer
                 )
-                # (1,1,D,H,W) -> (H,W,D) = (z,y,x) crop, as accumulation does. At
-                # gf=2 the prediction stays (160,30,30) -> (30,30,160).
-                dose_crop = np.moveaxis(np.squeeze(dose_pred), 0, -1)
+                # Views into ``post_buffer``; consumed by the deposit below, before
+                # the next batch overwrites them.
+                dose_crops = list(dose_batch)
                 timing["post"] += perf_counter() - post_t
-                dose_crops.append(dose_crop)
 
             # DoTA reinterpretation (2/2): batched BEV dose -> field-frame (GPU).
             if dota_mode:
@@ -345,10 +458,24 @@ def run_streaming_pipeline(
         rotated_image.SetOrigin(rotated_ct.GetOrigin())
         rotated_image.SetSpacing(rotated_ct.GetSpacing())
         rotated_image.SetDirection(ct.GetDirection())
-        derotated = rotate_ct_around_isocenter(
-            rotated_image, -angle, iso_phys, reference=ct, default_value=0.0
-        )
-        total += sitk.GetArrayFromImage(derotated)
+        # Only the part of the CT grid that can sample a non-zero deposit voxel is
+        # de-rotated; everywhere else all eight trilinear neighbours are zero, so
+        # the result is exactly zero and adding it is a no-op. A plan's dose
+        # typically occupies about a tenth of the CT, so both the resample and the
+        # accumulation shrink with it. Nothing is dropped; the values inside the
+        # sub-grid can differ from a full-grid resample by an ulp or two from the
+        # resampler's coordinate arithmetic (see :func:`derotation_subgrid`).
+        bounds = _nonzero_bounds(deposit_grid)
+        if bounds is not None:
+            sub_reference, sub_slices = derotation_subgrid(
+                rotated_image, bounds, -angle, iso_phys, ct
+            )
+            if sub_reference is not None:
+                derotated = rotate_ct_around_isocenter(
+                    rotated_image, -angle, iso_phys,
+                    reference=sub_reference, default_value=0.0,
+                )
+                total[sub_slices] += sitk.GetArrayFromImage(derotated)
         timing["derotate"] += perf_counter() - der_t
         logger.info("Field beam=%d: streamed %d spots", beam, len(field_spots))
 
@@ -371,6 +498,9 @@ def run_streaming_pipeline(
         "grid_factor": gf,
         "grid_mode": "1mm" if gf == 1 else f"{gf}mm_field",
         "reinterpretation_mode": config.reinterpretation_mode,
+        "batch_size": int(config.batch_size),
+        "flux_batched": bool(config.flux_batched),
+        "batched_prep": bool(config.batched_prep),
         "precision": "fp16" if use_fp16 else "fp32",
         "calibration_factor": float(config.calibration_factor),
         "dose_max": float(total.max()),

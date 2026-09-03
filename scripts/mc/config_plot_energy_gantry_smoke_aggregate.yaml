@@ -1,0 +1,41 @@
+# GPR panels for the energy x gantry smoke test (run after generation).
+#   uv run python scripts/mc/plot_angle_robustness.py \
+#       --config scripts/mc/config_plot_energy_gantry_smoke_aggregate.yaml
+#
+# The aggregate companion to config_plot_energy_gantry_smoke.yaml: each cell is the
+# mean GPR over a site's patients AND gantries, so this writes one panel per
+# (anatomy, energy) -- 4 panels, named `{site}_aggregate{n}_e{E}_{criterion}`. It
+# re-renders from the per-cell grids the per-patient pass saved (`grids_glob`), so it
+# costs no GPU and no gamma time, and shares the output dir so the aggregate panels
+# land next to the per-patient ones.
+
+model:
+  name: DoTA_v3_grid_search_v11
+  fname: best_model.pth
+  device_index: 0
+
+gamma_criteria:
+  - {dose: 2, dist: 2, cutoff: 10}
+  - {dose: 1, dist: 3, cutoff: 0.1}
+
+grid_n: 3                  # must match the generation lattice
+theta_range: [-2.0, 2.0]
+mode: aggregate            # per-cell mean over a site's patients AND gantries
+
+# Several dirs share (site, patient, energy) and differ only by field angle, so the
+# gantry has to be part of every panel filename.
+distinguish_gantry: true
+
+cmap: viridis
+emit:
+  bare: true
+  with_colorbar: true
+  standalone_colorbar: true
+
+render_examples: false     # already rendered by the per-patient pass
+n_examples: 1              # 5 beamlets per panel; 1 worst + 1 best is enough
+example_criterion: g2_2_10
+example_beamlet_shape: true
+
+grids_glob: /scratch/mstryja/DoTA_dataset_v2/energy_gantry_smoke_figures/grids/*_grids.npz
+output_dir: /scratch/mstryja/DoTA_dataset_v2/energy_gantry_smoke_figures

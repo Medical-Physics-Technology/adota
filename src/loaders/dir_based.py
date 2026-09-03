@@ -16,7 +16,7 @@ import json
 import logging
 import os
 from time import perf_counter
-from typing import Optional, Tuple
+from typing import Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -223,6 +223,137 @@ def prepare_input_from_arrays(
     return x, initial_energy
 
 
+def _stage_batch(
+    crops,
+    device: Optional["torch.device"] = None,
+    buffer: Optional["torch.Tensor"] = None,
+) -> torch.Tensor:
+    """Stack per-spot crops into one contiguous ``(B, z, y, x)`` device tensor.
+
+    ``crops`` may already be a device tensor (the batched GPU flux hands one over
+    directly, so no host round-trip happens at all), a stacked NumPy array, or a
+    list of per-spot NumPy crops. In the list case the crops are stacked into a
+    single contiguous block and moved to ``device`` in **one** copy instead of
+    ``B`` separate ones; passing a pinned ``buffer`` (shape ``(>= B, z, y, x)``,
+    ``pin_memory=True``) keeps that copy off the pageable-allocation path.
+
+    Args:
+        crops: Device tensor, ``(B, z, y, x)`` array, or a list of ``(z, y, x)``
+            crops (all the same shape).
+        device: Destination torch device (``None`` = CPU).
+        buffer: Optional pinned host staging tensor reused across batches. It is
+            only a transfer staging area -- the returned tensor is the device
+            copy, so the buffer may be overwritten by the next batch.
+
+    Returns:
+        A ``(B, z, y, x)`` float32 tensor on ``device``.
+    """
+    if isinstance(crops, torch.Tensor):
+        return crops.to(device=device, dtype=torch.float32)
+    if isinstance(crops, np.ndarray) and crops.ndim == 4:
+        return torch.as_tensor(np.ascontiguousarray(crops, dtype=np.float32)).to(
+            device=device, non_blocking=True
+        )
+
+    n_batch = len(crops)
+    if buffer is not None and buffer.shape[0] >= n_batch:
+        staged = buffer[:n_batch]
+        np.stack([np.asarray(c, dtype=np.float32) for c in crops], axis=0,
+                 out=staged.numpy())
+    else:
+        staged = torch.from_numpy(
+            np.stack([np.asarray(c, dtype=np.float32) for c in crops], axis=0)
+        )
+    return staged.to(device=device, non_blocking=True)
+
+
+def prepare_inputs_from_arrays_batched(
+    ct_crops,
+    flux_crops,
+    initial_energies_mev: "Sequence[float]",
+    scale: dict = None,
+    normalize_flux: bool = True,
+    downsampling_method: str = "interpolation",
+    device: Optional["torch.device"] = None,
+    resize: bool = True,
+    ct_buffer: Optional["torch.Tensor"] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Batched twin of :func:`prepare_input_from_arrays` for a whole batch at once.
+
+    Numerically equivalent to calling :func:`prepare_input_from_arrays` per spot
+    and ``torch.stack``-ing the results -- every step here is the same elementwise
+    op or the same per-sample reduction, just applied over the batch axis -- but it
+    replaces the per-spot work with three batched steps:
+
+    1. the ``B`` CT crops are staged into one contiguous (optionally pinned) block
+       and moved to ``device`` in a **single** host-to-device copy;
+    2. ``flux_crops`` may be handed in as a tensor **already on the device** (what
+       :func:`~src.beamlets.flux.flux_projection_gpu_batched` returns), so the
+       flux channel never makes a device -> host -> device round trip;
+    3. normalization, the permute to ``(D, H, W)`` and the trilinear resize run
+       once over the batch instead of ``B`` times.
+
+    Args:
+        ct_crops: ``B`` BEV CT crops ``(z, y, x)`` in HU -- a list, a stacked
+            ``(B, z, y, x)`` array, or a device tensor.
+        flux_crops: The matching flux projections, same accepted forms. A device
+            tensor is used in place (no host copy).
+        initial_energies_mev: ``(B,)`` beam energies in MeV.
+        scale: Min-max scaling dict (defaults to :data:`DEFAULT_SCALE`).
+        normalize_flux: Min-max normalize the flux channel **per crop** (the
+            per-sample reduction matches the per-spot path exactly).
+        downsampling_method: ``"interpolation"`` (trilinear) or ``"avg_pooling"``.
+        device: Torch device for the batch.
+        resize: As in :func:`prepare_input_from_arrays` -- ``True`` on the 1mm
+            (``grid_factor=1``) path resizes to ``(160, 30, 30)``; ``False`` on the
+            2mm path skips the resize-to-self.
+        ct_buffer: Optional pinned host staging tensor ``(>= B, z, y, x)`` reused
+            across batches for the CT copy.
+
+    Returns:
+        ``(x, energies)`` where ``x`` is ``(B, 2, 160, 30, 30)`` and ``energies``
+        is ``(B, 1)``, both on ``device``.
+    """
+    scale = DEFAULT_SCALE if scale is None else scale
+
+    ct_grid = _stage_batch(ct_crops, device=device, buffer=ct_buffer)
+    flux_grid = _stage_batch(flux_crops, device=device)
+
+    ct_grid = (ct_grid - scale["min_ct"]) / (scale["max_ct"] - scale["min_ct"])
+
+    # (B, z, y, x) -> (B, 1, D, H, W); the per-spot path's permute(2, 0, 1) plus
+    # the channel axis, done over the batch.
+    ct_grid = ct_grid.permute(0, 3, 1, 2).unsqueeze(1)
+    flux_grid = flux_grid.permute(0, 3, 1, 2).unsqueeze(1)
+
+    if normalize_flux:
+        # Per-sample min/max: min and max are exact reductions, so reducing over
+        # the batch axis in one call matches the per-crop ``.min()`` / ``.max()``.
+        dims = (1, 2, 3, 4)
+        lo = torch.amin(flux_grid, dim=dims, keepdim=True)
+        hi = torch.amax(flux_grid, dim=dims, keepdim=True)
+        flux_grid = (flux_grid - lo) / (hi - lo)
+
+    if downsampling_method == "avg_pooling":
+        ct_grid = F.avg_pool3d(ct_grid, kernel_size=2, stride=2)
+        flux_grid = F.avg_pool3d(flux_grid, kernel_size=2, stride=2)
+
+    if downsampling_method == "interpolation" and resize:
+        ct_grid = F.interpolate(
+            ct_grid, size=(160, 30, 30), mode="trilinear", align_corners=False
+        )
+        flux_grid = F.interpolate(
+            flux_grid, size=(160, 30, 30), mode="trilinear", align_corners=False
+        )
+
+    x = torch.cat((ct_grid, flux_grid), dim=1)
+    e = (
+        np.asarray(initial_energies_mev, dtype=np.float64) - scale["min_energy"]
+    ) / (scale["max_energy"] - scale["min_energy"])
+    energies = torch.as_tensor(e, dtype=torch.float32).unsqueeze(1).to(device)
+    return x, energies
+
+
 def get_single_record_no_gt(
     id: str,
     storage_path: str,
@@ -314,6 +445,57 @@ def postprocess_prediction(
         timing["upsample"] = timing.get("upsample", 0.0) + (perf_counter() - interp_t)
     pred_upsampled_np = pred_upsampled.detach().cpu().numpy()
     return inverse_minmax(pred_upsampled_np, scale["min_ds"], scale["max_ds"])
+
+
+def postprocess_predictions_batched(
+    pred: torch.Tensor,
+    scale: dict = None,
+    out: Optional["torch.Tensor"] = None,
+) -> np.ndarray:
+    """De-normalize a whole batch on-device and bring it back in one copy.
+
+    The batched twin of :func:`postprocess_prediction` for the ``grid_factor != 1``
+    path (no up-sample), used by :mod:`src.beamlets.streaming`. It replaces the
+    per-spot loop of "device-to-host copy, de-normalize on the host, reorder the
+    axes with a non-contiguous ``moveaxis`` view" with three batched steps:
+
+    1. permute ``(B, 1, D, H, W)`` to ``(B, H, W, D) = (B, z, y, x)`` and make it
+       contiguous **on the device**, which is the layout
+       :func:`src.beamlets.accumulation.deposit_crop` reads;
+    2. de-normalize on the device (one fused multiply-add over the batch);
+    3. one device-to-host copy for the whole batch.
+
+    The result is bit-identical to calling :func:`postprocess_prediction` with
+    ``upsample=False`` per sample and applying ``np.moveaxis(np.squeeze(...), 0,
+    -1)``: the permute is a pure reindex and the de-normalization is the same
+    float32 multiply-add (numpy keeps float32 under NEP 50, so both sides round
+    identically). It is faster for two reasons -- one copy instead of ``B``, and a
+    contiguous crop for the deposit instead of a strided view.
+
+    Args:
+        pred: Model output ``(B, 1, 160, 30, 30)`` on any device.
+        scale: Min-max scaling dict (defaults to :data:`DEFAULT_SCALE`).
+        out: Optional pre-allocated host tensor of shape ``(>= B, H, W, D)`` to
+            receive the batch. Pin it (``pin_memory=True``) to keep the copy off
+            the pageable-allocation path, which is what makes the large-batch cost
+            scale linearly. **The returned array is then a view into ``out`` and is
+            overwritten by the next call**, so consume it before the next batch.
+
+    Returns:
+        ``(B, z, y, x)`` contiguous de-normalized dose as a NumPy array.
+    """
+    scale = DEFAULT_SCALE if scale is None else scale
+    # (B, 1, D, H, W) -> (B, H, W, D) = (B, z, y, x), the deposit's layout.
+    dose = pred.detach().squeeze(1).permute(0, 2, 3, 1).contiguous()
+    span = np.float32(scale["max_ds"] - scale["min_ds"])
+    dose = dose * span + np.float32(scale["min_ds"])
+    if out is None:
+        return dose.cpu().numpy()
+    destination = out[: dose.shape[0]]
+    destination.copy_(dose, non_blocking=True)
+    if dose.is_cuda:
+        torch.cuda.synchronize(dose.device)
+    return destination.numpy()
 
 
 def save_prediction(

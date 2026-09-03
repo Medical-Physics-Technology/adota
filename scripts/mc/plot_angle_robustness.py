@@ -35,6 +35,8 @@ from src.mc_generation.angle_robustness_analysis import (
     Panel,
     aggregate_panels,
     infer_dir,
+    load_panel_grids,
+    panel_name,
     render_beamlet_examples,
     save_panel_grids,
     score_dir_grids,
@@ -49,8 +51,7 @@ app = typer.Typer(help="Beamlet-angle robustness GPR grid panels.")
 
 
 def _panel_stem(p: Panel, crit: GammaCriterion) -> str:
-    who = p.patient if p.patient is not None else f"aggregate{p.n_patients}"
-    return f"{p.anatomy}_{who}_e{int(round(p.energy))}_{crit.key}"
+    return f"{panel_name(p)}_{crit.key}"
 
 
 @app.command()
@@ -74,17 +75,22 @@ def main(
     out_dir = Path(cfg["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # ``grids_glob`` re-renders from grids a previous run saved: the per-cell GPRs
+    # are the whole result of inference + gamma, so a different scale, criterion
+    # subset or `mode` costs no GPU and no gamma time.
+    grids_glob = cfg.get("grids_glob")
     inputs: List[str] = list(cfg.get("inputs", []))
     if cfg.get("input_glob"):
         inputs += sorted(glob(cfg["input_glob"]))
-    if not inputs:
-        raise ValueError("config provides no 'inputs' or 'input_glob'")
-    logger.info("mode=%s | %d experiment dirs | criteria=%s", run_mode, len(inputs),
+    if not inputs and not grids_glob:
+        raise ValueError("config provides no 'inputs', 'input_glob' or 'grids_glob'")
+    logger.info("mode=%s | %s | criteria=%s", run_mode,
+                f"{len(inputs)} experiment dirs" if not grids_glob else f"grids {grids_glob}",
                 [c.key for c in criteria])
 
     # Stage 1a: inference (GPU) for all dirs, then release the model + CUDA so the
     # gamma process pool forks a CUDA-idle parent.
-    if not no_inference:
+    if not no_inference and not grids_glob:
         import torch
         m = cfg["model"]
         device = resolve_device(int(m.get("device_index", 0)))
@@ -92,7 +98,12 @@ def main(
                            ROOT / "models" / m["name"] / "hyperparams.json", device)
         for d in inputs:
             logger.info("inference %s", Path(d).name)
-            infer_dir(Path(d), model, device)
+            try:
+                infer_dir(Path(d), model, device)
+            except FileNotFoundError:
+                # every beamlet of this (patient, energy, gantry) block was dropped
+                # by generation QA -- nothing to infer, and nothing to score later.
+                logger.warning("  no complete beamlets in %s -- skipped", Path(d).name)
         del model
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -111,15 +122,45 @@ def main(
         return p
 
     # Stage 1b: parallel gamma scoring (CPU pool) for all dirs.
-    dir_panels: List[Panel] = []
-    for d in inputs:
-        logger.info("scoring %s", Path(d).name)
-        panel = score_dir_grids(Path(d), criteria, gn)
-        save_panel_grids(panel, GRIDS_DIR)  # persist per-cell grids (cheap re-render later)
-        dir_panels.append(panel)
+    # One panel per input dir. ``distinguish_gantry`` puts the field angle in every
+    # panel filename -- required when a run holds several gantries per (patient,
+    # energy), and off by default so single-gantry runs keep their historical names.
+    distinguish_gantry = bool(cfg.get("distinguish_gantry", False))
+    scored: List[tuple] = []            # (dir, panel), skipping dirs QA emptied
+    if grids_glob:
+        paths = sorted(glob(grids_glob))
+        if not paths:
+            raise FileNotFoundError(f"grids_glob matched nothing: {grids_glob}")
+        dir_panels = [load_panel_grids(Path(g)) for g in paths]
+        logger.info("loaded %d saved grids (no inference, no gamma)", len(dir_panels))
+    else:
+        for d in inputs:
+            logger.info("scoring %s", Path(d).name)
+            try:
+                panel = score_dir_grids(Path(d), criteria, gn)
+            except FileNotFoundError:
+                logger.warning("  no scorable beamlets in %s -- skipped", Path(d).name)
+                continue
+            scored.append((d, panel))
+        if not scored:
+            raise FileNotFoundError(f"no scorable beamlets in any of the {len(inputs)} input dirs")
+        dir_panels = [p for _, p in scored]
+    if not distinguish_gantry:
+        for p in dir_panels:
+            p.gantry = None
+    names = [panel_name(p) for p in dir_panels]
+    if len(set(names)) != len(names):
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        raise ValueError(
+            f"panel name collision for {dupes}: several input dirs share "
+            "(site, patient, energy). Set 'distinguish_gantry: true' if they differ "
+            "by field angle, otherwise narrow 'input_glob'.")
+    if not grids_glob:                  # don't rewrite the grids we just loaded
+        for panel in dir_panels:
+            save_panel_grids(panel, GRIDS_DIR)  # per-cell grids (cheap re-render later)
 
     # Stage 1c: best/worst beamlet publication figures (reload the model; GPU).
-    if cfg.get("render_examples", True):
+    if cfg.get("render_examples", True) and not grids_glob:
         import torch
         n_ex = int(cfg.get("n_examples", 3))
         ex_key = cfg.get("example_criterion", criteria[0].key)
@@ -128,11 +169,12 @@ def main(
         device2 = resolve_device(int(mm.get("device_index", 0)))
         model2 = load_model(ROOT / "models" / mm["name"] / mm.get("fname", "best_model.pth"),
                             ROOT / "models" / mm["name"] / "hyperparams.json", device2)
-        for d, panel in zip(inputs, dir_panels):
+        for d, panel in scored:
             logger.info("examples (%d worst + %d best) for %s", n_ex, n_ex, Path(d).name)
             render_beamlet_examples(Path(d), panel.grids[crit.key], crit, model2, device2,
                                     dict(DEFAULT_SCALE), _sub(EX_DIR, panel.anatomy), n=n_ex,
-                                    beamlet_shape=bool(cfg.get("example_beamlet_shape", True)))
+                                    beamlet_shape=bool(cfg.get("example_beamlet_shape", True)),
+                                    gantry=panel.gantry)
         del model2
         if torch.cuda.is_available():
             torch.cuda.empty_cache()

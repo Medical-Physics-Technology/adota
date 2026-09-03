@@ -19,6 +19,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from src.beamlets.inference import InferenceConfig, discover_spot_ids, run_inference
+from src.mc_generation.sweep import angle_tag, energy_tag
 from src.metrics.gamma_pass_rate import gamma_index
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,20 @@ class Panel:
     patient: Optional[str]                # None for aggregated panels
     n_patients: int
     grids: Dict[str, np.ndarray]          # criterion.key -> (n, n) GPR grid
+    gantry: Optional[float] = None        # field angle; None = not distinguished
+
+
+def panel_name(p: Panel) -> str:
+    """Identity of a panel in filenames: site, patient (or aggregate), energy, gantry.
+
+    The ``_g{angle}`` segment appears only when the panel carries a gantry, so
+    single-gantry runs keep the historical ``{site}_{patient}_e{E}`` names.
+    """
+    who = p.patient if p.patient is not None else f"aggregate{p.n_patients}"
+    name = f"{p.anatomy}_{who}_e{energy_tag(p.energy)}"
+    if p.gantry is not None:
+        name += f"_g{angle_tag(p.gantry)}"
+    return name
 
 
 def _load_pred_as_mc_layout(pred_path: Path, mc_shape) -> np.ndarray:
@@ -113,7 +128,8 @@ def _score_stem(task: tuple) -> tuple:
             result[c.key] = float(gpr[0]) * 100.0
         except Exception:
             result[c.key] = float("nan")
-    return ix, iy, result, (sr["anatomy"], float(sr["initial_energy"]), sr["patient_id"])
+    return ix, iy, result, (sr["anatomy"], float(sr["initial_energy"]), sr["patient_id"],
+                            float(sr.get("gantry_angle", float("nan"))))
 
 
 def infer_dir(exp_dir: Path, model, device, batch_size: int = 56) -> None:
@@ -152,7 +168,8 @@ def score_dir_grids(
     if meta is None:
         raise FileNotFoundError(f"no usable beamlets in {exp_dir}")
     logger.info("  %s: %d beamlets scored (%d workers)", exp_dir.name, n_used, workers)
-    return Panel(anatomy=meta[0], energy=meta[1], patient=meta[2], n_patients=1, grids=grids)
+    return Panel(anatomy=meta[0], energy=meta[1], patient=meta[2], n_patients=1, grids=grids,
+                 gantry=meta[3] if np.isfinite(meta[3]) else None)
 
 
 def aggregate_panels(panels: List[Panel]) -> Panel:
@@ -164,8 +181,12 @@ def aggregate_panels(panels: List[Panel]) -> Panel:
         stack = np.stack([p.grids[k] for p in panels], axis=0)
         with np.errstate(invalid="ignore"):
             grids[k] = np.nanmean(stack, axis=0)
+    # A gantry survives aggregation only if every panel carries the same one; an
+    # untagged panel counts as its own value, so a mixed set drops the tag.
+    gantries = {None if p.gantry is None else round(p.gantry, 1) for p in panels}
     return Panel(anatomy=panels[0].anatomy, energy=panels[0].energy, patient=None,
-                 n_patients=len(panels), grids=grids)
+                 n_patients=len(panels), grids=grids,
+                 gantry=gantries.pop() if len(gantries) == 1 else None)
 
 
 def extreme_indices(grid: np.ndarray, n: int = 3):
@@ -181,16 +202,39 @@ def extreme_indices(grid: np.ndarray, n: int = 3):
 
 def save_panel_grids(panel: "Panel", out_dir: Path) -> Path:
     """Persist a panel's per-cell GPR grids so examples can be re-rendered cheaply."""
-    who = panel.patient if panel.patient is not None else f"aggregate{panel.n_patients}"
-    path = Path(out_dir) / f"{panel.anatomy}_{who}_e{int(round(panel.energy))}_grids.npz"
-    np.savez(path, energy=panel.energy, anatomy=panel.anatomy,
-             patient=str(panel.patient), **panel.grids)
+    path = Path(out_dir) / f"{panel_name(panel)}_grids.npz"
+    np.savez(path, energy=panel.energy, anatomy=panel.anatomy, patient=str(panel.patient),
+             n_patients=panel.n_patients,
+             gantry=np.nan if panel.gantry is None else panel.gantry, **panel.grids)
     return path
+
+
+_META_KEYS = ("energy", "anatomy", "patient", "n_patients", "gantry")
+
+
+def load_panel_grids(path: Path) -> "Panel":
+    """Rebuild a :class:`Panel` from a :func:`save_panel_grids` npz.
+
+    The per-cell GPRs are what inference and gamma produce, so re-rendering panels
+    from the saved grids -- a different colour scale, criterion subset, or
+    ``mode: aggregate`` -- is exact and costs no GPU or gamma time.
+    """
+    z = np.load(path, allow_pickle=False)
+    patient = str(z["patient"])
+    gantry = float(z["gantry"]) if "gantry" in z.files else float("nan")
+    return Panel(
+        anatomy=str(z["anatomy"]), energy=float(z["energy"]),
+        patient=None if patient in ("None", "") else patient,
+        n_patients=int(z["n_patients"]) if "n_patients" in z.files else 1,
+        grids={k: z[k] for k in z.files if k not in _META_KEYS},
+        gantry=None if not np.isfinite(gantry) else gantry,
+    )
 
 
 def render_beamlet_examples(
     exp_dir: Path, grid: np.ndarray, crit: GammaCriterion, model, device, scale: dict,
     out_dir: Path, n: int = 3, beamlet_shape: bool = True,
+    gantry: Optional[float] = None,
 ) -> List[Path]:
     """Render publication_figure for the ``n`` worst and ``n`` best beamlets (by GPR)."""
     import torch
@@ -223,7 +267,8 @@ def render_beamlet_examples(
             mape = float(calculate_pure_mape(gt[mask], pred[mask])) if mask.any() else float("nan")
             sr = json.loads((exp_dir / f"{stem}_sim_res.json").read_text())
             e_mev = float(sr["initial_energy"])
-            fname = (f"{sr['anatomy']}_{sr['patient_id']}_e{int(round(e_mev))}_{crit.key}"
+            gtag = "" if gantry is None else f"_g{angle_tag(gantry)}"
+            fname = (f"{sr['anatomy']}_{sr['patient_id']}_e{energy_tag(e_mev)}{gtag}_{crit.key}"
                      f"_{rank_label}{r}_{stem}_gpr{gpr:.1f}")
             paths = publication_figure(
                 x.cpu().numpy(), e_mev, gt, pred, str(Path(out_dir) / fname),

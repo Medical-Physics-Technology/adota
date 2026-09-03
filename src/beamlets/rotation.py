@@ -27,7 +27,122 @@ from src.beamlets import AIR_HU
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["expanded_reference_grid", "rotate_ct_around_isocenter"]
+__all__ = [
+    "derotation_subgrid",
+    "expanded_reference_grid",
+    "rotate_ct_around_isocenter",
+]
+
+
+def _euler_z_transform(
+    angle_deg: float, isocenter_physical: Sequence[float]
+) -> sitk.Euler3DTransform:
+    """The axial-plane resample transform used by :func:`rotate_ct_around_isocenter`.
+
+    The resample transform maps *output* points to *input* points, so the image
+    content rotates by the opposite sign of the transform's rotation; negating here
+    makes a positive ``angle_deg`` a counter-clockwise content rotation.
+    """
+    transform = sitk.Euler3DTransform()
+    transform.SetCenter([float(c) for c in isocenter_physical])
+    transform.SetRotation(0.0, 0.0, math.radians(-angle_deg))
+    return transform
+
+
+def derotation_subgrid(
+    source: sitk.Image,
+    source_bounds_zyx: tuple,
+    angle_deg: float,
+    isocenter_physical: Sequence[float],
+    reference: sitk.Image,
+    margin: int = 1,
+):
+    """The part of ``reference`` that can sample a given region of ``source``.
+
+    Resampling ``source`` onto ``reference`` is wasted work wherever the result is
+    known to be zero. When the source is a dose deposit grid its non-zero support
+    is a small fraction of the grid (roughly a tenth for a typical plan), and every
+    output voxel whose sample point lies outside that support has all eight of its
+    trilinear neighbours equal to zero, so it resamples to **exactly** zero. This
+    returns the output sub-grid that covers the support, so the caller can resample
+    only there and leave the rest of the output at zero.
+
+    Nothing is dropped: the skipped region is exactly zero, not merely negligible.
+    The values inside the sub-grid can still differ from a full-grid resample in the
+    last bit, because the sub-grid carries its own origin and ITK then evaluates
+    ``(origin + spacing * lo) + spacing * i`` where the full grid evaluates
+    ``origin + spacing * (lo + i)``; the reassociation moves a sample coordinate by
+    an ulp and with it an interpolation weight. On a clinical plan this reached 2
+    ulp on 0.003% of voxels (1e-5% of Dmax), with the dose integral unchanged to
+    twelve digits.
+
+    The ``margin`` of one source voxel is what makes that exact: a sample point can
+    only pick up a non-zero voxel if it lies within one voxel of the support, so
+    growing the source region by one voxel before mapping it covers every output
+    voxel that can be non-zero. One further voxel is added in output index space to
+    absorb rounding.
+
+    Args:
+        source: The image being resampled from (the rotated-frame deposit grid).
+        source_bounds_zyx: ``((z_lo, y_lo, x_lo), (z_hi, y_hi, x_hi))`` inclusive
+            NumPy index bounds of the region of interest within ``source``.
+        angle_deg: The rotation passed to :func:`rotate_ct_around_isocenter`.
+        isocenter_physical: The physical rotation centre ``(x, y, z)``.
+        reference: The full output grid (the CT).
+        margin: Source voxels of interpolation support to include (1 is exact for
+            trilinear; a higher-order interpolator needs a wider margin).
+
+    Returns:
+        ``(sub_reference, numpy_slices)`` where ``sub_reference`` is an empty image
+        on ``reference``'s grid covering the mapped region and ``numpy_slices`` is
+        the matching ``(z, y, x)`` slice tuple into a ``reference``-shaped array.
+        ``(None, None)`` if the mapped region misses ``reference`` entirely.
+    """
+    lo_zyx, hi_zyx = source_bounds_zyx
+    src_nx, src_ny, src_nz = source.GetSize()
+    src_size_zyx = (src_nz, src_ny, src_nx)
+    lo = [max(0, int(lo_zyx[k]) - margin) for k in range(3)]
+    hi = [min(src_size_zyx[k] - 1, int(hi_zyx[k]) + margin) for k in range(3)]
+
+    # source physical -> reference physical is the inverse of the resample map.
+    inverse = _euler_z_transform(angle_deg, isocenter_physical).GetInverse()
+    corners = []
+    for iz in (lo[0], hi[0]):
+        for iy in (lo[1], hi[1]):
+            for ix in (lo[2], hi[2]):
+                point = source.TransformIndexToPhysicalPoint((ix, iy, iz))
+                corners.append(
+                    reference.TransformPhysicalPointToContinuousIndex(
+                        inverse.TransformPoint(point)
+                    )
+                )
+
+    ref_size = reference.GetSize()  # (x, y, z)
+    out_lo, out_hi = [], []
+    for k in range(3):
+        values = [c[k] for c in corners]
+        low = max(0, int(math.floor(min(values))) - 1)
+        high = min(ref_size[k] - 1, int(math.ceil(max(values))) + 1)
+        if low > high:
+            return None, None
+        out_lo.append(low)
+        out_hi.append(high)
+
+    sub = sitk.Image(
+        out_hi[0] - out_lo[0] + 1,
+        out_hi[1] - out_lo[1] + 1,
+        out_hi[2] - out_lo[2] + 1,
+        reference.GetPixelID(),
+    )
+    sub.SetSpacing(reference.GetSpacing())
+    sub.SetDirection(reference.GetDirection())
+    sub.SetOrigin(reference.TransformIndexToPhysicalPoint(tuple(out_lo)))
+    slices = (
+        slice(out_lo[2], out_hi[2] + 1),  # z
+        slice(out_lo[1], out_hi[1] + 1),  # y
+        slice(out_lo[0], out_hi[0] + 1),  # x
+    )
+    return sub, slices
 
 
 def expanded_reference_grid(
@@ -142,13 +257,9 @@ def rotate_ct_around_isocenter(
         A new SimpleITK image with the content rotated, on ``reference`` (if
         given), else the expanded grid (if ``expand``), else the input grid.
     """
-    transform = sitk.Euler3DTransform()
-    transform.SetCenter([float(c) for c in isocenter_physical])
-    # Rotation about the z-axis (axial plane). The resampling transform maps
-    # output points to input points, so the image content rotates by the
-    # opposite sign of the transform's rotation; negating here makes a positive
-    # angle_deg a counter-clockwise content rotation (pinned by the tests).
-    transform.SetRotation(0.0, 0.0, math.radians(-angle_deg))
+    # Rotation about the z-axis (axial plane); see :func:`_euler_z_transform` for
+    # the sign convention (pinned by the tests).
+    transform = _euler_z_transform(angle_deg, isocenter_physical)
 
     if reference is None:
         reference = (

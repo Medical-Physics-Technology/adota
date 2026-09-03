@@ -81,7 +81,40 @@ extraction_parallel: true
 extraction_workers: 0
 
 # Inference: spots per forward pass (batched on the GPU).
+# 120 is the measured sweet spot for the stream stage with batched I/O enabled
+# below (56 / 120 / 240 / 360 swept on LUNG1-062: compute 3.28 / 2.86 / 3.28 /
+# 2.97 s). Past ~120 the forward stops getting cheaper and the pinned staging
+# buffers just grow, so bigger is not better.
 batch_size: 120
+
+# --- Batched host<->device staging (stream stage) -----------------------------
+# Ported from the optimized-GPU reinterpretation benchmark (scripts/
+# reinterp_gpu_benchmark.py). The per-spot path moved 2 arrays per beamlet across
+# the PCIe bus one at a time; these two options move each batch as a single
+# contiguous block instead.
+#
+# flux_batched: build the whole batch's flux in ONE flux_projection_gpu_batched
+#   call and (with batched_prep) keep the result resident on the device, so it
+#   never makes a device -> host -> device round trip. Measured on LUNG1-062:
+#   flux 1.502 s -> 0.019 s.
+# batched_prep: stage the batch's CT crops into one contiguous pinned block and
+#   copy them host-to-device ONCE instead of batch_size times, then normalize /
+#   permute / resize over the batch. Measured: prep 4.983 s -> 0.097 s. This one
+#   is BIT-IDENTICAL end to end (verified on a real plan: zero differing voxels
+#   in both fp16 and fp32), because it only changes how the batch reaches the GPU.
+# flux_batched_dtype: compute dtype of the batched flux. "float64" (default)
+#   evaluates the same float64 math as the per-spot flux_projection_gpu, only for
+#   the whole batch at once, so it agrees to round-off (<1 float32 ulp on the
+#   normalized channel the model consumes). "float32" is ~2x faster on the flux
+#   alone but an order of magnitude looser; not used for publication runs.
+#
+# Note the batched flux is a reassociation, so it is NOT bit-identical: on
+# LUNG1-062 it shifts the plan dose by 1.5e-5 of the peak in fp32, which the fp16
+# forward amplifies to 1.8e-4 (0.018%) -- 16x below the ~0.3% fp16 already
+# accepted above, with gamma pass rates unchanged (see the A/B in run_logs/).
+flux_batched: true
+batched_prep: true
+flux_batched_dtype: float64
 
 # Field-level resampling factor (optional; stream stage). Default 1 = the current
 # per-beamlet 1mm path (byte-identical). 2 = rotate/crop/flux/deposit on a 2x2x2

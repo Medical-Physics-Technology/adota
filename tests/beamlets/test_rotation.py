@@ -11,6 +11,7 @@ import numpy as np
 import SimpleITK as sitk
 
 from src.beamlets.rotation import (
+    derotation_subgrid,
     expanded_reference_grid,
     rotate_ct_around_isocenter,
 )
@@ -294,3 +295,84 @@ def test_coarse_derotate_upsample_recovers_smooth_field() -> None:
     b = smooth[3:-3, 5:-5, 5:-5]
     # Larger tolerance than the 1mm round-trip: 2mm sampling loses resolution.
     assert float(np.abs(a - b).max()) < 4.0
+
+
+# --- Sub-grid de-rotation (dose accumulation) --------------------------------
+
+def _dose_grid_with_blob() -> tuple[sitk.Image, sitk.Image, float, tuple]:
+    """A CT-like reference grid, a rotated dose grid holding one blob, and the angle."""
+    reference = sitk.Image(60, 60, 20, sitk.sitkFloat32)
+    reference.SetOrigin((-30.0, -25.0, 4.0))
+    reference.SetSpacing((1.0, 1.0, 2.0))
+
+    angle = 37.0
+    iso = reference.TransformContinuousIndexToPhysicalPoint((30.0, 30.0, 10.0))
+    rotated = rotate_ct_around_isocenter(
+        reference, angle, iso, expand=True, out_spacing_factor=2, default_value=0.0
+    )
+    dose = np.zeros(sitk.GetArrayFromImage(rotated).shape, dtype=np.float32)
+    # A blob well inside the grid, so its support is a small part of the whole.
+    dose[4:8, 10:16, 9:14] = np.arange(1, 4 * 6 * 5 + 1, dtype=np.float32).reshape(4, 6, 5)
+    dose_image = sitk.GetImageFromArray(dose)
+    dose_image.SetOrigin(rotated.GetOrigin())
+    dose_image.SetSpacing(rotated.GetSpacing())
+    dose_image.SetDirection(reference.GetDirection())
+    return reference, dose_image, angle, iso
+
+
+def test_derotation_subgrid_drops_nothing_and_matches_the_full_grid() -> None:
+    """Resampling only the covering sub-grid equals de-rotating the whole grid.
+
+    Two separate claims, asserted separately because only the first is exact:
+
+    1. the skipped region is **exactly** zero in the full result, so restricting
+       the resample discards no dose at all; and
+    2. inside the sub-grid the values match the full-grid resample to float
+       round-off (the sub-grid carries its own origin, so ITK reassociates the
+       sample-coordinate arithmetic and can land an ulp away).
+    """
+    reference, dose_image, angle, iso = _dose_grid_with_blob()
+    dose = sitk.GetArrayFromImage(dose_image)
+
+    full = sitk.GetArrayFromImage(
+        rotate_ct_around_isocenter(
+            dose_image, -angle, iso, reference=reference, default_value=0.0
+        )
+    )
+
+    nonzero = dose != 0
+    found = [np.where(nonzero.any(axis=ax))[0] for ax in ((1, 2), (0, 2), (0, 1))]
+    bounds = (tuple(int(f[0]) for f in found), tuple(int(f[-1]) for f in found))
+    sub_reference, slices = derotation_subgrid(dose_image, bounds, -angle, iso, reference)
+    assert sub_reference is not None
+
+    partial = np.zeros_like(full)
+    partial[slices] += sitk.GetArrayFromImage(
+        rotate_ct_around_isocenter(
+            dose_image, -angle, iso, reference=sub_reference, default_value=0.0
+        )
+    )
+
+    assert float(full.max()) > 0.0  # the blob really landed on the reference grid
+
+    # (1) nothing outside the sub-grid was dropped: it is exactly zero.
+    outside = full.copy()
+    outside[slices] = 0.0
+    np.testing.assert_array_equal(outside, np.zeros_like(full))
+
+    # (2) inside, the values agree to float round-off.
+    np.testing.assert_allclose(partial, full, rtol=1e-6, atol=0.0)
+
+    # The point of the exercise: the sub-grid is a small part of the whole.
+    assert partial[slices].size < 0.5 * full.size
+
+
+def test_derotation_subgrid_returns_none_when_the_region_misses_the_reference() -> None:
+    """A source region that maps outside the reference yields no sub-grid."""
+    reference, dose_image, angle, iso = _dose_grid_with_blob()
+    far = ((0, 0, 0), (0, 0, 0))
+    tiny = sitk.Image(4, 4, 4, sitk.sitkFloat32)
+    tiny.SetOrigin((10_000.0, 10_000.0, 10_000.0))
+    tiny.SetSpacing(reference.GetSpacing())
+    sub_reference, slices = derotation_subgrid(dose_image, far, -angle, iso, tiny)
+    assert sub_reference is None and slices is None

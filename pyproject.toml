@@ -60,6 +60,7 @@ select = ["E", "F", "I"]
 # Pins BLAS to one thread before numpy/torch load, so the gamma process pool
 # can scale across cores.
 "scripts/mc/plot_angle_robustness.py" = ["E402"]
+"scripts/mc/prototype_beamlet_mode.py" = ["E402"]
 # Preloads the CUDA shared objects via ctypes before torch imports them;
 # mutating LD_LIBRARY_PATH from inside Python is too late.
 "scripts/rotation_performance_analysis.py" = ["E402"]

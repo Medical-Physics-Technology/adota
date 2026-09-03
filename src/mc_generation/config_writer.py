@@ -165,6 +165,45 @@ def build_single_beamlet_plan_text(
     return repr(plan)
 
 
+def build_beamlet_field_plan_text(
+    energy: float,
+    spots_xy: Sequence[Sequence[float]],
+    gantry_angle: float,
+    isocenter: Sequence[float],
+    weight: float = 1000.0,
+    total_meterset_weight_all_fields: float = 1000.0,
+) -> str:
+    """Return PlanPencil.txt text holding every spot of one field, for beamlet mode.
+
+    MCsquare's beamlet mode walks ``fields[b].ControlPoints[c].spots[d]`` and tags
+    each output ``_Beamlet_{b}_{c}_{d}``, so packing all spots into a single field
+    and control point makes a spot's position in ``spots_xy`` exactly its ``d``.
+
+    Each spot keeps the single-spot ``weight``: ``Select_spot`` copies that weight
+    into the sub-plan it simulates, and the exported dose is dose-per-proton
+    (``normalization_factor`` is 1.0 and the scoring is divided by that spot's own
+    primary count), so a beamlet's dose is on the same scale as a single-spot run.
+    """
+    spot = _Spot(
+        index=1, spot_id=1, cumulative_meter_set_weight=weight, energy=float(energy),
+        scanned_spots=[(float(x), float(y), float(weight)) for x, y in spots_xy],
+    )
+    field = _Field(
+        field_id=1, final_cumulative_meter_set_weight=weight,
+        gantry_angle=float(gantry_angle), isocenter_position=isocenter, spots=[spot],
+    )
+    return repr(_Plan(fields=[field],
+                      total_meterset_weight_all_fields=total_meterset_weight_all_fields))
+
+
+def write_plan_beamlets(path, energy, spots_xy, gantry_angle, isocenter, **kwargs) -> Path:
+    """Write the multi-spot PlanPencil.txt for a beamlet-mode field; return the path."""
+    path = Path(path)
+    path.write_text(build_beamlet_field_plan_text(
+        energy, spots_xy, gantry_angle, isocenter, **kwargs))
+    return path
+
+
 def write_plan_pencil(path, energy, spot_xy, gantry_angle, isocenter, **kwargs) -> Path:
     """Write PlanPencil.txt for a single beamlet; return the path."""
     text = build_single_beamlet_plan_text(energy, spot_xy, gantry_angle, isocenter, **kwargs)
@@ -188,11 +227,22 @@ def build_simulation_config(
     sim_params: dict | None = None,
     scanner: str = "default",
     compute_uncertainty: bool = True,
+    beamlet_mode: bool = False,
+    beamlet_parallelization: bool = True,
 ) -> dict:
-    """Build the sectioned MCsquare config dict (mirrors get_simulation_config)."""
+    """Build the sectioned MCsquare config dict (mirrors get_simulation_config).
+
+    ``beamlet_mode`` turns the plan's spots into a dose-influence run: MCsquare
+    simulates ``Num_Primaries`` *per spot* and exports one dose per spot
+    (``Dose_Beamlet_{field}_{controlpoint}_{spot}.mhd``), paying the per-run CT and
+    scoring setup once for the whole field. ``beamlet_parallelization`` then gives
+    one OpenMP thread per spot, each with a private scoring array, instead of
+    splitting threads within a single beamlet. The section is only emitted when
+    beamlet mode is on, so the single-beamlet config stays byte-identical.
+    """
     p = {**_DEFAULT_SIM_PARAMS, **(sim_params or {})}
     import os
-    return {
+    cfg = {
         "simulation_parameters": {
             "Num_Threads": p["Num_Threads"], "RNG_Seed": p["RNG_Seed"],
             "Num_Primaries": p["Num_Primaries"], "E_Cut_Pro": p["E_Cut_Pro"],
@@ -222,6 +272,12 @@ def build_simulation_config(
             "Dose_MHD_Output": True,
         },
     }
+    if beamlet_mode:
+        cfg["beamlet_simulation"] = {
+            "Beamlet_Mode": True,
+            "Beamlet_Parallelization": bool(beamlet_parallelization),
+        }
+    return cfg
 
 
 def write_config(path, config_dict: dict) -> Path:

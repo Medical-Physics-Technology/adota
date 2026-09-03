@@ -26,11 +26,15 @@ import typer
 from src.adota.config import load_yaml_config
 from src.beamlets.bdl import BeamDataLibrary
 from src.datasets.registry import build_dataset_from_config
+from src.mc_generation.geometry import resample_to_isotropic
 from src.mc_generation.mcsquare_runner import MCSquareRunner
-from src.mc_generation.robustness import (
-    resolve_gantry,
+from src.mc_generation.robustness import run_generation
+from src.mc_generation.sweep import (
+    build_angle_grid,
+    resolve_gantries,
     robustness_config_from_dict,
-    run_generation,
+    sweep_fits_ct,
+    sweep_z_half_extent_mm,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -46,8 +50,13 @@ def main(
     make_figures: Annotated[Optional[bool], typer.Option(help="Emit per-beamlet QC figures.")] = None,
     num_primaries: Annotated[Optional[float], typer.Option()] = None,
     n_patients: Annotated[Optional[int], typer.Option(help="Override n_patients for every dataset.")] = None,
+    n_gantry: Annotated[Optional[int], typer.Option(help="Override gantry draws per patient.")] = None,
+    beamlet_mode: Annotated[Optional[bool], typer.Option(
+        help="Run each block as one MCsquare beamlet-mode call (~3x faster).")] = None,
     overwrite: Annotated[Optional[bool], typer.Option()] = None,
     dry_run: Annotated[bool, typer.Option(help="List patients + resolved gantry, then exit (no MC).")] = False,
+    check_geometry: Annotated[bool, typer.Option(
+        help="Load each CT and report whether its z extent covers the theta_x sweep.")] = False,
 ) -> None:
     cfg = load_yaml_config(config)
 
@@ -59,27 +68,50 @@ def main(
 
     rcfg = robustness_config_from_dict(
         cfg.get("robustness", {}), grid_n=grid_n, num_primaries=num_primaries,
-        make_figures=make_figures, overwrite=overwrite, default_prefix="patient_set")
+        make_figures=make_figures, overwrite=overwrite, n_gantry=n_gantry,
+        beamlet_mode=beamlet_mode, default_prefix="patient_set")
 
-    # Preview the per-patient random gantry (seeded, reproducible) before running.
-    logger.info("Patient set (%d patients), gantry_mode=%s:", len(dataset), rcfg.gantry_mode)
+    # Preview the per-patient random gantries (seeded, reproducible) before running.
+    n_angles = len(build_angle_grid(rcfg.theta_x_range, rcfg.theta_y_range,
+                                    rcfg.grid_n, rcfg.angles))
+    logger.info("Patient set (%d patients), gantry_mode=%s, energies=%s, %d beamlet angles, "
+                "%s MC:", len(dataset), rcfg.gantry_mode, [f"{e:g}" for e in rcfg.energies],
+                n_angles, "beamlet-mode" if rcfg.beamlet_mode else "one call per beamlet")
     for i in range(len(dataset)):
         rec = dataset.record(i)
-        logger.info("  %-14s %-10s gantry=%6.1f deg", rec.patient_id, rec.anatomy,
-                    resolve_gantry(rcfg, rec.uid))
-    if dry_run:
-        logger.info("dry-run: no simulation performed.")
+        gantries = resolve_gantries(rcfg, rec.uid)
+        logger.info("  %-14s %-10s gantry=%s deg", rec.patient_id, rec.anatomy,
+                    ", ".join(f"{g:.1f}" for g in gantries))
+    engine = cfg["engine"]
+    bdl_name = engine.get("bdl_file", "hptc_beam_model_rsnone.txt")
+    bdl = BeamDataLibrary.from_file(str(Path(engine["mcsquare_install"]) / "BDL" / bdl_name))
+
+    # theta_x steers along the slice axis, so a short CT silently loses the outer
+    # beamlets to the roi_out_of_bounds gate -- after paying for their MC. Screen
+    # the selection first (loads each CT; no simulation).
+    if check_geometry:
+        need = 2 * sweep_z_half_extent_mm(rcfg, bdl.d_smy)
+        logger.info("Geometry check: the sweep needs a CT >= %.0f mm long in z", need)
+        n_short = 0
+        for i in range(len(dataset)):
+            rec = dataset.record(i)
+            ct = resample_to_isotropic(rec.load_image(), rcfg.iso_spacing_mm)
+            fits, z_extent, max_tx = sweep_fits_ct(ct, rcfg, bdl.d_smy)
+            n_short += not fits
+            logger.info("  %-28s %-10s z=%6.1f mm  max|theta_x|=%.2f deg  %s",
+                        rec.patient_id, rec.anatomy, z_extent, max_tx,
+                        "OK" if fits else "TOO SHORT")
+        logger.info("Geometry check: %d/%d patients cover the sweep",
+                    len(dataset) - n_short, len(dataset))
+
+    if dry_run or check_geometry:
+        logger.info("no simulation performed (dry-run/check-geometry).")
         raise typer.Exit()
 
-    engine = cfg["engine"]
     runner = MCSquareRunner(
         install_dir=engine["mcsquare_install"], work_root=engine["mc_work_dir"],
-        bdl_file=engine.get("bdl_file", "hptc_beam_model_rsnone.txt"),
-        scanner=engine.get("scanner", "default"),
+        bdl_file=bdl_name, scanner=engine.get("scanner", "default"),
     )
-    bdl = BeamDataLibrary.from_file(
-        str(Path(engine["mcsquare_install"]) / "BDL" / engine.get("bdl_file", "hptc_beam_model_rsnone.txt")))
-
     result = run_generation(dataset, runner, bdl, rcfg)
     out = Path(rcfg.output_root) / f"{rcfg.experiment_prefix}_summary.json"
     out.write_text(json.dumps(result, indent=2))

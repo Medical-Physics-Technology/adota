@@ -95,23 +95,31 @@ def crop_around_spatial_point(
     arr = ct_array if ct_array is not None else sitk.GetArrayFromImage(image)  # (z, y, x)
     nz, ny, nx = arr.shape
 
-    crop = np.full((height, width, depth), air_value, dtype=arr.dtype)
-
     # z axis (array axis 0) centred on iz; y axis (axis 1) centred on iy;
     # x axis (axis 2) taken from the 0 face for the full depth.
     z_src_lo, z_src_hi, z_dst_lo, z_dst_hi = clip_axis_window(iz - height // 2, height, nz)
     y_src_lo, y_src_hi, y_dst_lo, y_dst_hi = clip_axis_window(iy - width // 2, width, ny)
     x_src_lo, x_src_hi, x_dst_lo, x_dst_hi = clip_axis_window(0, depth, nx)
 
-    crop[z_dst_lo:z_dst_hi, y_dst_lo:y_dst_hi, x_dst_lo:x_dst_hi] = arr[
-        z_src_lo:z_src_hi, y_src_lo:y_src_hi, x_src_lo:x_src_hi
-    ]
-
     oob = (
         (z_dst_hi - z_dst_lo) != height
         or (y_dst_hi - y_dst_lo) != width
         or (x_dst_hi - x_dst_lo) != depth
     )
+
+    # The air pre-fill only matters where the window leaves the grid. When it is
+    # fully inside -- the overwhelmingly common case, and every spot of a typical
+    # field -- the copy below overwrites all of it, so filling first is a wasted
+    # pass over the whole crop. Allocate uninitialised in that case; the result is
+    # identical because every element is written.
+    if oob:
+        crop = np.full((height, width, depth), air_value, dtype=arr.dtype)
+    else:
+        crop = np.empty((height, width, depth), dtype=arr.dtype)
+
+    crop[z_dst_lo:z_dst_hi, y_dst_lo:y_dst_hi, x_dst_lo:x_dst_hi] = arr[
+        z_src_lo:z_src_hi, y_src_lo:y_src_hi, x_src_lo:x_src_hi
+    ]
 
     # Lower corner in image index space, (x, y, z) order (datagenerator layout):
     # [0, indexes[1] - H//2, indexes[2] - W//2].

@@ -128,6 +128,88 @@ def test_streaming_calibration_scales(plan_directory, tmp_path: Path) -> None:
     assert cal["dose_sum"] == pytest.approx(base["dose_sum"] * 1.05, rel=1e-4)
 
 
+# --- Batched host<->device staging (flux_batched / batched_prep) ---------------
+
+@pytest.mark.parametrize("grid_factor", [1, 2], ids=["1mm", "2mm"])
+def test_batched_prep_matches_the_per_spot_stream(plan_directory, tmp_path: Path,
+                                                  grid_factor: int) -> None:
+    """``batched_prep`` only changes *how* the batch reaches the device.
+
+    The CT crops go over in one contiguous copy instead of ``B``, so the model
+    input -- and therefore the accumulated dose -- must be unchanged.
+    """
+    model = _TinyModel().eval()
+    device = torch.device("cpu")
+    base, fast = tmp_path / "d_loop.mhd", tmp_path / "d_batched.mhd"
+    common = dict(batch_size=4, flux_on_gpu=False, grid_factor=grid_factor)
+    run_streaming_pipeline(plan_directory, model, device, base,
+                           StreamingConfig(**common))
+    run_streaming_pipeline(plan_directory, model, device, fast,
+                           StreamingConfig(batched_prep=True, **common))
+    a = sitk.GetArrayFromImage(sitk.ReadImage(str(base)))
+    b = sitk.GetArrayFromImage(sitk.ReadImage(str(fast)))
+    assert float(a.max()) > 0.0
+    np.testing.assert_array_equal(b, a)
+
+
+def test_batched_prep_survives_a_ragged_final_batch(plan_directory, tmp_path: Path) -> None:
+    """5 spots per field with batch_size=4 -> a 4-spot then a 1-spot batch."""
+    model = _TinyModel().eval()
+    device = torch.device("cpu")
+    base, fast = tmp_path / "r_loop.mhd", tmp_path / "r_batched.mhd"
+    run_streaming_pipeline(plan_directory, model, device, base,
+                           StreamingConfig(batch_size=4, flux_on_gpu=False))
+    summary = run_streaming_pipeline(
+        plan_directory, model, device, fast,
+        StreamingConfig(batch_size=4, flux_on_gpu=False, batched_prep=True),
+    )
+    assert summary["n_spots"] == 10 and summary["batched_prep"] is True
+    np.testing.assert_array_equal(
+        sitk.GetArrayFromImage(sitk.ReadImage(str(fast))),
+        sitk.GetArrayFromImage(sitk.ReadImage(str(base))),
+    )
+
+
+def test_streaming_rejects_an_unknown_flux_dtype(plan_directory, tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="flux_batched_dtype"):
+        run_streaming_pipeline(
+            plan_directory, _TinyModel().eval(), torch.device("cpu"),
+            tmp_path / "bad.mhd",
+            StreamingConfig(batch_size=4, flux_on_gpu=False,
+                            flux_batched_dtype="bfloat16"),
+        )
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+@pytest.mark.parametrize("grid_factor", [1, 2], ids=["1mm", "2mm"])
+def test_cuda_batched_flux_and_prep_match_the_per_spot_gpu_stream(
+    plan_directory, tmp_path: Path, grid_factor: int
+) -> None:
+    """The full optimized path (batched float64 flux kept on the device + batched
+    prep) reproduces the per-spot GPU stream's dose.
+
+    The batched flux evaluates the *same* float64 math for the whole batch at
+    once, so it agrees with the per-spot ``flux_projection_gpu`` to float64
+    round-off; the flux is then min-max normalized into the model's input channel,
+    which puts the residual far below float32 resolution.
+    """
+    model = _TinyModel().eval()
+    device = torch.device("cuda")
+    base, fast = tmp_path / "g_loop.mhd", tmp_path / "g_batched.mhd"
+    common = dict(batch_size=4, flux_on_gpu=True, flux_device=str(device),
+                  grid_factor=grid_factor)
+    run_streaming_pipeline(plan_directory, model, device, base,
+                           StreamingConfig(**common))
+    run_streaming_pipeline(
+        plan_directory, model, device, fast,
+        StreamingConfig(flux_batched=True, batched_prep=True, **common),
+    )
+    a = sitk.GetArrayFromImage(sitk.ReadImage(str(base)))
+    b = sitk.GetArrayFromImage(sitk.ReadImage(str(fast)))
+    assert float(a.max()) > 0.0
+    np.testing.assert_allclose(b, a, rtol=1e-6, atol=1e-6 * float(a.max()))
+
+
 # --- Field-level 2mm resampling (grid_factor=2) -------------------------------
 
 def _dose_centroid(D: np.ndarray) -> np.ndarray:

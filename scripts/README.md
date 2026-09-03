@@ -49,6 +49,8 @@ uv run python scripts/run-tests.py unit --fast   # skips the slow perf suite
 | Script | What it does |
 |---|---|
 | [`run_all_plans.sh`](run_all_plans.sh) | Run `stream,gamma` (2 mm field grid) over a list of plans sequentially; logs in `run_logs/`. |
+| [`run_publication_plans.sh`](run_publication_plans.sh) | Timing run over the 8 publication plans (`stream`, 2 mm, fp16, batched host↔device staging); archives stale `pipeline_timing.json` first, then summarizes. |
+| [`summarize_publication_timing.py`](summarize_publication_timing.py) | Collect those plans' `pipeline_timing.json` into per-plan and per-step tables + `run_logs/publication_timing_summary.json`. |
 | [`run_grid_factor_ab.sh`](run_grid_factor_ab.sh) | A/B harness: `grid_factor` 1 vs 2 per plan, archived for a go/no-go comparison. |
 | [`run_ablation.sh`](run_ablation.sh) | Launch the 2×2 training ablation study (see [`ablation/`](ablation/)). |
 

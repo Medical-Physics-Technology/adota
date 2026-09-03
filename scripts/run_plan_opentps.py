@@ -167,6 +167,9 @@ def _build_timing_report(
             "grid_factor": streaming.get("grid_factor", 1),
             "grid_mode": streaming.get("grid_mode", "1mm"),
             "precision": streaming.get("precision", "fp32"),
+            "batch_size": streaming.get("batch_size"),
+            "flux_batched": streaming.get("flux_batched", False),
+            "batched_prep": streaming.get("batched_prep", False),
             "steps": {k: _step(v) for k, v in t.items()},
         }
 
@@ -286,8 +289,12 @@ def _format_timing_report(report: dict) -> str:
         mode = "1mm" if gf == 1 else f"{gf}mm field"
         if st.get("precision", "fp32") == "fp16":
             mode += ", fp16"
-        sec = [[f"Streaming ({mode})", "", fs(st["total_s"]), fms(st),
-                f"{st['n_spots']} spots, {st['n_fields']} fields, no disk"]]
+        if st.get("flux_batched") or st.get("batched_prep"):
+            mode += ", batched I/O"
+        notes = f"{st['n_spots']} spots, {st['n_fields']} fields, no disk"
+        if st.get("batch_size"):
+            notes += f", batch {st['batch_size']}"
+        sec = [[f"Streaming ({mode})", "", fs(st["total_s"]), fms(st), notes]]
         prep_lbl = "input prep (downsample)" if gf == 1 else "input prep (no resize)"
         post_lbl = "postprocess (upsample)" if gf == 1 else "postprocess (no resize)"
         for label, key in (
@@ -414,6 +421,14 @@ def main(
     no_overlays: Annotated[
         Optional[bool], typer.Option(help="Skip per-field overlay PNGs.")
     ] = None,
+    no_figures: Annotated[
+        Optional[bool],
+        typer.Option(help="accumulate/stream stages: skip the dose-comparison and "
+                          "DVH figures. They are pure-CPU matplotlib work that can "
+                          "dominate the wall clock, so a timing run measures the "
+                          "dose generation itself. Dose_ADoTA.mhd is unchanged; the "
+                          "figures can be regenerated later from it."),
+    ] = None,
     verbose: Annotated[
         Optional[bool], typer.Option(help="Enable verbose/debug logging.")
     ] = None,
@@ -502,6 +517,9 @@ def main(
     )
     no_overlays = (
         no_overlays if no_overlays is not None else yaml_config.get("no_overlays", False)
+    )
+    no_figures = (
+        no_figures if no_figures is not None else yaml_config.get("no_figures", False)
     )
     verbose = verbose if verbose is not None else yaml_config.get("verbose", False)
     dose_render = (
@@ -695,7 +713,7 @@ def main(
         # Auto-generate the ADoTA vs MCsquare comparison + DVH figures.
         figure_s = _generate_comparison_figures(
             plan_directory, plan_dir, dose_path, dose_render=dose_render,
-            single_colorbar=single_colorbar,
+            single_colorbar=single_colorbar, enabled=not no_figures,
         )
 
     # --- Stage: stream (fused, disk-free alternative to extract+infer+accumulate) -
@@ -708,8 +726,19 @@ def main(
         )
         flux_on_gpu = bool(yaml_config.get("flux_on_gpu", False))
         grid_factor = int(yaml_config.get("grid_factor", 1))
+        # Batched host<->device staging (see StreamingConfig): one batched GPU flux
+        # call kept resident on the device, and one contiguous pinned host->device
+        # copy for the batch's CT crops, instead of 2*batch_size per-spot transfers.
+        flux_batched = bool(yaml_config.get("flux_batched", False))
+        batched_prep = bool(yaml_config.get("batched_prep", False))
+        flux_batched_dtype = str(yaml_config.get("flux_batched_dtype", "float64"))
         logger.info("=" * 70)
         logger.info("Stage: stream -> %s (fused, no per-beamlet disk I/O)", dose_path)
+        if flux_batched or batched_prep:
+            logger.info(
+                "Batched device staging: flux_batched=%s (%s), batched_prep=%s",
+                flux_batched, flux_batched_dtype, batched_prep,
+            )
         if grid_factor != 1:
             logger.info(
                 "Field-level resampling ENABLED: grid_factor=%d (%dmm field grid)",
@@ -726,6 +755,9 @@ def main(
             bdl_path=bdl_path,
             batch_size=yaml_config.get("batch_size", 56),
             flux_on_gpu=flux_on_gpu,
+            flux_batched=flux_batched,
+            flux_batched_dtype=flux_batched_dtype,
+            batched_prep=batched_prep,
             flux_device=str(device),
             calibration_factor=calibration_factor,
             grid_factor=grid_factor,
@@ -737,7 +769,7 @@ def main(
         # Same comparison + DVH figures as the accumulate stage (quality investigation).
         figure_s = _generate_comparison_figures(
             plan_directory, plan_dir, dose_path, dose_render=dose_render,
-            single_colorbar=single_colorbar,
+            single_colorbar=single_colorbar, enabled=not no_figures,
         )
 
     remaining = [
@@ -808,7 +840,7 @@ def main(
 
 def _generate_comparison_figures(
     plan_directory, plan_dir: Path, dose_path: Path, dose_render: str = "image",
-    single_colorbar: bool = False,
+    single_colorbar: bool = False, enabled: bool = True,
 ) -> float:
     """Generate the ADoTA vs MCsquare dose-comparison + DVH figures/metrics.
 
@@ -818,7 +850,16 @@ def _generate_comparison_figures(
     ``stream`` stages so both produce the same quality-investigation figures.
     ``dose_render`` (``"image"`` or ``"contour"``) selects the dose-panel style of
     the comparison figure (filled overlay vs clinical filled-isodose contours).
+    ``enabled=False`` (``--no-figures``) skips the whole block and returns 0.0 --
+    the figures are pure-CPU matplotlib work that can dominate a run's wall clock,
+    so a timing run measures the dose generation rather than the plotting.
     """
+    if not enabled:
+        logger.info(
+            "Comparison/DVH figures skipped (--no-figures); Dose_ADoTA.mhd is "
+            "written and they can be regenerated from it later."
+        )
+        return 0.0
     if plan_directory.mc_dose_path is None:
         logger.warning("No MC Dose.mhd in the plan dir; skipping comparison figure.")
         return 0.0

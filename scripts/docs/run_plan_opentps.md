@@ -147,6 +147,62 @@ directly comparable.
 
 ---
 
+## Batched host↔device staging (`flux_batched` / `batched_prep`)
+
+At `grid_factor: 2` the per-beamlet resize is already gone, so what was left
+dominating the stream stage was **transfer overhead**, not compute: the pipeline
+moved two arrays per beamlet across the PCIe bus one at a time, and built the flux
+one spot at a time. Ported from the optimized-GPU reinterpretation benchmark
+([`reinterp_gpu_benchmark.py`](../reinterp_gpu_benchmark.py)), two options move each
+batch as a single contiguous block instead:
+
+- **`batched_prep`** stages the batch's CT crops into one contiguous pinned block
+  and copies them host→device **once** instead of `batch_size` times, then
+  normalizes / permutes / resizes over the batch
+  (`prepare_inputs_from_arrays_batched`).
+- **`flux_batched`** builds the whole batch's flux in one
+  `flux_projection_gpu_batched` call and — with `batched_prep` — hands the result
+  straight to the model input as a device tensor, so the flux never makes a
+  device→host→device round trip.
+
+Measured on `LUNG1-062_Publication_Plan_1` (285 spots, 2 mm, fp16, batch 120):
+
+| Step | per-spot | batched | |
+|---|---:|---:|---|
+| flux projection | 1.502 s | 0.019 s | 79× |
+| input prep (H→D) | 4.983 s | 0.097 s | 51× |
+| **stream compute** | **10.77 s** | **2.86 s** | **3.8×** |
+| **wall clock** | **13.33 s** | **5.19 s** | **2.6×** |
+
+`batch_size` was swept at 56 / 120 / 240 / 360 → 3.28 / 2.86 / 3.28 / 2.97 s of
+compute: **120 is the sweet spot**, and bigger is not better (the forward stops
+getting cheaper and the pinned staging buffers just grow).
+
+### What this does to the dose
+
+The pipeline is bit-reproducible (running the same config twice gives *zero*
+differing voxels), so these differences are real signal, not run-to-run noise:
+
+| Variant vs the per-spot path | fp32 | fp16 (production) |
+|---|---:|---:|
+| `batched_prep` alone | **0** (bit-identical) | **0** (bit-identical) |
+| `flux_batched` (float64) | 1.5e-5 of peak | 1.8e-4 of peak |
+
+`batched_prep` only changes *how* the batch reaches the GPU, so it is bit-identical
+end to end. `flux_batched` is a **reassociation** of the same float64 math (batched
+matmul instead of per-spot), which lands within one float32 ulp on the normalized
+flux channel the model consumes; the fp16 forward then amplifies that to 1.8e-4
+(0.018 %) of the peak dose — 16× below the ~0.3 % the fp16 forward itself already
+costs, with **gamma pass rates vs MCsquare unchanged**. `flux_batched_dtype:
+float32` is ~2× faster on the flux alone but an order of magnitude looser; it is
+not used for publication runs.
+
+Guarded by `tests/beamlets/test_flux_gpu.py` (batched flux vs the per-spot NumPy
+and GPU paths), `tests/loaders/test_dir_based_batched_prep.py` (batched prep is
+bit-identical to the per-spot loop, CPU and CUDA) and
+`tests/beamlets/test_streaming.py` (whole-pipeline equivalence at both grid
+factors).
+
 ## Dose-comparison figure style (`dose_render`)
 
 The ADoTA-vs-reference **`dose_comparison.*`** figure (written by the `accumulate`
@@ -301,7 +357,10 @@ to your own locations.**
 | `flux_on_gpu` | `false` | Compute the flux projection on the GPU (`flux_projection_gpu`); numerically identical to NumPy, a speed option |
 | `extraction_parallel` | `false` | `false` → serial `run_extraction`; `true` → thread-pooled `run_extraction_pooled` (bit-identical output) |
 | `extraction_workers` | `0` | Thread count when parallel (`0` = auto, `min(32, os.cpu_count())`) |
-| `batch_size` | `56` | Spots per GPU forward pass (inference / stream) |
+| `batch_size` | `56` | Spots per GPU forward pass (inference / stream). With batched I/O on, `120` is the measured sweet spot; beyond it the forward stops getting cheaper and the pinned buffers just grow |
+| `flux_batched` | `false` | `stream`: build the whole batch's flux in one `flux_projection_gpu_batched` call and (with `batched_prep`) keep it resident on the device instead of a device→host→device round trip |
+| `batched_prep` | `false` | `stream`: stage the batch's CT crops into one contiguous pinned block and copy them host→device **once** instead of `batch_size` times, then normalize/permute/resize over the batch. **Bit-identical** end to end |
+| `flux_batched_dtype` | `float64` | Compute dtype of the batched flux. `float64` is the same math as the per-spot `flux_projection_gpu`, agreeing to round-off; `float32` is ~2× faster on the flux alone but an order of magnitude looser |
 | **`grid_factor`** | **`1`** | **Field-level resampling: `1` = 1 mm per-beamlet (byte-identical); `2` = 2 mm field grid (see above). Applies to stream and staged.** |
 | `dose_render` | `image` | Dose-comparison figure style: `image` (filled jet overlay) or `contour` (clinical filled isodose contours at 10/30/50/70/90/95/100 % of peak + labeled lines; the difference panel stays a heatmap) |
 | `dose_source` | `null` | `prediction` (model dose) or `flux` (stand-in); auto-selected when `infer` ran |
@@ -374,6 +433,7 @@ Both scripts contain a `PLANS=( ... )` array — **edit it to your plan director
 | Script | What it does |
 |---|---|
 | [`run_all_plans.sh`](../run_all_plans.sh) | Runs `stream,gamma` on the 2 mm field grid (`--grid-factor 2`) over the listed plans, sequentially; per-plan logs in `run_logs/`. |
+| [`run_publication_plans.sh`](../run_publication_plans.sh) | Timing run over the 8 publication plans (`stream`, 2 mm, fp16, batched I/O). Archives each plan's previous `pipeline_timing.json` first so the merge cannot carry stale stages into the measurement, then calls `summarize_publication_timing.py` for a combined table. |
 | [`run_grid_factor_ab.sh`](../run_grid_factor_ab.sh) | The **A/B harness**: for each plan runs `stream,gamma` twice (`grid_factor` 1 then 2) and archives each mode's dose + `gamma_metrics.json` + `pipeline_timing.json` into `<plan>/grid_ab/{1mm,2mm}/` for a direct go/no-go comparison. |
 
 ```bash

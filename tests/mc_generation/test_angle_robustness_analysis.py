@@ -52,3 +52,43 @@ def test_extreme_indices_picks_lowest_and_highest():
     assert (0, 2) not in [(w[0], w[1]) for w in worst + best]
     # worst[0] maps to the min-GPR cell (2,0)=50
     assert (worst[0][0], worst[0][1]) == (2, 0)
+
+
+def test_panel_name_includes_gantry_only_when_set():
+    from src.mc_generation.angle_robustness_analysis import panel_name
+    p = _panel("thoracic", 102.6, "Lung_Dx-G0035", [[1.0]])
+    assert panel_name(p) == "thoracic_Lung_Dx-G0035_e102p6"     # historical naming
+    p.gantry = 247.34
+    assert panel_name(p) == "thoracic_Lung_Dx-G0035_e102p6_g247p3"
+    p.patient, p.n_patients, p.gantry = None, 3, None
+    assert panel_name(p) == "thoracic_aggregate3_e102p6"
+
+
+def test_aggregate_keeps_a_shared_gantry_and_drops_mixed_ones():
+    a = _panel("thoracic", 135.0, "P1", [[90.0]])
+    b = _panel("thoracic", 135.0, "P2", [[80.0]])
+    a.gantry = b.gantry = 41.2
+    assert aggregate_panels([a, b]).gantry == pytest.approx(41.2)
+    b.gantry = 300.7
+    assert aggregate_panels([a, b]).gantry is None
+
+
+def test_saved_grids_round_trip_for_cheap_rerender(tmp_path):
+    """A saved panel reloads exactly, so re-rendering needs no inference or gamma."""
+    from src.mc_generation.angle_robustness_analysis import (
+        load_panel_grids,
+        panel_name,
+        save_panel_grids,
+    )
+    p = _panel("thoracic", 102.6, "Lung_Dx-G0037", [[90.0, np.nan], [np.nan, 80.0]])
+    p.gantry = 137.9
+    back = load_panel_grids(save_panel_grids(p, tmp_path))
+    assert (back.anatomy, back.patient, back.n_patients) == ("thoracic", "Lung_Dx-G0037", 1)
+    assert back.energy == pytest.approx(102.6) and back.gantry == pytest.approx(137.9)
+    np.testing.assert_array_equal(back.grids[C.key], p.grids[C.key])   # NaNs included
+    assert panel_name(back) == panel_name(p)
+
+    agg = aggregate_panels([p, _panel("thoracic", 102.6, "Lung_Dx-G0049", [[70.0, 1.0], [2.0, 3.0]])])
+    back_agg = load_panel_grids(save_panel_grids(agg, tmp_path))
+    assert back_agg.patient is None and back_agg.n_patients == 2   # stays an aggregate
+    assert back_agg.gantry is None                                 # mixed gantries dropped
