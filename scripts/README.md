@@ -32,6 +32,7 @@ options, config reference, outputs, and requirements.
 | [`training_set_analysis.py`](training_set_analysis.py) | `config_training_set_analysis.yaml` | Tissue-interface prevalence at the Bragg peak + interface-vs-homogeneous performance split. | [docs/training_set_analysis.md](docs/training_set_analysis.md) |
 | [`rotation_performance_analysis.py`](rotation_performance_analysis.py) | CLI flags | Benchmark 3-D rotation (SciPy / CuPy / PyTorch) around a plan pivot; correctness + timings. | [docs/rotation_performance_analysis.md](docs/rotation_performance_analysis.md) |
 | [`beamlet_timing_comparison.py`](beamlet_timing_comparison.py) | CLI flags | Compare per-beamlet reinterpolation vs ADoTA projection timing on real samples. | [docs/beamlet_timing_comparison.md](docs/beamlet_timing_comparison.md) |
+| [`gamma_benchmark.py`](gamma_benchmark.py) | CLI flags | Validate and benchmark the GPU gamma backend against `pymedphys.gamma` over the OpenTPS plan corpus: the deviation ladder, the performance table, and the voxel-level comparison. | [docs/gamma_benchmark.md](docs/gamma_benchmark.md) |
 
 ## Development
 
