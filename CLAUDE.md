@@ -62,7 +62,7 @@ Understanding these four flows explains most of `src/`:
 
 ### Conventions that are not obvious from any single file
 
-- **Python 3.9 is the floor.** `requires-python = ">=3.9"` and ruff targets `py39`. Do not write `str | None`, `list[int]` in annotations, or `match`. Use `typing.Optional`, `List`, and a `from __future__ import annotations` header, as the existing modules do.
+- **Python 3.10 is the floor.** `requires-python = ">=3.10"` and ruff targets `py310`, raised from 3.9 in 1.5.0 so `pymedphys` could move to 0.41. `torch` is deliberately pinned `<2.9`: the machines run a 535.x driver that a torch 2.11 CUDA build will not load. The existing modules are written in the `typing.Optional` / `List` style under a `from __future__ import annotations` header; match them rather than mixing styles, and keep `src/metrics/gamma_torch.py` 3.9-portable, since it is destined for upstream PyMedPhys.
 - **500 lines per module.** Modules that outgrow it get split by role rather than at an arbitrary cut. This is **enforced in `src/`** (the six offenders were split in 1.4.0) and is a **known backlog in `scripts/`**, where 16 files still exceed it and the split is planned in [docs/scripts_refactor_plan.md](docs/scripts_refactor_plan.md). Do not add a new `src/` module over the limit. Check with:
   ```bash
   find src scripts -name '*.py' | xargs wc -l | awk '$1>500 && $2!="total"'

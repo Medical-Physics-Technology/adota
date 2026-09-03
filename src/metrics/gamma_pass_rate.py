@@ -11,8 +11,10 @@ Flow:
 ``relative_dose_error`` is here for convenience because it shares the same
 threshold/masking conventions.
 
-Note: ``pymedphys.gamma`` needs the optional econforge ``interpolation``
-package; without it the call fails.
+Note: ``pymedphys.gamma`` interpolates with an in-house numba kernel from
+0.41 onwards (it used the econforge ``interpolation`` package up to 0.40).
+``numba`` ships as an optional pymedphys extra, so adota depends on it
+explicitly; without it the call fails.
 """
 
 import numpy as np
