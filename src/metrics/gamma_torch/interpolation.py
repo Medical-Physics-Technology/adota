@@ -158,6 +158,27 @@ class UniformGrid:
         return strides
 
 
+def _corner(dose_flat, lower, upper, weights, axis, offset) -> torch.Tensor:
+    """One axis of the multilinear blend, recursing into the axes below it.
+
+    Deliberately a module-level function rather than a closure inside
+    :func:`_multilinear`. A *recursive* closure refers to itself through its own
+    cell, which is a reference cycle: the function object then survives until the
+    cyclic collector runs, and its closure keeps every interpolation temporary
+    alive with it. Measured on a 96.5 M-voxel plan that held ~500 MB per shell
+    point and pushed peak device memory past 30 GiB, all of it released the
+    moment ``gc.collect()`` was called. Recursing through a global name creates
+    no cycle, so the temporaries die on the last reference as intended.
+    """
+    if axis == len(lower) - 1:
+        low = dose_flat[offset + lower[axis]]
+        high = dose_flat[offset + upper[axis]]
+    else:
+        low = _corner(dose_flat, lower, upper, weights, axis + 1, offset + lower[axis])
+        high = _corner(dose_flat, lower, upper, weights, axis + 1, offset + upper[axis])
+    return low.mul_(1.0 - weights[axis]).add_(high.mul_(weights[axis]))
+
+
 def _multilinear(dose_flat, lower, upper, weights) -> torch.Tensor:
     """Nested lerp over the ``2**ndim`` corners, innermost axis first.
 
@@ -166,17 +187,8 @@ def _multilinear(dose_flat, lower, upper, weights) -> torch.Tensor:
     two agree to within rounding of the same expression instead of differing by
     a reassociation.
     """
-
-    def corner(axis: int, offset: torch.Tensor) -> torch.Tensor:
-        if axis == len(lower) - 1:
-            low = dose_flat[offset + lower[axis]]
-            high = dose_flat[offset + upper[axis]]
-        else:
-            low = corner(axis + 1, offset + lower[axis])
-            high = corner(axis + 1, offset + upper[axis])
-        return low.mul_(1.0 - weights[axis]).add_(high.mul_(weights[axis]))
-
-    return corner(0, torch.zeros((), dtype=torch.int64, device=dose_flat.device))
+    origin = torch.zeros((), dtype=torch.int64, device=dose_flat.device)
+    return _corner(dose_flat, lower, upper, weights, 0, origin)
 
 
 def _interpolate_shell_tile(
