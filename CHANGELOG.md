@@ -3,6 +3,43 @@
 All notable changes to this project are documented in this file. This project
 adheres to [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+The difficulty score becomes computable for a beamlet that has not been
+simulated. The score of `research/acquisition_function_final_summary.md` was
+fitted on features that used the Monte Carlo dose to locate the Bragg peak (and,
+for the dose-weighted edge metrics, as the quantity itself); `src/acquisition/`
+supplies an analytic dose from the CT, the flux and the energy instead, and
+exposes the score as one call on a full CT grid for the active-learning loop.
+Model behaviour is **unchanged**; the reference study's numbers are unchanged.
+
+### Added
+
+- **`src/acquisition/`**: `bragg_curve` (Bortfeld 1997, straggled with the HPTC
+  beam model's energy spread vendored under `data/hptc_energy_spread.csv`),
+  `surrogate` (per-ray WEPL times the Bragg curve times the flux; the
+  loader-equivalent peak index and crop; the `peak_inside_crop` validity gate),
+  `features` (the thirty metrics behind `compute_features(ct, flux, energy, dose)`
+  and `FeatureConfig`, whose defaults are the reference run's settings),
+  `scorer` (`DifficultyScorer`, the frozen weighted-percentile score),
+  `candidates` (`BeamletCandidate`, `score_candidates(ct_image, candidates, bdl,
+  scorers)`), and `reference` (the study's record path without the model).
+- **`scripts/analysis/acquisition_input_only_{features,compare,refit}.py`**: the
+  validation of the above against the reference set (see
+  `scripts/docs/acquisition_input_only.md`).
+- `data/excluded_indexes/`: the training exclusion list, previously read from
+  another repository's checkout.
+
+### Changed
+
+- **`analyse_density_regions` and `compute_advanced_metrics` moved** from
+  `scripts/training_set_analysis_advanced_metrics.py` to
+  `src.acquisition.features`, verbatim; the script imports them. Import from
+  the new location.
+- `src.mc_generation.robustness`: `_FieldGeometry` / `_field_geometry` are now
+  public as `FieldGeometry` / `field_geometry`; the underscore names remain as
+  aliases.
+
 ## [1.5.0] - 2026-09-03
 
 A GPU gamma index. `pymedphys.gamma` dominated gamma pass rate evaluation --
