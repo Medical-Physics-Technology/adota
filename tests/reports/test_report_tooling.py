@@ -139,6 +139,12 @@ def test_index_flattens_records_and_metrics(tree: Path, tmp_path: Path):
     assert {row["id"] for row in rows} == {"CHG-0001", "EXP-0001"}
     assert next(r for r in rows if r["id"] == "EXP-0001")["n_metrics"] == "1"
 
+    # Records outside the output directory keep an absolute path; the ones the
+    # index sits beside (the normal case) are recorded relative to it.
+    relative = build_index(load_records(tree), tree)
+    paths = [row["path"] for row in csv.DictReader(relative["index"].open())]
+    assert sorted(paths) == ["changes/CHG-0001-a-test.md", "experiments/EXP-0001-a-test.md"]
+
     metrics = list(csv.DictReader(written["metrics"].open()))
     assert metrics == [{"record_id": "EXP-0001", "date": "2026-09-04", "name": "pearson",
                         "value": "0.85", "unit": "", "split": "test", "n": "42"}]

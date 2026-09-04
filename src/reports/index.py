@@ -43,8 +43,12 @@ def _manifest_fields(run_dir: Optional[str]) -> Dict[str, str]:
                                                    data.get("dataset_fingerprint", "")))}
 
 
-def index_row(record: Record) -> Dict[str, object]:
-    """One flat row describing a record."""
+def index_row(record: Record, root: Optional[Path] = None) -> Dict[str, object]:
+    """One flat row describing a record.
+
+    ``path`` is relative to ``root`` when given, so the index is identical on
+    every machine that checks the records out.
+    """
     front = record.front
     artifacts = front.get("artifacts") or {}
     publication = front.get("publication") or {}
@@ -63,10 +67,20 @@ def index_row(record: Record) -> Dict[str, object]:
         "git_commit": "",
         "dataset_fingerprint": "",
         "n_metrics": len(front.get("metrics") or []),
-        "path": str(record.path),
+        "path": _relative(record.path, root),
     }
     row.update(_manifest_fields(run_dir))
     return row
+
+
+def _relative(path: Path, root: Optional[Path]) -> str:
+    """``path`` relative to ``root`` where it sits inside it, else unchanged."""
+    if root is None:
+        return str(path)
+    try:
+        return str(path.resolve().relative_to(root.resolve()))
+    except ValueError:
+        return str(path)
 
 
 def metric_rows(record: Record) -> List[Dict[str, object]]:
@@ -105,7 +119,7 @@ def build_index(records: Sequence[Record], out_dir: Path,
                 sqlite_path: Optional[Path] = None) -> Dict[str, Path]:
     """Write ``index.csv`` and ``metrics.csv`` (and optionally the SQLite file)."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    index = [index_row(record) for record in records]
+    index = [index_row(record, out_dir) for record in records]
     metrics = [row for record in records for row in metric_rows(record)]
 
     written = {"index": out_dir / "index.csv", "metrics": out_dir / "metrics.csv"}
