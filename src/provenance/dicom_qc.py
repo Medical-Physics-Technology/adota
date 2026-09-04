@@ -43,6 +43,8 @@ class QCGates:
     require_monochrome2: bool = True
     max_spacing_xy: Optional[float] = None      # mm; fail if x or y spacing >= this
     max_spacing_z: Optional[float] = None        # mm; fail if slice thickness >= this
+    min_z_extent_mm: Optional[float] = None      # mm; fail if n_slices*thickness < this
+    min_xy_extent_mm: Optional[float] = None     # mm; fail if either in-plane extent < this
     kvp_range: Optional[Tuple[float, float]] = None
     min_tube_current: Optional[float] = None     # mA
     exclude_kernels: Tuple[str, ...] = ()        # case-insensitive substrings
@@ -120,6 +122,23 @@ def check_quality(params: Dict, gates: QCGates) -> Tuple[bool, List[str]]:
             reasons.append("slice_thickness_missing")
         elif st >= gates.max_spacing_z:
             reasons.append(f"slice_thickness={st}>={gates.max_spacing_z}")
+    if gates.min_z_extent_mm is not None:
+        st = params.get("slice_thickness")
+        if st is None:
+            reasons.append("slice_thickness_missing")
+        else:
+            z_extent = n * st
+            if z_extent < gates.min_z_extent_mm:
+                reasons.append(f"z_extent={z_extent:.0f}<{gates.min_z_extent_mm}")
+    if gates.min_xy_extent_mm is not None:
+        sx, sy = params.get("pixel_spacing_x"), params.get("pixel_spacing_y")
+        cols, rows = params.get("columns"), params.get("rows")
+        if None in (sx, sy, cols, rows):
+            reasons.append("in_plane_extent_missing")
+        else:
+            ex, ey = cols * sx, rows * sy
+            if min(ex, ey) < gates.min_xy_extent_mm:
+                reasons.append(f"xy_extent=({ex:.0f},{ey:.0f})<{gates.min_xy_extent_mm}")
     if gates.kvp_range is not None:
         kv = params.get("kvp")
         if kv is None:

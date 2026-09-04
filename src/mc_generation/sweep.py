@@ -41,6 +41,9 @@ class RobustnessConfig:
     gantry_max: float = 360.0
     gantry_seed: int = 1234
     rotate_to_canonical: bool = True     # rotate CT so beam is axis-aligned (gantry != 90)
+    isocenter_mode: str = "grid_center"  # "grid_center" | "body_com" (aim at patient COM)
+    body_hu_threshold: float = -500.0    # body mask threshold (includes lung, excludes air)
+    border_only: bool = False            # generate only the border (corner/edge) beamlets
     beam_entrance_standoff_mm: float = 20.0
     """Air gap left in front of the patient when a rotated grid is trimmed back to
     the beam-axis window (see :func:`_field_geometry`). The gantry-90 data the model
@@ -88,6 +91,9 @@ def robustness_config_from_dict(
         gantry_max=float(r.get("gantry_max", 360.0)),
         gantry_seed=int(r.get("gantry_seed", 1234)),
         rotate_to_canonical=bool(r.get("rotate_to_canonical", True)),
+        isocenter_mode=r.get("isocenter_mode", "grid_center"),
+        body_hu_threshold=float(r.get("body_hu_threshold", -500.0)),
+        border_only=bool(r.get("border_only", False)),
         beam_entrance_standoff_mm=float(r.get("beam_entrance_standoff_mm", 20.0)),
         roi_size=tuple(r.get("roi_size", (60, 60, 320))),
         iso_spacing_mm=float(r.get("iso_spacing_mm", 1.0)),

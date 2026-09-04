@@ -14,8 +14,8 @@ gamma_criteria:
   - {dose: 2, dist: 2, cutoff: 10}
   - {dose: 1, dist: 3, cutoff: 0.1}
 
-grid_n: 18
-theta_range: [-2.0, 2.0]
+grid_n: 10
+theta_range: [-1.5, 1.5]
 mode: per_patient          # override with --mode aggregate for the mean figures
 
 cmap: viridis

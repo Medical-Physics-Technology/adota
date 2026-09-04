@@ -1,0 +1,44 @@
+# Water-phantom re-run: large PLAIN water box (no air shell) for the paper energies.
+#   uv run python scripts/mc/generate_phantom_set.py --config scripts/mc/config_phantom_water512.yaml
+#
+# Fixes the air50mm artifacts (extreme-angle beamlets grazing the water/air edge or
+# going air-only): a 512x512x400 plain-water box contains every beamlet fully in
+# water (validated: corner dep_ratio 0.992, 0 air in ROI, clean BP at 134mm).
+# Paper energies only (102.6, 135 MeV) -- the 80/120/140 air50mm set is kept as-is.
+
+name: water_phantom
+
+phantoms:
+  - kind: water
+    name: water512            # -> water_phantom_phantom_water512_e{E}_v2
+    size: [512, 512, 400]      # voxels (x=depth, y, z); large enough for +/-2 deg beamlets
+    spacing: [1.0, 1.0, 1.0]
+    origin: [0.0, 0.0, 0.0]
+    water_hu: 0
+    air_hu: -1024
+    air_layer_depth: 0         # PLAIN water: no air shell -> no air-only path, no edge dose
+
+engine:
+  mcsquare_install: /home/mstryja/tools/mcsquare
+  mc_work_dir: /scratch/mstryja/mc_work/water512
+  bdl_file: hptc_beam_model_rsnone.txt
+  scanner: default
+
+robustness:
+  energies: [102.6, 135.0]     # paper energies only
+  theta_x_range: [-2.0, 2.0]
+  theta_y_range: [-2.0, 2.0]
+  grid_n: 18                   # 18x18 = 324 beamlet angles
+  gantry_mode: fixed
+  gantry_value: 90.0
+  roi_size: [60, 60, 320]
+  iso_spacing_mm: 1.0
+  num_primaries: 1.0e6
+  num_threads: 0
+  rng_seed: 0
+  min_deposition_ratio: 0.5
+  output_root: /scratch/mstryja/DoTA_dataset_v2
+  experiment_prefix: water_phantom
+  experiment_version: 2
+  make_figures: false
+  overwrite: false             # resumable

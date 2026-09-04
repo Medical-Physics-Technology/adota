@@ -26,7 +26,10 @@ from src.datasets.base import CTRecord
 from src.figures.mc_beamlet_qc import mc_beamlet_qc_figure
 from src.mc_generation.geometry import (
     beam_entrance_index,
+    body_mask,
+    dose_in_body_fraction,
     extraction_isocenter_physical,
+    isocenters_from_world,
     mc_isocenter,
     reduce_vacuum_to_air,
     resample_to_isotropic,
@@ -43,6 +46,7 @@ from src.mc_generation.sweep import (
     sweep_lateral_half_extents,
     sweep_z_half_extent_mm,
 )
+from src.metrics.range_metrics import compute_range_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -67,11 +71,29 @@ class _FieldGeometry:
     """The CT (and derived isocenters) for one field angle of one patient."""
     ct: "sitk.Image"
     ct_array: np.ndarray
+    body: np.ndarray                     # (z,y,x) body contour, 1.0 inside the patient
     iso_mc: Sequence[float]
     iso_ext: Sequence[float]
     field_gantry: float                  # physical field angle (model metadata)
     mc_gantry: float                     # angle actually simulated (90 when rotated)
     ct_rotation_deg: float
+
+
+def _isocenters(ct: "sitk.Image", body: np.ndarray, cfg: RobustnessConfig):
+    """``(iso_mc, iso_ext)`` for one CT under ``cfg.isocenter_mode``.
+
+    ``grid_center`` is the historical convention (and what every generated dataset
+    so far used). ``body_com`` aims the beam at the centre of mass of the body
+    contour instead, which was tried to keep extreme-steering beamlets inside thin
+    thoracic anatomy; it did not measurably help (the corner beamlets over-range
+    through lung either way), so it stays available but off by default.
+    """
+    if cfg.isocenter_mode != "body_com":
+        return mc_isocenter(ct), extraction_isocenter_physical(ct)
+    com_zyx = np.argwhere(body > 0).mean(axis=0)
+    com = np.asarray(ct.TransformContinuousIndexToPhysicalPoint(
+        [float(com_zyx[2]), float(com_zyx[1]), float(com_zyx[0])]))
+    return isocenters_from_world(ct, com)
 
 
 def _field_geometry(ct: "sitk.Image", field_gantry: float, cfg: RobustnessConfig,
@@ -98,9 +120,11 @@ def _field_geometry(ct: "sitk.Image", field_gantry: float, cfg: RobustnessConfig
     by construction. The lateral (y) expansion is kept.
     """
     if not (cfg.rotate_to_canonical and abs(field_gantry - 90.0) > 1e-6):
+        body = body_mask(ct, cfg.body_hu_threshold)
+        iso_mc, iso_ext = _isocenters(ct, body, cfg)
         return _FieldGeometry(
-            ct=ct, ct_array=sitk.GetArrayFromImage(ct), iso_mc=mc_isocenter(ct),
-            iso_ext=extraction_isocenter_physical(ct), field_gantry=float(field_gantry),
+            ct=ct, ct_array=sitk.GetArrayFromImage(ct), body=body, iso_mc=iso_mc,
+            iso_ext=iso_ext, field_gantry=float(field_gantry),
             mc_gantry=float(field_gantry), ct_rotation_deg=0.0)
 
     ct_rotation_deg = -(field_gantry - 90.0)
@@ -116,9 +140,11 @@ def _field_geometry(ct: "sitk.Image", field_gantry: float, cfg: RobustnessConfig
               slice(max(0, int(yc - half_y)), int(yc + half_y) + 1))
     x0 = beam_entrance_index(arr, window) - int(round(cfg.beam_entrance_standoff_mm))
     trimmed = trim_beam_axis(rotated, x_size, x0)
+    body = body_mask(trimmed, cfg.body_hu_threshold)
+    iso_mc, iso_ext = _isocenters(trimmed, body, cfg)
     return _FieldGeometry(
-        ct=trimmed, ct_array=sitk.GetArrayFromImage(trimmed), iso_mc=mc_isocenter(trimmed),
-        iso_ext=extraction_isocenter_physical(trimmed), field_gantry=float(field_gantry),
+        ct=trimmed, ct_array=sitk.GetArrayFromImage(trimmed), body=body, iso_mc=iso_mc,
+        iso_ext=iso_ext, field_gantry=float(field_gantry),
         mc_gantry=90.0, ct_rotation_deg=float(ct_rotation_deg))
 
 
@@ -166,8 +192,18 @@ def _process_beamlet(
     flux = flux_projection(re_proj, beamlet_angles, sigmas, cropped_ct.shape,
                            spacing=np.asarray([1, 1, 1], dtype=np.float32))
 
+    # --- numerical support: dose-in-patient + clean-Bragg-peak metrics ---
+    body_crop, _, _, _ = extract_beamlet_roi(
+        ct, d_nozzle, d_smx, d_smy, spot, geom.iso_ext, cfg.roi_size, ct_array=geom.body)
+    dib = dose_in_body_fraction(cropped_dose, body_crop)
+    idd = np.asarray(cropped_dose.sum(axis=(0, 1)), dtype=float)  # depth = axis 2
+    rm = compute_range_metrics(idd, dz_mm=1.0)
+
     sim_res.update({
         "id": str(uuid.uuid4()),
+        "dose_in_body_fraction": float(dib),
+        "r100_mm": float(rm.r100_mm), "r80_mm": float(rm.r80_mm),
+        "dfw_mm": float(rm.dfw_mm), "peak_dose": float(rm.peak_dose),
         "provenance_uid": rec.uid,
         "dataset_name": rec.dataset_name,
         "anatomy": rec.anatomy,
@@ -267,6 +303,9 @@ def generate_for_record(
     patient, not per energy).
     """
     grid = build_angle_grid(cfg.theta_x_range, cfg.theta_y_range, cfg.grid_n, cfg.angles)
+    if cfg.border_only:  # only the corner/edge beamlets (fast, extreme-angle test)
+        n = cfg.grid_n
+        grid = [g for g in grid if g[0] in (0, n - 1) or g[1] in (0, n - 1)]
     gantries = resolve_gantries(cfg, rec.uid)
 
     ct = resample_to_isotropic(rec.load_image(), cfg.iso_spacing_mm)

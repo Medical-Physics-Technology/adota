@@ -47,7 +47,8 @@ class PhantomSpec:
     origin: Tuple[float, float, float] = (0.0, 0.0, 0.0)
     water_hu: int = 0
     air_hu: int = -1024
-    air_layer_depth: int = 0
+    air_layer_depth: int = 0     # air shell on ALL faces (legacy; causes lateral grazing)
+    air_front_mm: int = 0        # air slab ONLY in front of the beam (proximal x), full width
     name: str = "water"
 
     @property
@@ -55,7 +56,8 @@ class PhantomSpec:
         """Deterministic 16-hex id of the geometry (stable provenance key)."""
         payload = json.dumps(
             {k: getattr(self, k) for k in
-             ("kind", "size", "spacing", "origin", "water_hu", "air_hu", "air_layer_depth")},
+             ("kind", "size", "spacing", "origin", "water_hu", "air_hu",
+              "air_layer_depth", "air_front_mm")},
             sort_keys=True, default=list,
         )
         return hashlib.sha1(payload.encode()).hexdigest()[:16]
@@ -69,13 +71,18 @@ def build_phantom_image(spec: PhantomSpec) -> sitk.Image:
     """
     sx, sy, sz = int(spec.size[0]), int(spec.size[1]), int(spec.size[2])
     d = int(spec.air_layer_depth)
+    af = int(spec.air_front_mm)
     if spec.kind == "water":
         arr = np.full((sz, sy, sx), spec.water_hu, dtype=np.float32)
-        if d > 0:
+        if d > 0:  # legacy all-faces air shell
             if 2 * d >= min(sx, sy, sz):
                 raise ValueError(f"air_layer_depth {d} too large for size {spec.size}")
             arr[:] = spec.air_hu
             arr[d:sz - d, d:sy - d, d:sx - d] = spec.water_hu
+        if af > 0:  # full-width air slab in front of the beam (proximal x = last axis)
+            if af >= sx:
+                raise ValueError(f"air_front_mm {af} too large for x-size {sx}")
+            arr[:, :, 0:af] = spec.air_hu
     else:
         raise ValueError(f"unknown phantom kind {spec.kind!r}")
 
@@ -148,6 +155,7 @@ def build_phantom_dataset(cfg: dict) -> PhantomDataset:
             water_hu=int(p.get("water_hu", 0)),
             air_hu=int(p.get("air_hu", -1024)),
             air_layer_depth=int(p.get("air_layer_depth", 0)),
+            air_front_mm=int(p.get("air_front_mm", 0)),
             name=str(p.get("name", p.get("kind", "water"))),
         )
         records.append(PhantomRecord(

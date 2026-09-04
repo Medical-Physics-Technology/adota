@@ -1,0 +1,45 @@
+# Water phantom re-run: 512x512x400 water box with a FRONT-ONLY 50mm air layer.
+#   uv run python scripts/mc/generate_phantom_set.py --config scripts/mc/config_phantom_water512air.yaml
+#
+# The 50mm air layer in front is required (matches prior experiments). Unlike the
+# air50mm all-faces shell, the air is ONLY proximal (full-width) so tilted beamlets
+# enter through 50mm air then stay entirely in water -- no lateral edge grazing, no
+# air-only path (validated: corner dep_ratio 0.99, ROI front=air, deep=all water,
+# BP in water at 176mm). Plain-water water512 results are kept separately.
+
+name: water_phantom
+phantoms:
+  - kind: water
+    name: water512air50        # -> water_phantom_phantom_water512air50_e{E}_v2
+    size: [512, 512, 400]
+    spacing: [1.0, 1.0, 1.0]
+    origin: [0.0, 0.0, 0.0]
+    water_hu: 0
+    air_hu: -1024
+    air_layer_depth: 0         # no all-faces shell
+    air_front_mm: 50           # 50mm air ONLY in front of the beam (full width)
+
+engine:
+  mcsquare_install: /home/mstryja/tools/mcsquare
+  mc_work_dir: /scratch/mstryja/mc_work/water512air
+  bdl_file: hptc_beam_model_rsnone.txt
+  scanner: default
+
+robustness:
+  energies: [102.6, 135.0]
+  theta_x_range: [-2.0, 2.0]
+  theta_y_range: [-2.0, 2.0]
+  grid_n: 18
+  gantry_mode: fixed
+  gantry_value: 90.0
+  roi_size: [60, 60, 320]
+  iso_spacing_mm: 1.0
+  num_primaries: 1.0e6
+  num_threads: 0
+  rng_seed: 0
+  min_deposition_ratio: 0.5
+  output_root: /scratch/mstryja/DoTA_dataset_v2
+  experiment_prefix: water_phantom
+  experiment_version: 2
+  make_figures: false
+  overwrite: false
