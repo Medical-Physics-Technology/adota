@@ -63,12 +63,20 @@ adota/
 ├── src/
 │   ├── adota/
 │   │   ├── models.py               # DoTA3D_v3 model definition
-│   │   ├── layers.py               # Custom 3D conv/transformer layers
+│   │   ├── layers/                 # The nn.Module building blocks
+│   │   │   ├── conv.py             # Conv3D (weight-standardised), ConvBlock3D_v2
+│   │   │   ├── encoder_decoder.py  # ConvEncoder3D / ConvDecoder3D + skip tensors
+│   │   │   ├── transformer.py      # Causal-masked attention, positional embedding
+│   │   │   └── tensor_ops.py       # Permute / Reshape / Cropping shape adapters
 │   │   ├── config.py               # Shared constants, device setup, logging
 │   │   └── utils.py
 │   │
 │   ├── beamlets/                  # Plan-level pipeline: OpenTPS plan -> ADoTA dose
-│   │   ├── extraction.py           # Per-spot BEV CT crop + flux (serial + pooled)
+│   │   ├── extraction/             # Per-spot BEV CT crop + flux (serial + pooled)
+│   │   │   ├── __init__.py         # Config, per-field orchestration, manifest
+│   │   │   ├── spot.py             # One spot: crop + flux projection
+│   │   │   ├── io.py               # Output tree and per-spot writes
+│   │   │   └── overlay.py          # Per-field sanity-check PNG
 │   │   ├── rotation.py             # CT rotation around the isocenter (grid-expanding)
 │   │   ├── isocenter.py            # Plan->CT isocenter convention (x-flip)
 │   │   ├── cropping.py             # Air-padded depth-from-entrance ROI crop
@@ -85,9 +93,15 @@ adota/
 │   │
 │   ├── training/
 │   │   ├── losses.py               # LMSE, LPS, LossLPD, TwoObjectiveBalancer
-│   │   ├── run.py                  # CheckpointManager, logging utilities
-│   │   ├── utils.py                # validate_tensor_ranges, get_lr
-│   │   └── validation.py           # Per-epoch validation loop (RMSE/MAPE/RDE/GPR)
+│   │   ├── loop.py                 # train_one_epoch
+│   │   ├── logging_utils.py        # Phase-tagged, relative-time log formatting
+│   │   ├── run_dir.py              # Run directory, manifest, MetricsLog
+│   │   ├── checkpoints.py          # CheckpointManager, RNG snapshot/restore
+│   │   ├── diagnostics.py          # GracefulShutdown, NaN dumps, grad/param norms
+│   │   ├── validation.py           # Per-epoch validation loop (RMSE/MAPE/RDE/GPR)
+│   │   ├── binning.py              # Per-sample records, energy bins, worst-K
+│   │   ├── attention.py            # Canary attention snapshots
+│   │   └── utils.py                # validate_tensor_ranges, get_lr
 │   │
 │   ├── metrics/
 │   │   ├── classic.py              # RMSE, MAPE, RDE implementations
@@ -107,7 +121,19 @@ adota/
 │   │   ├── analysis.py
 │   │   └── results.py
 │   │
+│   ├── evaluation/                 # Shared inference-evaluation engine
+│   │   ├── cli.py                  # resolve_device, merge_config, run setup
+│   │   ├── sources.py              # DirSource / H5Source sample iteration
+│   │   ├── engine.py               # The shared evaluate(...) loop
+│   │   └── outputs.py              # CSV writer, summary printer
+│   │
 │   ├── figures/                    # Plotting helpers
+│   │   ├── single_beam.py          # The main per-beamlet publication figure
+│   │   ├── axes_utils.py           # Aligned colorbars, multi-format saving
+│   │   ├── input_comparison.py     # Before/after rotation QC overlays
+│   │   ├── beamlet_input.py        # Model inputs only (CT + flux)
+│   │   ├── ct_visualizations.py    # HU segmentation figures
+│   │   └── bp_diagnostic.py        # Bragg-peak estimator diagnostic
 │   ├── image_processing/           # Texture, heterogeneity, GLCM
 │   ├── tables/                     # ASCII result table formatting
 │   └── utils/
@@ -115,11 +141,17 @@ adota/
 │       └── dose_grid_utils.py
 │
 └── tests/
-    ├── conftest.py
+    ├── utils/                      # Shared test helpers (importable, not fixtures)
+    │   ├── golden.py               # Golden-CSV comparison policy
+    │   ├── bdl.py                  # Synthetic beam-data-library builder
+    │   └── deps.py                 # Optional-dependency probes
+    ├── test_import_smoke.py        # Every module under src/ imports
+    ├── test_public_api.py          # Pins the importable surface of split modules
+    ├── test_cli_smoke.py           # `--help` on every Typer script
     ├── test_training_losses.py     # 43 tests for LMSE, LPS, TwoObjectiveBalancer
     ├── test_checkpoint_manager.py  # 5 tests for CheckpointManager save/load
-    ├── test_interface_severity.py
-    └── test_pflugfelder_hi.py
+    ├── golden/                     # Characterization tests (marked `integration`)
+    └── perf/                       # Performance A/B tests (marked `slow`)
 ```
 
 ---
@@ -147,15 +179,26 @@ cd adota
 uv sync
 ```
 
-This installs all dependencies declared in [pyproject.toml](pyproject.toml) into `.venv/`.
+This installs all dependencies declared in [pyproject.toml](pyproject.toml) into
+`.venv/`, and installs the project itself in editable mode so `src.*` imports
+resolve from any working directory.
 
-**4. Verify the setup**
+**4. Configure the environment (optional)**
 
 ```bash
-uv run pytest tests/ -v
+cp .env.example .env       # local values only; every variable has a working default
 ```
 
-All tests should pass. The loss and checkpoint tests use only CPU and the example data in [data/example_inputs/](data/example_inputs/).
+**5. Verify the setup**
+
+```bash
+uv run python scripts/run-tests.py unit
+uv run ruff check .
+```
+
+The unit suite should report 0 failures. It uses only CPU and the example data
+in [data/example_inputs/](data/example_inputs/); anything needing the full
+dataset, a checkpoint or a GPU skips with a reason.
 
 ---
 
@@ -334,18 +377,37 @@ Configs: [scripts/ablation/](scripts/ablation/)
 
 ## Tests
 
+One runner drives every suite:
+
 ```bash
-# Run all tests
-uv run pytest tests/ -v
-
-# Run a specific file
-uv run pytest tests/test_training_losses.py -v
-
-# Run with coverage
-uv run pytest tests/ --tb=short
+uv run python scripts/run-tests.py unit          # default: fast, no data needed
+uv run python scripts/run-tests.py unit --fast   # also skips the slow perf suite
+uv run python scripts/run-tests.py integration   # needs the HDF5 dataset + a checkpoint
+uv run python scripts/run-tests.py e2e           # opt-in, full workflow
+uv run python scripts/run-tests.py all
 ```
 
-Tests use only CPU and the small numpy arrays in [data/example_inputs/](data/example_inputs/). No GPU or full HDF5 dataset is required.
+Extra arguments are forwarded to pytest, so `run-tests.py unit -x -q` works. To
+run one file directly:
+
+```bash
+uv run pytest tests/test_training_losses.py -v
+```
+
+The **unit** suite uses only CPU and the small numpy arrays in
+[data/example_inputs/](data/example_inputs/) -- no GPU, no HDF5 dataset, no
+network. Tests needing something the machine does not have skip with a reason
+that says what to install or where the data belongs.
+
+Suites are selected by marker: `integration` (real dataset or an external
+package), `e2e`, `gpu`, `slow`. They are declared in
+[pyproject.toml](pyproject.toml).
+
+Lint with the committed ruff configuration:
+
+```bash
+uv run ruff check .
+```
 
 | Test file | Coverage |
 |---|---|
@@ -353,6 +415,9 @@ Tests use only CPU and the small numpy arrays in [data/example_inputs/](data/exa
 | [test_checkpoint_manager.py](tests/test_checkpoint_manager.py) | Round-trip fidelity, RNG state, retention policy, partial restore (5 tests) |
 | [test_interface_severity.py](tests/test_interface_severity.py) | ISI metric computation |
 | [test_pflugfelder_hi.py](tests/test_pflugfelder_hi.py) | Pflugfelder heterogeneity index |
+| [test_import_smoke.py](tests/test_import_smoke.py) | Every module under `src/` imports cleanly |
+| [test_public_api.py](tests/test_public_api.py) | The split modules still expose every name they used to |
+| [test_cli_smoke.py](tests/test_cli_smoke.py) | `--help` exits 0 on every Typer script |
 
 ---
 

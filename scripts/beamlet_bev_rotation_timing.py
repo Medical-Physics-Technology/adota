@@ -26,7 +26,6 @@ from __future__ import annotations
 import json
 import logging
 import random
-import sys
 from pathlib import Path
 from time import perf_counter
 from typing import Annotated, Optional
@@ -38,10 +37,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import typer
-
-ROOT_DIR = Path(__file__).resolve().parents[1]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
 
 from src.adota.config import load_yaml_config, setup_logging, setup_run_directory
 from src.adota.utils import load_model
@@ -58,6 +53,8 @@ from src.loaders.dir_based import (
     prepare_input_from_arrays,
 )
 from src.loaders.plan_directory import PlanDirectory, load_plan_directory
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
 
 logger = logging.getLogger(__name__)
 

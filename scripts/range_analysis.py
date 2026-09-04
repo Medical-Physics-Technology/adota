@@ -27,7 +27,6 @@ the run directory for reproducibility.
 import logging
 import os
 import shutil
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -41,9 +40,6 @@ import typer
 from scipy.stats import gaussian_kde, pearsonr
 
 # Add project root to path
-PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
 from src.adota.config import (
     DEFAULT_SCALE,
     denormalize_energy,
@@ -63,6 +59,8 @@ from src.metrics.range_metrics import (
 )
 from src.schemas.configs import EvaluationConfig
 from src.schemas.results import RangeRecord
+
+PROJECT_ROOT = Path(__file__).parent.parent
 
 logger = logging.getLogger(__name__)
 
@@ -213,28 +211,46 @@ def records_to_dataframe(records: list[RangeRecord]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def summarize(df: pd.DataFrame) -> pd.DataFrame:
-    """Per-metric summary stats over the signed-difference columns."""
+def summarize(
+    df: pd.DataFrame,
+    exceed_thresholds_mm: tuple[float, ...] = (1.0, 2.0, 3.0, 5.0),
+    abs_percentiles: tuple[float, ...] = (50.0, 90.0, 95.0, 99.0),
+    signed_percentiles: tuple[float, ...] = (5.0, 50.0, 95.0),
+) -> pd.DataFrame:
+    """Per-metric summary over the signed-difference columns.
+
+    Signed means alone hide large positive and negative errors, so this reports,
+    per range metric:
+      * signed central tendency + spread (bias, std, signed percentiles),
+      * absolute-error magnitude (MAE, RMSE, |Δ| percentiles, max),
+      * fractions exceeding clinically relevant thresholds (|Δ| > t mm).
+    """
     delta_cols = [c for c in df.columns if c.endswith("_delta_mm")]
     rows = []
     for col in delta_cols:
         vals = df[col].dropna().to_numpy()
         if vals.size == 0:
             continue
-        abs_vals = np.abs(vals)
-        rows.append(
-            {
-                "metric": col,
-                "n": int(vals.size),
-                "mean_mm": round(float(vals.mean()), 3),
-                "std_mm": round(float(vals.std()), 3),
-                "mae_mm": round(float(abs_vals.mean()), 3),
-                "median_mm": round(float(np.median(vals)), 3),
-                "p95_abs_mm": round(float(np.percentile(abs_vals, 95)), 3),
-                "within_1mm_pct": round(float(100.0 * np.mean(abs_vals <= 1.0)), 2),
-                "within_2mm_pct": round(float(100.0 * np.mean(abs_vals <= 2.0)), 2),
-            }
-        )
+        a = np.abs(vals)
+        row = {
+            "metric": col,
+            "n": int(vals.size),
+            "bias_mm": round(float(vals.mean()), 3),      # signed mean
+            "std_mm": round(float(vals.std()), 3),
+            "mae_mm": round(float(a.mean()), 3),          # mean absolute error
+            "rmse_mm": round(float(np.sqrt(np.mean(vals ** 2))), 3),
+        }
+        # signed percentiles expose the positive vs negative tails
+        for p in signed_percentiles:
+            row[f"signed_p{int(p)}_mm"] = round(float(np.percentile(vals, p)), 3)
+        # absolute-error percentiles + worst case
+        for p in abs_percentiles:
+            row[f"abs_p{int(p)}_mm"] = round(float(np.percentile(a, p)), 3)
+        row["abs_max_mm"] = round(float(a.max()), 3)
+        # fractions exceeding clinically relevant thresholds
+        for t in exceed_thresholds_mm:
+            row[f"exceed_{t:g}mm_pct"] = round(float(100.0 * np.mean(a > t)), 2)
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -501,6 +517,9 @@ def main(
     energy_bins = yaml_config.get("energy_bins", [70, 100, 130, 160, 190, 220, 250])
     n_worst_figures = int(yaml_config.get("n_worst_figures", 10))
     normalize_flux = bool(yaml_config.get("normalize_flux", True))
+    exceed_thresholds_mm = tuple(float(t) for t in yaml_config.get("exceed_thresholds_mm", [1.0, 2.0, 3.0, 5.0]))
+    abs_percentiles = tuple(float(p) for p in yaml_config.get("abs_percentiles", [50, 90, 95, 99]))
+    signed_percentiles = tuple(float(p) for p in yaml_config.get("signed_percentiles", [5, 50, 95]))
 
     if model_name is None:
         raise typer.BadParameter("model_name is required (CLI or YAML)")
@@ -585,15 +604,40 @@ def main(
     df.to_csv(csv_path, index=False)
     logger.info(f"Per-beamlet results: {csv_path}")
 
-    summary = summarize(df)
-    summary.to_csv(run_dir / "range_summary.csv", index=False)
-    logger.info("Range-error summary (ADoTA - MC):")
-    for _, row in summary.iterrows():
+    # Report combined AND per-anatomical-site (signed means cancel differently per
+    # site; pelvic/abdominal and thoracic must be inspectable separately).
+    def _table(sub_df: pd.DataFrame) -> pd.DataFrame:
+        return summarize(sub_df, exceed_thresholds_mm, abs_percentiles, signed_percentiles)
+
+    sites = sorted(str(s) for s in df["anatomical_site"].dropna().unique())
+    site_groups = [("combined", df)] + [(s, df[df["anatomical_site"] == s]) for s in sites]
+
+    per_site_summaries = []
+    for name, sub in site_groups:
+        s = _table(sub)
+        if s.empty:
+            continue
+        s.insert(0, "site", name)
+        per_site_summaries.append(s)
+        with pd.option_context(
+            "display.max_columns", None, "display.width", 260,
+            "display.float_format", lambda v: f"{v:.3f}",
+        ):
+            table_str = s.drop(columns=["site"]).to_string(index=False)
         logger.info(
-            f"  {row['metric']:18s}  bias={row['mean_mm']:+.2f}  MAE={row['mae_mm']:.2f}  "
-            f"std={row['std_mm']:.2f}  <=1mm={row['within_1mm_pct']:.0f}%  "
-            f"<=2mm={row['within_2mm_pct']:.0f}%  (n={row['n']})"
+            "Range-error summary [%s] (%d beamlets), signed + absolute magnitude + "
+            "threshold-exceedance (all mm unless _pct):\n%s",
+            name, len(sub), table_str,
         )
+
+    summary = pd.concat(per_site_summaries, ignore_index=True)
+    summary.to_csv(run_dir / "range_summary.csv", index=False)
+    logger.info(
+        "Summary CSV (combined + per-site) -> %s\n"
+        "  Columns: bias=signed mean; mae=mean|Δ|; rmse; signed_pP=signed percentiles "
+        "(tails); abs_pP=|Δ| percentiles; abs_max; exceed_TmM_pct=%% of beamlets with |Δ|>T mm.",
+        run_dir / "range_summary.csv",
+    )
 
     # ── Figures ──────────────────────────────────────────────────────────
     fig_dir = run_dir / "figures"

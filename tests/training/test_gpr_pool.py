@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
+
 from src.training.gpr_pool import (
     build_gpr_pool,
     load_gpr_pool,
@@ -11,8 +13,6 @@ from src.training.gpr_pool import (
     save_gpr_pool,
 )
 from src.training.validation import pick_gpr_subset
-
-import numpy as np
 
 VAL_IDS = [f"rec_{i:04d}" for i in range(300)]
 

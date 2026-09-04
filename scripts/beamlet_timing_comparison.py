@@ -1,9 +1,24 @@
+"""Smoke timing study for ADoTA beamlet-angle rotations around lateral axes.
+
+Compares the end-to-end per-beamlet cost of the ADoTA projection path against
+the DoTA beam's-eye-view reinterpolation path.
+
+Flow:
+1. Load sample records for each configured dataset.
+2. Time projection/rotation, cropping and inference for both paths.
+3. Aggregate into per-dataset rows and write a timing CSV plus bar figures.
+
+Timings are machine-dependent, so this script is guarded by a smoke check
+rather than a numeric golden.
+
+    uv run python scripts/beamlet_timing_comparison.py --help
+"""
+
 from __future__ import annotations
 
 import csv
 import json
 import logging
-import os
 import random
 import sys
 import traceback
@@ -18,17 +33,15 @@ import torch
 import typer
 from matplotlib import pyplot as plt
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
-
 from src.adota.config import denormalize_energy
 from src.adota.utils import load_model
 from src.evaluation.cli import resolve_device
-from src.figures.single_beam import compare_two_inputs
+from src.figures.input_comparison import compare_two_inputs
 from src.image_processing.rotation import rotate_lateral_axes_sequential
 from src.loaders.dir_based import get_single_record
 from src.schemas.configs import EvaluationConfig
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
 
 app = typer.Typer(
     help="Smoke timing study for ADoTA beamlet-angle rotations around lateral axes."
@@ -212,7 +225,10 @@ def write_config(
         },
         "axis_conventions": {
             "ba1": "rotation around lateral Y/H axis; applied as -ba1 first",
-            "ba0": "rotation around lateral X/W axis; applied as ba0 second because of output-to-input affine convention",
+            "ba0": (
+                "rotation around lateral X/W axis; applied as ba0 second "
+                "because of output-to-input affine convention"
+            ),
             "depth_axis": "no depth-axis rotation is performed",
         },
     }
@@ -411,7 +427,6 @@ def write_publication_preprocessing_figure(
     tick_fontsize = 12
     annotation_fontsize = 11
     legend_fontsize = 11
-    inference_time_s = inference_time_ms / 1000.0
     ct_rotation_to_bev_s = ct_rotation_time_s
     dose_rotation_from_bev_s = dose_rotation_time_s
     dota_bev_reinterpolation_s = ct_rotation_to_bev_s + dose_rotation_from_bev_s
@@ -653,7 +668,10 @@ def main(
         1,
         "--batch-size",
         min=1,
-        help="Batch size metadata stored with timing outputs. Inference batching is not implemented in this smoke stage.",
+        help=(
+            "Batch size metadata stored with timing outputs. Inference batching "
+            "is not implemented in this smoke stage."
+        ),
     ),
     projection_time_s: float = typer.Option(
         0.039,
@@ -691,7 +709,10 @@ def main(
     if rotation_backend not in {"scipy", "torch"}:
         raise typer.BadParameter("--rotation-backend must be 'scipy' or 'torch'.")
     if rotation_volume not in {"ct", "flux", "ds", "dose"}:
-        raise typer.BadParameter("--rotation-volume is deprecated, but must be one of ct, flux, ds, or dose if provided.")
+        raise typer.BadParameter(
+            "--rotation-volume is deprecated, but must be one of ct, flux, ds, "
+            "or dose if provided."
+        )
     if downsampling_method not in {"interpolation", "avg_pooling"}:
         raise typer.BadParameter("--downsampling-method must be 'interpolation' or 'avg_pooling'.")
 
@@ -757,7 +778,11 @@ def main(
         )
 
         for sample_id in selected_ids:
-            preview_path = run_dir / "rotated_previews" / f"{dataset.label}_{sample_id}_{rotation_backend}_all_volumes.npz"
+            preview_path = (
+                run_dir
+                / "rotated_previews"
+                / f"{dataset.label}_{sample_id}_{rotation_backend}_all_volumes.npz"
+            )
             figure_path = run_dir / "figures" / f"{dataset.label}_{sample_id}_{rotation_backend}_ct_flux_comparison.png"
             base_row = dict(
                 dataset_label=dataset.label,

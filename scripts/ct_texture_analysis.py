@@ -12,7 +12,6 @@ Usage:
 
 import json
 import logging
-import sys
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -25,9 +24,6 @@ import SimpleITK as sitk
 import typer
 
 # Add project root to path
-PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
 from src.image_processing.edge_detection import (
     LogEdgeParams,
     log_edges,
@@ -35,7 +31,6 @@ from src.image_processing.edge_detection import (
 )
 from src.image_processing.homogeneity_scores import glcm_homogeneity_idm
 from src.utils.texture_analysis import (
-    EXTENSION_MAP,
     ImageFormat,
     discover_images,
     load_config,
@@ -43,6 +38,8 @@ from src.utils.texture_analysis import (
     setup_logging,
     setup_run_directory,
 )
+
+PROJECT_ROOT = Path(__file__).parent.parent
 
 logger = logging.getLogger(__name__)
 

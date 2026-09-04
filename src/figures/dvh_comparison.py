@@ -25,7 +25,7 @@ import numpy as np
 from matplotlib.lines import Line2D
 
 from src.beamlets.dvh import DVH
-from src.figures.single_beam import save_figure_as_publication_formats
+from src.figures.axes_utils import save_figure_as_publication_formats
 
 __all__ = [
     "compute_structure_dvhs",
@@ -35,6 +35,60 @@ __all__ = [
 ]
 
 _PALETTE = ["tab:blue", "tab:red", "tab:green", "tab:orange", "tab:purple", "tab:brown"]
+
+# Display formatting overrides applied after the generic separator/title-case rule.
+_LABEL_OVERRIDES = {"Lungs Total": "Lungs (Total)"}
+
+# Fixed, anatomy-aware structure -> colour map (keyed by the *formatted* label),
+# so a structure keeps the same colour across every DVH panel this script makes.
+# Colours are distinct within each anatomy; repeats only occur across anatomies
+# (prostate vs thoracic), which never appear in the same figure. Unknown names
+# fall back to the palette cycle.
+_STRUCTURE_COLORS = {
+    "Target": "#1f77b4",
+    # prostate OARs
+    "Bladder": "#ff7f0e", "Rectum": "#2ca02c",
+    "Femur Head L": "#9467bd", "Femur Head R": "#8c564b",
+    # thoracic OARs
+    "Spinal Cord": "#d62728", "Lung Right": "#2ca02c", "Lung Left": "#9467bd",
+    "Lungs (Total)": "#8c564b", "Esophagus": "#e377c2", "Heart": "#ff7f0e",
+}
+
+
+def _format_structure_label(name: str) -> str:
+    """Human-readable structure label for the legend.
+
+    Underscores/hyphens (internal word separators) become spaces, the result is
+    title-cased, and a small override map handles special cases
+    (e.g. ``Lungs-Total`` -> ``Lungs (Total)``). ``Femur_Head_L`` -> ``Femur Head L``,
+    ``Spinal-Cord`` -> ``Spinal Cord``.
+    """
+    text = " ".join(name.replace("_", " ").replace("-", " ").split()).title()
+    return _LABEL_OVERRIDES.get(text, text)
+
+
+def _robust_dose_upper(
+    structures: Dict[str, np.ndarray],
+    dose_a: np.ndarray,
+    dose_b: np.ndarray,
+    percentile: float = 99.9,
+) -> float:
+    """Figure x-axis upper (Gy): a high percentile of the in-structure dose x1.05.
+
+    Uses a percentile rather than the raw maximum so a single high-dose outlier
+    voxel cannot stretch the axis over the clinically relevant range. Falls back
+    to the raw maximum when there are no structure voxels.
+    """
+    raw = 1.05 * max(float(dose_a.max()), float(dose_b.max()))
+    if not structures:
+        return raw
+    union = np.zeros(next(iter(structures.values())).shape, dtype=bool)
+    for mask in structures.values():
+        union |= mask
+    if not union.any():
+        return raw
+    vals = np.concatenate([dose_a[union], dose_b[union]])
+    return 1.05 * float(np.percentile(vals, percentile))
 
 # Clinically meaningful metrics per structure type.
 _TARGET_METRICS = ("Dmin", "Dmean", "Dmax", "D2", "D95", "D98")
@@ -175,6 +229,8 @@ def dvh_comparison_figure(
     labels: Tuple[str, str] = ("ADoTA", "MCsquare"),
     target_keyword: str = "target",
     dpi: int = 300,
+    max_dose: Optional[float] = None,
+    compact: bool = False,
 ) -> list[Path]:
     """Render the ADoTA vs MCsquare DVH curves (no metric table).
 
@@ -187,13 +243,28 @@ def dvh_comparison_figure(
         labels: ``(name_a, name_b)``.
         target_keyword: Substring identifying the target (drawn first).
         dpi: Output resolution.
+        max_dose: Fixed x-axis upper limit (Gy). When ``None`` a robust
+            percentile of the in-structure dose is used, so a single outlier
+            voxel cannot stretch the axis. The DVH curves are computed over the
+            full dose range; only the axis is clipped.
+        compact: For composition into a multi-panel figure. Suppresses the title
+            and the ADoTA/MCsquare (solid/dashed) "Dose" legend, keeping only the
+            per-panel "Structure" legend and the axes.
 
     Returns:
         The written figure paths.
     """
     dvhs = compute_structure_dvhs(structures, dose_a, dose_b, spacing)
     names = _ordered_names(structures, target_keyword)
-    colors = {name: _PALETTE[i % len(_PALETTE)] for i, name in enumerate(names)}
+    display = {name: _format_structure_label(name) for name in names}
+    colors = {
+        name: _STRUCTURE_COLORS.get(display[name], _PALETTE[i % len(_PALETTE)])
+        for i, name in enumerate(names)
+    }
+    x_upper = (
+        float(max_dose) if max_dose is not None
+        else _robust_dose_upper(structures, dose_a, dose_b)
+    )
 
     fig = plt.figure(layout="constrained", figsize=(12, 9), dpi=dpi)
     ax = fig.add_subplot(111)
@@ -204,26 +275,31 @@ def dvh_comparison_figure(
 
     ax.set_xlabel("Dose [Gy]", fontsize=_FS_AXIS)
     ax.set_ylabel("Volume [%]", fontsize=_FS_AXIS)
-    ax.set_xlim(left=0.0)
+    ax.set_xlim(0.0, x_upper)
     ax.set_ylim(0.0, 100.0)
     ax.grid(True, linestyle=":", linewidth=0.6)
     ax.tick_params(labelsize=_FS_TICK)
-    ax.set_title("Dose-volume histograms: ADoTA vs MCsquare", fontsize=_FS_TITLE, weight="bold")
+    if not compact:
+        ax.set_title(
+            "Dose-volume histograms: ADoTA vs MCsquare",
+            fontsize=_FS_TITLE, weight="bold",
+        )
 
     struct_handles = [Line2D([0], [0], color=colors[n], lw=2.8) for n in names]
-    style_handles = [
-        Line2D([0], [0], color="black", lw=2.2, ls="-"),
-        Line2D([0], [0], color="black", lw=2.2, ls="--"),
-    ]
     leg1 = ax.legend(
-        struct_handles, names, title="Structure", loc="upper right",
-        fontsize=_FS_LEGEND, title_fontsize=_FS_LEGEND,
+        struct_handles, [display[n] for n in names], title="Structure",
+        loc="upper right", fontsize=_FS_LEGEND, title_fontsize=_FS_LEGEND,
     )
     ax.add_artist(leg1)
-    ax.legend(
-        style_handles, list(labels), title="Dose", loc="center right",
-        fontsize=_FS_LEGEND, title_fontsize=_FS_LEGEND,
-    )
+    if not compact:
+        style_handles = [
+            Line2D([0], [0], color="black", lw=2.2, ls="-"),
+            Line2D([0], [0], color="black", lw=2.2, ls="--"),
+        ]
+        ax.legend(
+            style_handles, list(labels), title="Dose", loc="center right",
+            fontsize=_FS_LEGEND, title_fontsize=_FS_LEGEND,
+        )
 
     paths = save_figure_as_publication_formats(fig, figure_path)
     plt.close(fig)

@@ -109,6 +109,7 @@ def build_dataloaders(
         normalize=False,
         normalize_flux_only=config.normalize_flux_only,
         flux_mode=config.flux_mode,
+        centerline_sidecar=config.centerline_sidecar,
         indexes_to_exclude_list=config.excluded_indexes_file,
     )
     val_ds = H5PYGenerator(
@@ -119,6 +120,7 @@ def build_dataloaders(
         normalize=False,
         normalize_flux_only=config.normalize_flux_only,
         flux_mode=config.flux_mode,
+        centerline_sidecar=config.centerline_sidecar,
         indexes_to_exclude_list=config.excluded_indexes_file,
     )
 

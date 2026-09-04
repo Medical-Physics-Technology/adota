@@ -1,6 +1,18 @@
-import numpy as np
-from typing import Tuple
+"""Geometric augmentation of beamlet volumes around the Bragg peak.
+
+Flow:
+1. Locate the Bragg peak in the dose grid.
+2. Crop a fixed-size window around it (``cropp_around_index``).
+3. ``moving_window_augmentation`` jitters that window within safe bounds so a
+   record yields several views without moving the peak out of the volume.
+
+Applied by :class:`src.loaders.generator.H5PYGenerator` during training only.
+"""
+
 import random
+from typing import Tuple
+
+import numpy as np
 
 
 def estimate_bragg_peak(dose_grid: np.ndarray) -> Tuple[int, int, int]:

@@ -1,10 +1,25 @@
+"""Multi-framework benchmark of 3D volume rotation.
+
+Compares SciPy, CuPy and PyTorch for rotating CT, dose and target volumes about
+an arbitrary pivot, which is the dominant pre/post-processing cost in the
+plan-level pipeline.
+
+Flow:
+1. Load a real plan directory (CT grid, MC dose, target mask, isocenter).
+2. Rotate each volume with every available backend, timed and repeated.
+3. Cross-check the backends against each other with ``allclose`` at a stated
+   tolerance, and report any disagreement.
+4. Write timing CSVs and comparison figures into the run directory.
+
+    uv run python scripts/rotation_performance_analysis.py --help
+"""
+
 from __future__ import annotations
 
 import csv
 import importlib
 import math
 import os
-import sys
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -53,15 +68,16 @@ import torch.nn.functional as F
 import typer
 from scipy import ndimage
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.append(str(ROOT_DIR))
-
 from src.loaders.plan_parser import parse_plan
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
 
 
 app = typer.Typer(
-    help="Multi-framework benchmark: SciPy vs CuPy vs PyTorch for 3D rotation of CT, dose, and target around an arbitrary pivot."
+    help=(
+        "Multi-framework benchmark: SciPy vs CuPy vs PyTorch for 3D rotation of "
+        "CT, dose, and target around an arbitrary pivot."
+    )
 )
 
 
@@ -538,7 +554,10 @@ def _draw_subplot(
             target_slice,
             colors="red",
             linewidths=0.5,
-            origin="upper", # I think the target mask is stored in the opposite orientation to the CT, so contour needs origin=upper to align. Plans differ in how masks are stored.
+            # The target mask appears to be stored in the opposite orientation to
+            # the CT, so contour needs origin="upper" to align. Plans differ in how
+            # masks are stored.
+            origin="upper",
             levels=[0.5],
         )
     ax.scatter([pivot_xy[0]], [pivot_xy[1]], color="red", s=20, label="pivot")
@@ -783,7 +802,9 @@ def correctness_vs_scipy(
             ok = np.allclose(scipy_vol.rotated, other_vol.rotated, atol=atol)
             diff = np.abs(scipy_vol.rotated - other_vol.rotated)
             print(
-                f"  {res.name}:{vol_name}: allclose={ok}  max_abs_diff={diff.max():.4g}  mean_abs_diff={diff.mean():.4g}  (atol={atol:.4g})",
+                f"  {res.name}:{vol_name}: allclose={ok}  "
+                f"max_abs_diff={diff.max():.4g}  mean_abs_diff={diff.mean():.4g}  "
+                f"(atol={atol:.4g})",
                 flush=True,
             )
 

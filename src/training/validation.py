@@ -11,8 +11,8 @@ validation loader and returns a structured dictionary containing:
 - The top-K worst samples by MAPE (id, energy, RMSE, MAPE, RDE).
 - Optionally, gamma pass rate on a random subset of the validation set.
 
-A separate :func:`save_attention_snapshot` helper persists attention maps
-from a fixed canary sample for transformer interpretability.
+Per-sample records and their aggregation live in :mod:`src.training.binning`;
+the canary attention snapshot lives in :mod:`src.training.attention`.
 
 All artifacts (per-sample CSV, worst-K JSON, attention maps) are written
 under ``run_dir/validation/epoch_NNNN/`` and ``run_dir/attention/``
@@ -24,8 +24,6 @@ from __future__ import annotations
 import csv
 import json
 import logging
-from collections import defaultdict
-from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -40,86 +38,18 @@ from src.metrics.classic import (
     calculate_relative_dose_error,
     calculate_rmse,
 )
+from src.training.binning import (
+    _bin_by_fixed_edges,
+    _bin_by_quantile,
+    _SampleMetrics,
+    _worst_k_records,
+)
 from src.training.losses import LMSE, LPS
 from src.utils.scallers import inverse_minmax
 from src.utils.serialization import NumpyEncoder
 from src.utils.unit_conversions import to_gy
 
 logger = logging.getLogger(__name__)
-
-
-# ── Per-sample record ───────────────────────────────────────────────────────
-
-
-@dataclass
-class _SampleMetrics:
-    energy_mev: float
-    loss_mse: float
-    loss_ps: float
-    rmse_gy: float
-    mape_pct: float
-    rde_pct: float
-    gpr: Optional[float] = None  # populated only for the GPR subset
-
-
-# ── Energy binning ──────────────────────────────────────────────────────────
-
-
-def _bin_by_fixed_edges(
-    energies_mev: np.ndarray,
-    values: np.ndarray,
-    edges: Sequence[float],
-) -> Dict[str, float]:
-    """Mean of ``values`` per fixed-edge energy bin."""
-    edges_arr = np.asarray(edges, dtype=float)
-    indices = np.digitize(energies_mev, edges_arr) - 1
-    out: Dict[str, float] = {}
-    for k in range(len(edges_arr) - 1):
-        mask = indices == k
-        if mask.any():
-            out[f"{edges_arr[k]:.0f}-{edges_arr[k + 1]:.0f}"] = float(values[mask].mean())
-    return out
-
-
-def _bin_by_quantile(
-    energies_mev: np.ndarray,
-    values: np.ndarray,
-    n_bins: int,
-) -> Dict[str, Any]:
-    """Mean of ``values`` per quantile energy bin (returns edges + means)."""
-    if n_bins < 1 or energies_mev.size < n_bins:
-        return {"edges": [], "means": {}}
-    edges = np.quantile(energies_mev, np.linspace(0.0, 1.0, n_bins + 1))
-    indices = np.clip(np.digitize(energies_mev, edges) - 1, 0, n_bins - 1)
-    means: Dict[str, float] = {}
-    for k in range(n_bins):
-        mask = indices == k
-        if mask.any():
-            means[f"q{k}"] = float(values[mask].mean())
-    return {"edges": edges.tolist(), "means": means}
-
-
-# ── Worst-K samples ─────────────────────────────────────────────────────────
-
-
-def _worst_k_records(
-    sample_ids: Sequence[str],
-    samples: Sequence[_SampleMetrics],
-    k: int,
-) -> List[Dict[str, Any]]:
-    indexed = sorted(
-        enumerate(samples), key=lambda e: e[1].mape_pct, reverse=True
-    )[:k]
-    return [
-        {
-            "sample_id": sample_ids[i],
-            "energy_mev": s.energy_mev,
-            "rmse_gy": s.rmse_gy,
-            "mape_pct": s.mape_pct,
-            "rde_pct": s.rde_pct,
-        }
-        for i, s in indexed
-    ]
 
 
 # ── GPR helper ──────────────────────────────────────────────────────────────
@@ -234,7 +164,7 @@ def evaluate_validation(
 
     Returns:
         Dictionary with the aggregated metrics, ready to feed into
-        :class:`~src.training.run.MetricsLog`.
+        :class:`~src.training.run_dir.MetricsLog`.
     """
     model.eval()
     scale = config.scale
@@ -247,7 +177,7 @@ def evaluate_validation(
     gpr_subset_set = set(int(i) for i in gpr_subset_indices) if compute_gpr else set()
 
     # GPR progress heartbeat: ~10 lines total across the whole subset.
-    from src.training.run import log_phase
+    from src.training.logging_utils import log_phase
 
     gpr_total = len(gpr_subset_set)
     gpr_heartbeat_every = max(1, gpr_total // 10) if gpr_total else 1
@@ -459,54 +389,3 @@ def evaluate_validation(
         json.dump(metrics, f, indent=2, cls=NumpyEncoder)
 
     return metrics
-
-
-# ── Attention canary snapshot ───────────────────────────────────────────────
-
-
-def save_attention_snapshot(
-    *,
-    model: torch.nn.Module,
-    canary_x: torch.Tensor,
-    canary_energy: torch.Tensor,
-    run_dir: Path,
-    epoch: int,
-) -> Optional[Path]:
-    """Save attention maps for a fixed validation sample.
-
-    Skipped silently when the model has no transformer blocks (the
-    forward pass returns a zero placeholder in that case).
-
-    Args:
-        model: Model in eval mode (we don't toggle modes here).
-        canary_x: Single-sample input ``(1, C, D, H, W)`` already on
-            the right device.
-        canary_energy: Single-sample energy ``(1, 1)`` already on the
-            right device.
-        run_dir: Run directory; the file is written to
-            ``run_dir/attention/epoch_NNNN.npy``.
-        epoch: Current epoch.
-
-    Returns:
-        Path to the saved file, or ``None`` if attention is not
-        meaningful for this model.
-    """
-    num_transformers = getattr(model, "num_transformers", 0)
-    if num_transformers == 0:
-        return None
-
-    was_training = model.training
-    model.eval()
-    try:
-        with torch.no_grad():
-            outputs = model(canary_x, canary_energy)
-    finally:
-        if was_training:
-            model.train()
-
-    if not isinstance(outputs, tuple) or len(outputs) < 2:
-        return None
-    attn = outputs[1]
-    out_path = run_dir / "attention" / f"epoch_{epoch:04d}.npy"
-    np.save(out_path, attn.detach().cpu().numpy())
-    return out_path

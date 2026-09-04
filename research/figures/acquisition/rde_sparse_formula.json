@@ -1,0 +1,23 @@
+{
+  "alpha": 0.0008,
+  "intercept": 0.004329034445971575,
+  "n_terms": 14,
+  "coefficients": {
+    "bp_range_max_mm": 0.0764775301593364,
+    "max_grad_depth_mm": 0.041482884721376824,
+    "total_hu_change": 0.037727307566522095,
+    "max_hu_jump": 0.03105035939219282,
+    "lateral_edge_energy": 0.02512759433920099,
+    "wepl_std": 0.024984318249278256,
+    "max_hu_gradient": 0.019315482564279843,
+    "interface_bp_distance": 0.01568713514778377,
+    "hetero_fraction": -0.007914769043377954,
+    "sigma_hu_bp": 0.0075307898587409555,
+    "sobel_dw_anisotropy": -0.006629562575971673,
+    "bp_range_min_mm": 0.005856411011065039,
+    "lateral_hu_var_bp": 0.004242506615265623,
+    "sum_sobel_bp": 0.0026653829347354414
+  },
+  "heldout_pearson": 0.789307973552085,
+  "heldout_spearman": 0.798994756441012
+}

@@ -78,23 +78,37 @@ def _fine_grid(
 def _distal_crossing(
     z: np.ndarray, y: np.ndarray, peak_idx: int, level_value: float
 ) -> float:
-    """Deepest depth on the distal side where ``y`` crosses ``level_value``.
+    """First distal depth where ``y`` falls through ``level_value``.
 
-    Scans the distal region (``z >= z[peak_idx]``) for the last sample still at
-    or above ``level_value`` and linearly interpolates the crossing to the next
-    (sub-threshold) sample, giving a sub-voxel distal depth.
+    Walks the distal region (``z >= z[peak_idx]``) outward from the peak and
+    returns the *first* crossing below ``level_value``, linearly interpolated to
+    sub-voxel resolution. This is the clinical distal-edge definition: it locates
+    the fall-off edge of the primary Bragg peak.
+
+    The earlier implementation took the *deepest* sample at or above the level,
+    which is ill-conditioned on plateau- or multi-modal IDDs (e.g. beamlets with
+    a lateral air/lung channel whose laterally-integrated dose plateaus near the
+    threshold): a hair of dose difference on the plateau sent the crossing to the
+    grid edge, producing spurious range errors of >100 mm. Taking the first
+    distal crossing removes that artifact.
     """
-    above = np.where(y[peak_idx:] >= level_value)[0]
-    if len(above) == 0:
-        return z[peak_idx]
-    k = peak_idx + int(above[-1])
-    if k >= len(y) - 1:
-        return z[k]
-    y0, y1 = y[k], y[k + 1]
+    distal = y[peak_idx:]
+    below = np.where(distal < level_value)[0]
+    if len(below) == 0:
+        # Never falls below the level within the grid: the dose runs off the FOV,
+        # so the distal range at this level is undefined. Returning the grid edge
+        # (as before) fabricated ~300 mm "ranges"; NaN marks it unreliable so the
+        # analysis can exclude it rather than treat it as a real range.
+        return float("nan")
+    k = peak_idx + int(below[0])
+    # k is the first sub-threshold sample; interpolate between k-1 (>=level) and k.
+    if k == peak_idx:
+        return float(z[peak_idx])
+    y0, y1 = y[k - 1], y[k]
     if y0 == y1:
-        return z[k]
+        return float(z[k])
     frac = (y0 - level_value) / (y0 - y1)
-    return float(z[k] + frac * (z[k + 1] - z[k]))
+    return float(z[k - 1] + frac * (z[k] - z[k - 1]))
 
 
 def compute_range_metrics(

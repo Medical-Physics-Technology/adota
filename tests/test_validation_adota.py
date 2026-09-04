@@ -7,7 +7,6 @@ so they run without the H5 dataset or a GPU.
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 from types import SimpleNamespace
 

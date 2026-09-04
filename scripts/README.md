@@ -32,12 +32,26 @@ options, config reference, outputs, and requirements.
 | [`training_set_analysis.py`](training_set_analysis.py) | `config_training_set_analysis.yaml` | Tissue-interface prevalence at the Bragg peak + interface-vs-homogeneous performance split. | [docs/training_set_analysis.md](docs/training_set_analysis.md) |
 | [`rotation_performance_analysis.py`](rotation_performance_analysis.py) | CLI flags | Benchmark 3-D rotation (SciPy / CuPy / PyTorch) around a plan pivot; correctness + timings. | [docs/rotation_performance_analysis.md](docs/rotation_performance_analysis.md) |
 | [`beamlet_timing_comparison.py`](beamlet_timing_comparison.py) | CLI flags | Compare per-beamlet reinterpolation vs ADoTA projection timing on real samples. | [docs/beamlet_timing_comparison.md](docs/beamlet_timing_comparison.md) |
+| [`gamma_benchmark.py`](gamma_benchmark.py) | CLI flags | Validate and benchmark the GPU gamma backend against `pymedphys.gamma` over the OpenTPS plan corpus: the deviation ladder, the performance table, and the voxel-level comparison. | [docs/gamma_benchmark.md](docs/gamma_benchmark.md) |
+
+## Development
+
+| Script | What it does |
+|---|---|
+| [`run-tests.py`](run-tests.py) | The repository test runner: `unit` (fast, no data), `integration` (needs the HDF5 dataset and a checkpoint), `e2e`, `all`. Extra arguments pass through to pytest. |
+
+```bash
+uv run python scripts/run-tests.py unit
+uv run python scripts/run-tests.py unit --fast   # skips the slow perf suite
+```
 
 ## Batch runners
 
 | Script | What it does |
 |---|---|
 | [`run_all_plans.sh`](run_all_plans.sh) | Run `stream,gamma` (2 mm field grid) over a list of plans sequentially; logs in `run_logs/`. |
+| [`run_publication_plans.sh`](run_publication_plans.sh) | Timing run over the 8 publication plans (`stream`, 2 mm, fp16, batched host↔device staging); archives stale `pipeline_timing.json` first, then summarizes. |
+| [`summarize_publication_timing.py`](summarize_publication_timing.py) | Collect those plans' `pipeline_timing.json` into per-plan and per-step tables + `run_logs/publication_timing_summary.json`. |
 | [`run_grid_factor_ab.sh`](run_grid_factor_ab.sh) | A/B harness: `grid_factor` 1 vs 2 per plan, archived for a go/no-go comparison. |
 | [`run_ablation.sh`](run_ablation.sh) | Launch the 2×2 training ablation study (see [`ablation/`](ablation/)). |
 

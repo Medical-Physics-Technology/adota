@@ -22,6 +22,7 @@ import pytest
 from src.loaders.dir_based import (
     DEFAULT_SCALE,
     postprocess_prediction,
+    postprocess_predictions_batched,
     prepare_input_from_arrays,
 )
 from src.utils.scallers import inverse_minmax
@@ -91,6 +92,44 @@ def test_postprocess_upsample_skip_keeps_model_grid_and_denorms() -> None:
     assert out.shape == (1, 1, 160, 30, 30)
     expected = inverse_minmax(pred.numpy(), DEFAULT_SCALE["min_ds"], DEFAULT_SCALE["max_ds"])
     np.testing.assert_array_equal(out, expected)
+
+
+def test_postprocess_batched_is_byte_identical_to_per_spot_loop() -> None:
+    """The batched post-processing reproduces the per-spot loop exactly (Q4 fix).
+
+    ``postprocess_predictions_batched`` moves the de-normalization and the
+    (z,y,x) reorder onto the device and brings the batch back in one copy. It must
+    equal, bit for bit, the loop it replaces in the streaming pipeline:
+    ``postprocess_prediction(pred[i:i+1], upsample=False)`` followed by
+    ``np.moveaxis(np.squeeze(...), 0, -1)``.
+    """
+    rng = np.random.default_rng(6)
+    pred = torch.tensor(rng.uniform(0, 1, size=(7, 1, 160, 30, 30)).astype(np.float32))
+
+    expected = [
+        np.moveaxis(np.squeeze(postprocess_prediction(pred[i : i + 1], upsample=False)), 0, -1)
+        for i in range(pred.shape[0])
+    ]
+    got = postprocess_predictions_batched(pred)
+
+    assert got.shape == (7, 30, 30, 160)
+    for i, want in enumerate(expected):
+        np.testing.assert_array_equal(got[i], want)
+    # Contiguous crops are what make the deposit cheaper than the strided view.
+    assert got[0].flags["C_CONTIGUOUS"]
+
+
+def test_postprocess_batched_into_preallocated_buffer_matches() -> None:
+    """Writing into a caller-supplied host buffer gives the same values."""
+    rng = np.random.default_rng(7)
+    pred = torch.tensor(rng.uniform(0, 1, size=(3, 1, 160, 30, 30)).astype(np.float32))
+    buffer = torch.empty((8, 30, 30, 160), dtype=torch.float32)  # room to spare
+
+    direct = postprocess_predictions_batched(pred)
+    into_buffer = postprocess_predictions_batched(pred, out=buffer)
+
+    assert into_buffer.shape == (3, 30, 30, 160)  # sliced to the batch, not the buffer
+    np.testing.assert_array_equal(into_buffer, direct)
 
 
 def test_postprocess_upsample_true_is_byte_identical_to_explicit() -> None:

@@ -5,12 +5,10 @@ A command-line tool for running DoTA model inference on dose prediction tasks.
 """
 
 import csv
-from dataclasses import dataclass
 import logging
 import os
 import shutil
-import sys
-from datetime import datetime
+from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
 from typing import Annotated, Any, Optional, Union
@@ -20,22 +18,21 @@ import numpy as np
 import torch
 import typer
 from scipy.stats import pearsonr
-from tqdm import tqdm
 
 # Add project root to path
-PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
 from src.adota.config import (
-    DEFAULT_GAMMA_PARAMS,
-    DEFAULT_SCALE,
     denormalize_energy,
     load_yaml_config,
     setup_logging,
     setup_run_directory,
 )
 from src.adota.models import DoTA3D_v3
-from src.adota.utils import count_parameters_per_block, count_total_parameters, load_model
+from src.adota.utils import load_model
+from src.evaluation.cli import resolve_device
+from src.evaluation.engine import InferenceContext, evaluate
+from src.evaluation.outputs import CsvColumn
+from src.evaluation.outputs import save_results_csv as save_csv
+from src.evaluation.sources import DirSource
 from src.figures.single_beam import publication_figure
 from src.loaders.dir_based import get_single_record, save_prediction
 from src.loaders.utils import validate_inputs
@@ -45,18 +42,14 @@ from src.metrics.classic import (
     calculate_rmse,
 )
 from src.metrics.gamma_pass_rate import gamma_index_torch
+from src.schemas.configs import EvaluationConfig
+from src.schemas.results import EvaluationResult
 from src.tables.results import print_results_table
 from src.utils.scallers import inverse_minmax
 from src.utils.unit_conversions import to_gy
 
+PROJECT_ROOT = Path(__file__).parent.parent
 logger = logging.getLogger(__name__)
-
-from src.schemas.configs import EvaluationConfig
-from src.schemas.results import EvaluationResult
-from src.evaluation.cli import resolve_device
-from src.evaluation.engine import InferenceContext, evaluate
-from src.evaluation.outputs import CsvColumn, save_results_csv as save_csv
-from src.evaluation.sources import DirSource
 
 app = typer.Typer(help="DoTA Model Evaluation Tool")
 
@@ -765,7 +758,7 @@ def advanced_metrics_and_figures(
         )
         cbar = fig.colorbar(sc, ax=ax, pad=0.02)
         cbar.set_label(
-            f"BP-local density gradient [HU]",
+            "BP-local density gradient [HU]",
             fontsize=9,
         )
         ax.set_xlabel(

@@ -1,0 +1,105 @@
+# Energy x gantry FULL run (2 energies, 3 random gantries, 18x18 beamlet angles)
+# =============================================================================
+#   setsid nohup uv run python scripts/mc/generate_patient_set.py \
+#       --config scripts/mc/config_energy_gantry_full.yaml \
+#       > run_logs/energy_gantry_full_gen_$(date +%Y%m%d_%H%M%S).log 2>&1 < /dev/null &
+#
+# The scaled-up version of config_energy_gantry_smoke.yaml (same patients, same
+# seeded gantries, same energies), with the sparse 5-angle list replaced by the full
+# 18x18 sweep and publication-grade statistics:
+#
+# 3 thoracic (Lung-PET-CT-Dx) + 3 abdominal (StageII-Colorectal) patients
+#   x 3 seeded random gantry angles per patient (shared by both energies)
+#   x 2 energies (102.6 / 135 MeV, both off the BDL's 10-MeV nominal grid)
+#   x 324 beamlet angles (18x18 over +-2 deg)
+#   = 11 664 beamlets at 1e6 primaries.
+#
+# Cost: ~12-20 h wall clock in beamlet mode (the sequential path measured 18.1 s per
+# beamlet over the smoke run = ~2.4 days; beamlet mode was 3.1x faster at 49 spots
+# and should do better at 324, but the Python-side crop/flux/save -- ~1.3 s per
+# beamlet, ~4 h in total -- does not speed up and becomes a real share). Output is
+# ~185 GB of ct/ds/flux plus ~52 GB once inference writes predictions, against 537 GB
+# free. The run is resumable -- `overwrite: false` skips beamlets already on disk --
+# so it can be stopped and restarted with the same command.
+#
+# 1e6 rather than 1e7 is a deliberate speed/statistics trade (1e7 would be ~16 days).
+# It costs accuracy in the *reported* gamma pass rate, because the MC ground truth
+# carries ~1.71 % per-voxel uncertainty at 1e6 against ~0.61 % at 1e7. Measured on
+# one field (49 spots, abdominal, 102.6 MeV, run_logs/beamlet_mode_1e7_*.log), the
+# same ADoTA predictions score:
+#     Gamma(2 %, 2 mm, 10 %)   98.40 % vs 1e6 GT   ->  98.82 % vs 1e7 GT  (+0.42 pp)
+#     Gamma(1 %, 3 mm, 0.1 %)  89.90 % vs 1e6 GT   ->  92.10 % vs 1e7 GT  (+2.20 pp)
+# Those offsets were measured on a single abdominal field and are not established
+# for thoracic anatomy or other energies.
+#
+# Patients: identical to the smoke run (and already screened for the +-2 deg sweep).
+# From the leakage-safe tail of each collection (`selection: last` pool,
+# the same interim guard as config_patient_set.yaml), chosen for CT *z coverage*.
+# theta_x steers the beamlet along the slice axis by d_smy*tan(theta_x) = 90.2 mm at
+# 2 deg, so a +-2 deg sweep needs >= 240 mm of z (90.2 + half the 60-voxel ROI
+# window, both sides) or the corner beamlets are dropped as roi_out_of_bounds after
+# their MC has been paid for. Screened with
+#   uv run python scripts/mc/generate_patient_set.py --config <cfg> --check-geometry
+# (run_logs/energy_gantry_smoke_geomscreen.log): many Lung-PET-CT-Dx diagnostic CTs
+# cover only 160-230 mm and cannot hold +-2 deg; the six below have 285-465 mm
+# (max |theta_x| >= 2.5 deg) and are unused by the earlier robustness runs.
+
+name: energy_gantry_full
+
+datasets:
+  - name: Lung-PET-CT-Dx           # thoracic held-out
+    anatomy: thoracic
+    root: /data/lung_cancer_dataset/manifest-1608669183333
+    collection: Lung-PET-CT-Dx
+    patient_ids: [Lung_Dx-G0037, Lung_Dx-G0049, Lung_Dx-G0056]   # z = 400 / 328 / 337 mm
+    qc: {min_slices: 70, max_spacing_xy: 1.5, max_spacing_z: 2.0}
+  - name: StageII-Colorectal       # abdominal / pelvic held-out
+    anatomy: abdominal
+    root: /scratch/mstryja/manifest-1646429317311
+    patient_ids: [StageII-Colorectal-CT-222, StageII-Colorectal-CT-225, StageII-Colorectal-CT-230]  # z = 290 / 315 / 465 mm
+    qc: {}                         # ungated (homogeneous 5mm collection)
+
+engine:
+  mcsquare_install: /home/mstryja/tools/mcsquare
+  mc_work_dir: /scratch/mstryja/mc_work/energy_gantry_full
+  bdl_file: hptc_beam_model_rsnone.txt
+  scanner: default
+
+robustness:
+  energies: [102.6, 135.0]       # non-nominal: MCsquare interpolates the BDL (70..244)
+  theta_x_range: [-2.0, 2.0]
+  theta_y_range: [-2.0, 2.0]
+  grid_n: 18                     # 18x18 = 324 beamlet angles (no `angles` list)
+  gantry_mode: uniform_random    # 3 draws in [0, 360), seeded per patient UID
+  gantry_min: 0.0
+  gantry_max: 360.0
+  n_gantry: 3                    # gantries per patient, SHARED across both energies
+  gantry_seed: 20260901
+  rotate_to_canonical: true      # rotate CT so the beam is axis-aligned (gantry != 90)
+  roi_size: [60, 60, 320]
+  iso_spacing_mm: 1.0
+  num_primaries: 1.0e6           # speed; see the ground-truth-noise note above
+  num_threads: 0
+  beamlet_mode: true             # one MCsquare dose-influence call per 324-spot block
+                                 # instead of 324 calls: ~3x faster at 49 spots and
+                                 # better still at 324 (each spot gets its own thread).
+                                 # Costs the per-beamlet stat_uncertainty (MCsquare
+                                 # does not report it in this mode) and makes resume
+                                 # per block -- a restart re-simulates a block's
+                                 # missing spots only. Needs 54-132 GB of scratch per
+                                 # block while its dense dose grids are cropped.
+  rng_seed: 0
+  min_deposition_ratio: 0.7      # deliberately looser than the smoke test's 0.95, to
+                                 # keep most beamlets. Note what it admits: a cell at
+                                 # 0.7 has up to 30% of its dose outside the 320 mm
+                                 # crop, i.e. a distally truncated ground truth the
+                                 # model was never trained on, so low GPR in the outer
+                                 # cells may be data coverage rather than model error.
+                                 # Only the extreme +-2 deg ring is affected -- the
+                                 # smoke test sampled exactly those worst cells, while
+                                 # the 18x18 sweep is mostly interior angles.
+  output_root: /scratch/mstryja/DoTA_dataset_v2
+  experiment_prefix: energy_gantry_full
+  experiment_version: 1
+  make_figures: false
+  overwrite: false               # resumable: skip beamlets already written

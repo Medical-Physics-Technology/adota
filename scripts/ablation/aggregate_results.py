@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import glob
 import json
-import sys
 from pathlib import Path
 from typing import List, Optional
 

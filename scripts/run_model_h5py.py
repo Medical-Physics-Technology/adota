@@ -7,8 +7,6 @@ in an HDF5 dataset via H5PYGenerator.
 
 import logging
 import shutil
-import sys
-from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Annotated, Optional
@@ -18,16 +16,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import typer
-import yaml
 from scipy.stats import pearsonr
-from tqdm import tqdm
 
 # Add project root to path
-PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
 from src.adota.config import (
-    DEFAULT_SCALE,
     denormalize_energy,
     load_yaml_config,
     setup_logging,
@@ -35,10 +27,13 @@ from src.adota.config import (
 )
 from src.adota.models import DoTA3D_v3
 from src.adota.utils import (
-    count_parameters_per_block,
-    count_total_parameters,
     load_model,
 )
+from src.evaluation.cli import resolve_device
+from src.evaluation.engine import InferenceContext, evaluate
+from src.evaluation.outputs import CsvColumn
+from src.evaluation.outputs import save_results_csv as save_csv
+from src.evaluation.sources import H5Source
 from src.figures.single_beam import publication_figure
 from src.loaders.generator import H5PYGenerator
 from src.loaders.utils import validate_inputs
@@ -47,20 +42,14 @@ from src.metrics.classic import (
     calculate_relative_dose_error,
     calculate_rmse,
 )
+from src.schemas.configs import EvaluationConfig
+from src.schemas.results import H5EvaluationResult as EvaluationResult
 from src.utils.scallers import inverse_minmax
 from src.utils.unit_conversions import to_gy
 
+PROJECT_ROOT = Path(__file__).parent.parent
 logger = logging.getLogger(__name__)
-
 app = typer.Typer(help="DoTA Model Evaluation Tool (HDF5)")
-
-
-from src.schemas.configs import EvaluationConfig
-from src.schemas.results import H5EvaluationResult as EvaluationResult
-from src.evaluation.cli import resolve_device
-from src.evaluation.engine import InferenceContext, evaluate
-from src.evaluation.outputs import CsvColumn, save_results_csv as save_csv
-from src.evaluation.sources import H5Source
 
 # ── Per-sample evaluation ───────────────────────────────────────────────────
 

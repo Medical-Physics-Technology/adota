@@ -1,0 +1,82 @@
+# General multi-patient MC generation with random gantry (training-set expansion)
+# ==============================================================================
+#   uv run python scripts/mc/generate_patient_set.py \
+#       --config scripts/mc/config_patient_set.yaml
+#   # preview patients + resolved random gantry without simulating:
+#   uv run python scripts/mc/generate_patient_set.py --dry-run
+#
+# Same beamlet grid / energies / ROI / QA as the robustness runs; each patient is
+# rotated by a seeded random gantry angle (reproducible per patient UID). Output
+# dirs: patient_set_{anatomy}_{patient}_e{E}_v{ver}/ (distinct prefix, so they do
+# not collide with the reviewer beamlet_angle_robustness_* dirs).
+
+name: patient_set
+
+# --- Datasets: n_patients is the "N and M" knob per anatomy -------------------
+# `selection: last` takes the N patients from the BACK of each collection:
+# training-set generation consumed the FIRST samples, so expansion patients come
+# from the tail (clear of training and of the held-out test patients). Verify with
+# --dry-run; use `patient_ids: [...]` to pin exact patients instead.
+# qc: opt-in quality gates (datagenerator values: xy<1.5mm, z<2mm, >70 slices);
+# acquisition params (kVp, tube current, spacing, kernel...) are ALWAYS recorded as
+# provenance in each beamlet's sim_res regardless of gating.
+datasets:
+  - name: NSCLC-Radiomics          # thoracic (full-plan reconstruction source)
+    anatomy: thoracic
+    root: /scratch/mstryja/manifest-1603198545583
+    n_patients: 3
+    selection: last
+    qc: {min_slices: 70, max_spacing_xy: 1.5, max_spacing_z: 3.5}  # NSCLC is natively 3.0mm
+  - name: Lung-PET-CT-Dx           # thoracic (training + beamlet-testset source)
+    anatomy: thoracic
+    root: /data/lung_cancer_dataset/manifest-1608669183333
+    collection: Lung-PET-CT-Dx
+    n_patients: 3
+    selection: last                # INTERIM leakage guard; the patient registry
+                                    # (planned) will exclude train/testset patients rigorously
+    qc: {min_slices: 70, max_spacing_xy: 1.5, max_spacing_z: 2.0}
+  - name: StageII-Colorectal       # abdominal: N patients
+    anatomy: abdominal
+    root: /scratch/mstryja/manifest-1646429317311
+    n_patients: 3
+    selection: last
+    # Ungated (record provenance only): this uniform-5mm collection was sampled into
+    # TRAINING without spacing gates -- a deliberately homogeneous subset -- so we
+    # keep the same permissive selection here (only basic count/CT/MONOCHROME2).
+    qc: {}
+  # Pelvic (uncomment to include; set its own N):
+  # - name: Prostate-AEC
+  #   anatomy: pelvic
+  #   root: /scratch/mstryja/manifest-1684259732535
+  #   n_patients: 3
+  #   selection: last
+
+# --- MCsquare engine ---------------------------------------------------------
+engine:
+  mcsquare_install: /home/mstryja/tools/mcsquare
+  mc_work_dir: /scratch/mstryja/mc_work/patient_set
+  bdl_file: hptc_beam_model_rsnone.txt
+  scanner: default
+
+# --- Sweep (same grid/energies/primaries as the current runs) ----------------
+robustness:
+  energies: [80.0, 120.0, 140.0]
+  theta_x_range: [-2.0, 2.0]
+  theta_y_range: [-2.0, 2.0]
+  grid_n: 18                     # 18x18 = 324 angles; use --grid-n 3 for QC
+  gantry_mode: uniform_random    # fixed | uniform_random | bimodal_random
+  gantry_min: 0.0                # uniform_random bounds [min, max)
+  gantry_max: 360.0
+  gantry_seed: 1234              # seeded per patient UID (reproducible)
+  rotate_to_canonical: true      # rotate CT so beam is axis-aligned (gantry != 90)
+  roi_size: [60, 60, 320]
+  iso_spacing_mm: 1.0
+  num_primaries: 1.0e7
+  num_threads: 0
+  rng_seed: 0
+  min_deposition_ratio: 0.95
+  output_root: /scratch/mstryja/DoTA_dataset_v2
+  experiment_prefix: patient_set
+  experiment_version: 2
+  make_figures: false
+  overwrite: false               # resumable: skip angles already written

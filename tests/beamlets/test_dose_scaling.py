@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-from textwrap import dedent
 
 import numpy as np
 import pytest
@@ -16,26 +15,22 @@ from src.beamlets.dose_scaling import (
     load_dose_gy,
 )
 from src.loaders.plan_parser import ControlPoint, Field, Fraction, Plan, Spot
+from tests.utils.bdl import build_bdl_text
 
 _EVG_TO_GY = 1.602176e-19 * 1000.0
 
-_BDL = """\
-    Nozzle exit to Isocenter distance
-    400.0
-    SMX to Isocenter distance
-    2000.0
-    SMY to Isocenter distance
-    2500.0
-    NominalEnergy MeanEnergy EnergySpread ProtonsMU Weight1 SpotSize1x Divergence1x Correlation1x SpotSize1y Divergence1y Correlation1y
-    100.0 100.0 1.0 1000.0 1.0 4.0 0.003 0.5 3.0 0.004 0.6
-    200.0 200.0 0.8 3000.0 1.0 3.5 0.003 0.4 2.8 0.004 0.5
-"""
+_BDL = build_bdl_text(
+    energy_rows=(
+        "100.0 100.0 1.0 1000.0 1.0 4.0 0.003 0.5 3.0 0.004 0.6",
+        "200.0 200.0 0.8 3000.0 1.0 3.5 0.003 0.4 2.8 0.004 0.5",
+    ),
+)
 
 
 @pytest.fixture()
 def bdl(tmp_path: Path) -> BeamDataLibrary:
     p = tmp_path / "bdl.txt"
-    p.write_text(dedent(_BDL))
+    p.write_text(_BDL)
     return BeamDataLibrary.from_file(p)
 
 

@@ -19,8 +19,6 @@ Usage:
 import csv
 import logging
 import shutil
-import sys
-from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Annotated, Optional
@@ -28,24 +26,18 @@ from typing import Annotated, Optional
 import matplotlib.pyplot as plt
 import numpy as np
 import typer
-import yaml
 
 # Add project root to path
-PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
 from src.adota.config import (
     load_yaml_config,
     setup_logging,
     setup_run_directory,
 )
-
-logger = logging.getLogger(__name__)
-
-app = typer.Typer(help="σ_HU threshold sensitivity sweep")
-
-
 from src.schemas.analysis import BeamletRecord, SweepPoint
+
+PROJECT_ROOT = Path(__file__).parent.parent
+logger = logging.getLogger(__name__)
+app = typer.Typer(help="σ_HU threshold sensitivity sweep")
 
 # ── YAML helper ─────────────────────────────────────────────────────────────
 
@@ -117,7 +109,19 @@ def load_records_from_inference(
     import torch
     from tqdm import tqdm
 
-    from src.adota.models import DoTA3D_v3
+    # Re-use the Bragg-peak metric helpers from training_set_analysis; the
+    # constants and shared helpers live in their canonical src/ modules.
+    from scripts.training_set_analysis import (
+        compute_bp_cv,
+        compute_bp_sigma_hu,
+        compute_bp_tv,
+    )
+    from src.adota.config import (
+        DEFAULT_GAMMA_PARAMS,
+        DEFAULT_SCALE,
+        denormalize_energy,
+        get_device,
+    )
     from src.adota.utils import load_model
     from src.loaders.generator import H5PYGenerator
     from src.loaders.utils import validate_inputs
@@ -127,21 +131,10 @@ def load_records_from_inference(
         calculate_rmse,
     )
     from src.metrics.gamma_pass_rate import gamma_index_torch
+    from src.schemas.configs import AnalysisConfig
     from src.utils.dose_grid_utils import estimate_bragg_peak
     from src.utils.scallers import inverse_minmax
     from src.utils.unit_conversions import to_gy
-
-    # Re-use constants and helpers from training_set_analysis
-    from scripts.training_set_analysis import (
-        DEFAULT_GAMMA_PARAMS,
-        DEFAULT_SCALE,
-        AnalysisConfig,
-        compute_bp_cv,
-        compute_bp_sigma_hu,
-        compute_bp_tv,
-        denormalize_energy,
-        get_device,
-    )
 
     scale = DEFAULT_SCALE.copy()
     gamma_params = DEFAULT_GAMMA_PARAMS.copy()

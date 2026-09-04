@@ -10,10 +10,8 @@ Output: runs/{timestamp}/ with CSV, scatter plots, error histograms,
 and energy-stratified breakdown.
 """
 
-import csv
 import logging
 import shutil
-import sys
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
@@ -32,26 +30,15 @@ from scipy.stats import pearsonr, spearmanr
 from tqdm import tqdm
 
 # Add project root to path
-PROJECT_ROOT = Path(__file__).parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
 from src.adota.config import DEFAULT_SCALE
-from src.figures.ct_visualizations import plot_bp_estimation_diagnostic
+from src.figures.bp_diagnostic import plot_bp_estimation_diagnostic
 from src.loaders.generator import H5PYGenerator
-from src.processing.rsp import (
-    DENSITY_WATER,
-    hu_to_density,
-    hu_to_rsp,
-    hu_to_rsp_density,
-)
+from src.processing.rsp import hu_to_rsp_density
 from src.utils.scallers import inverse_minmax
 
+PROJECT_ROOT = Path(__file__).parent.parent
 logger = logging.getLogger(__name__)
-
 app = typer.Typer(help="Bragg-peak estimation – multi-method comparison")
-
-
-from src.schemas.results import BPRecord
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Estimator protocol & registry
@@ -121,15 +108,17 @@ def load_schneider_calibration(path: Path) -> dict:
         return yaml.safe_load(f)
 
 
-def hu_to_rsp(ct_hu: np.ndarray, calibration: dict) -> np.ndarray:
+def hu_to_rsp(ct_hu: np.ndarray, calibration: Optional[dict] = None) -> np.ndarray:
     """Convert HU volume to relative stopping power (RSP).
 
-    NOTE: This is a thin wrapper kept for backward compatibility.
-    The canonical implementation lives in ``src.processing.rsp``.
+    Uses the single canonical physical model (the MCsquare ``default``-scanner
+    calibration in :mod:`src.processing.mcsquare_calibration`) so this script is
+    consistent with the WEPL/Pflugfelder and ISI metrics. The ``calibration``
+    argument is retained for signature compatibility but is ignored.
     """
     from src.processing.rsp import hu_to_rsp as _hu_to_rsp
 
-    return _hu_to_rsp(ct_hu, calibration=calibration)
+    return _hu_to_rsp(ct_hu)
 
 
 def energy_to_r80_mm(energy_mev: float) -> float:
@@ -656,7 +645,7 @@ def main(
     # ── Setup run directory & logging ───────────────────────────────────
     runs_dir = PROJECT_ROOT / "runs"
     run_dir = setup_run_directory(runs_dir)
-    log_file = setup_logging(run_dir, verbose=verbose)
+    setup_logging(run_dir, verbose=verbose)
 
     if config_path is not None:
         shutil.copy2(config_path, run_dir / config_path.name)

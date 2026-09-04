@@ -1,5 +1,17 @@
-import numpy as np
+"""Bragg-peak location and range extraction from a 3D dose grid.
+
+Flow:
+1. Sum the dose over the two lateral axes to get the depth-dose profile.
+2. Take the depth of maximum dose as the Bragg peak.
+3. Locate the lateral maximum in that depth slice to complete the (y, x, z) index.
+
+``estimate_bp_range`` additionally returns the proximal/distal depths at a given
+fraction of the peak dose (R80 and friends).
+"""
+
 from typing import Tuple
+
+import numpy as np
 
 
 def estimate_bragg_peak(dose_grid: np.ndarray) -> Tuple[int, int, int]:

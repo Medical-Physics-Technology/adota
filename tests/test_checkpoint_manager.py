@@ -1,4 +1,4 @@
-"""Tests for :class:`src.training.run.CheckpointManager`.
+"""Tests for :class:`src.training.checkpoints.CheckpointManager`.
 
 Coverage:
 
@@ -23,9 +23,8 @@ from typing import Tuple
 import pytest
 import torch
 
+from src.training.checkpoints import CheckpointManager
 from src.training.losses import TwoObjectiveBalancer
-from src.training.run import CheckpointManager
-
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 

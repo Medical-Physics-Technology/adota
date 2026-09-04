@@ -95,23 +95,31 @@ def crop_around_spatial_point(
     arr = ct_array if ct_array is not None else sitk.GetArrayFromImage(image)  # (z, y, x)
     nz, ny, nx = arr.shape
 
-    crop = np.full((height, width, depth), air_value, dtype=arr.dtype)
-
     # z axis (array axis 0) centred on iz; y axis (axis 1) centred on iy;
     # x axis (axis 2) taken from the 0 face for the full depth.
     z_src_lo, z_src_hi, z_dst_lo, z_dst_hi = clip_axis_window(iz - height // 2, height, nz)
     y_src_lo, y_src_hi, y_dst_lo, y_dst_hi = clip_axis_window(iy - width // 2, width, ny)
     x_src_lo, x_src_hi, x_dst_lo, x_dst_hi = clip_axis_window(0, depth, nx)
 
-    crop[z_dst_lo:z_dst_hi, y_dst_lo:y_dst_hi, x_dst_lo:x_dst_hi] = arr[
-        z_src_lo:z_src_hi, y_src_lo:y_src_hi, x_src_lo:x_src_hi
-    ]
-
     oob = (
         (z_dst_hi - z_dst_lo) != height
         or (y_dst_hi - y_dst_lo) != width
         or (x_dst_hi - x_dst_lo) != depth
     )
+
+    # The air pre-fill only matters where the window leaves the grid. When it is
+    # fully inside -- the overwhelmingly common case, and every spot of a typical
+    # field -- the copy below overwrites all of it, so filling first is a wasted
+    # pass over the whole crop. Allocate uninitialised in that case; the result is
+    # identical because every element is written.
+    if oob:
+        crop = np.full((height, width, depth), air_value, dtype=arr.dtype)
+    else:
+        crop = np.empty((height, width, depth), dtype=arr.dtype)
+
+    crop[z_dst_lo:z_dst_hi, y_dst_lo:y_dst_hi, x_dst_lo:x_dst_hi] = arr[
+        z_src_lo:z_src_hi, y_src_lo:y_src_hi, x_src_lo:x_src_hi
+    ]
 
     # Lower corner in image index space, (x, y, z) order (datagenerator layout):
     # [0, indexes[1] - H//2, indexes[2] - W//2].
@@ -174,6 +182,11 @@ def extract_beamlet_roi(
     ranges = [(o, m) for o, m in zip(origin, max_coords)]
 
     entrance_domain = intersect_line_with_cube(ranges, dc_nozzle_s, dc_iso_s)
+    if len(entrance_domain) == 0:
+        # The beam ray does not cross the CT volume at all (beamlet aimed past the
+        # patient, e.g. an extreme steering angle on a small FOV). Flag as
+        # out-of-bounds so the caller's QA gate skips it, rather than crashing.
+        return cropped_ct, np.zeros(3, dtype=float), np_indexes, True
     entrance_physical = entrance_domain[0][1:]
 
     # Crop lower corner in physical coords: x at the grid origin (crop x starts

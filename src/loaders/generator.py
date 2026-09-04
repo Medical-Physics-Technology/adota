@@ -1,15 +1,40 @@
-import torch
-import numpy as np
-from torch.utils.data import Dataset
-import h5py
-import warnings
+"""HDF5-backed dataset of beamlet records.
 
-from typing import List, Dict, Tuple
+Defines :class:`H5PYGenerator`, the ``torch.utils.data.Dataset`` that training
+and the H5-based analysis scripts iterate.
+
+Flow (``__getitem__``):
+1. Open the HDF5 file and read one record's CT, flux and dose grids.
+2. Reject/repair records whose shape is not (160, 30, 30).
+3. Optionally apply geometric augmentation.
+4. Min-max normalise and return ``(input, energy, target)`` tensors.
+
+A hard-coded exclusion list drops records known to carry an empty dose
+distribution.
+"""
+
+import warnings
+from typing import Tuple
+
+import h5py
+import numpy as np
+import torch
+from torch.utils.data import Dataset
 
 from src.augmentation.geo_augmenations import (
-    moving_window_augmentation,
     cropp_around_index,
+    moving_window_augmentation,
 )
+from src.beamlets.centerline import BeamLine, render_centerline
+
+# Centerline flux modes: the second input channel carries the beam centerline
+# instead of the Gaussian flux projection. Maps mode -> (render mode, sigma).
+# ``centerline_fixed`` is the smooth, fixed-size (energy-independent) tube.
+CENTERLINE_MODES = {
+    "centerline_fixed": ("soft", 1.71),   # constant-width smooth tube
+    "centerline_soft": ("soft", 1.0),     # thin soft line
+    "centerline_binary": ("binary", 1.0),  # nearest-voxel line
+}
 
 
 class H5PYGenerator(Dataset):
@@ -52,7 +77,8 @@ class H5PYGenerator(Dataset):
         self.expected_shape = kwargs.get("expected_shape", (160, 30, 30))
 
         # Temorary solution, empty records handled here:
-        # Description: We investigated that mentioned records have an empty dose distributions. It cannot be taken into consideration into the training process.
+        # Description: We investigated that mentioned records have an empty dose
+        # distribution. It cannot be taken into consideration in the training process.
         invalid_records = []
         self.indexes_to_exclude_list_path = kwargs.get(
             "indexes_to_exclude_list",
@@ -101,8 +127,33 @@ class H5PYGenerator(Dataset):
         )  # Normalize flux only is a flag which is used for tests.
 
         self.flux_mode = kwargs.get("flux_mode", "analytical")
-        if self.flux_mode not in {"analytical", "angle_broadcast"}:
+        if self.flux_mode not in ({"analytical", "angle_broadcast"} | set(CENTERLINE_MODES)):
             raise ValueError(f"Unknown flux_mode: {self.flux_mode!r}")
+
+        # For a centerline flux mode, load the precomputed line-parameter sidecar
+        # ({uuid: a0,a1,b0,b1}, raw-record frame) and keep only records it covers.
+        self._cl_params = None
+        if self.flux_mode in CENTERLINE_MODES:
+            self._cl_render_mode, self._cl_sigma = CENTERLINE_MODES[self.flux_mode]
+            sidecar = kwargs.get(
+                "centerline_sidecar",
+                "/scratch/mstryja/DoTA_dataset_v2/"
+                "centerline_params_trainset_pelvis_initial_test_one_ct.csv",
+            )
+            import pandas as pd  # local import: only needed for centerline modes
+            cl = pd.read_csv(sidecar)
+            self._cl_params = {
+                r.uuid: (r.a0, r.a1, r.b0, r.b1) for r in cl.itertuples(index=False)
+            }
+            before = len(self.record_ids)
+            self.record_ids = [r for r in self.record_ids if r in self._cl_params]
+            dropped = before - len(self.record_ids)
+            if dropped:
+                warnings.warn(
+                    f"centerline mode {self.flux_mode!r}: dropped {dropped}/{before} "
+                    f"records missing from the sidecar {sidecar}",
+                    category=UserWarning,
+                )
 
         # Random rotation by one of angles (0, 90, 180, 270)
         self.rotk = np.arange(4) if self.square_slice else [0, 2]
@@ -118,6 +169,16 @@ class H5PYGenerator(Dataset):
             ct_grid = record_group["ct"][:]
             dose_grid = record_group["dose"][:]
             flux_grid = record_group["flux"][:]
+
+            # Centerline modes replace the flux channel with the beam centerline,
+            # rendered in the raw record frame so it rides the same crop + rot90
+            # augmentation as the ct/flux/dose grids below.
+            if self._cl_params is not None:
+                a0, a1, b0, b1 = self._cl_params[_id]
+                flux_grid = render_centerline(
+                    BeamLine(a0, a1, b0, b1), flux_grid.shape,
+                    mode=self._cl_render_mode, sigma=self._cl_sigma,
+                )
 
             if not self.augmentation and self.cropp:
                 # If augmentation is disabled, but cropping is enabled, we cropp around the Bragg peak.
@@ -187,7 +248,8 @@ class H5PYGenerator(Dataset):
                     f"ct={tuple(ct_grid.shape)}, dose={tuple(dose_grid.shape)}, flux={tuple(flux_grid.shape)}"
                 )
 
-            # Handle the incorect shape of ct_grid, flux_grid and dose_grid. Each of them must have shape of (160, 30, 30)
+            # Handle the incorect shape of ct_grid, flux_grid and dose_grid.
+            # Each of them must have shape of (160, 30, 30)
             if ct_grid.shape != self.expected_shape:
                 raise ValueError(
                     f"Incorrect shape for ct_grid: {ct_grid.shape}, expected {self.expected_shape}"

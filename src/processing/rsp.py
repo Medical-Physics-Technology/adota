@@ -1,58 +1,40 @@
-"""
-Shared HU → density / RSP conversion utilities.
+"""Shared HU -> density / RSP conversion utilities.
 
-References
-----------
-- Schneider U, Pedroni E, Lomax A (1996). "The calibration of CT
-  Hounsfield units for radiotherapy treatment planning."
-  Phys Med Biol 41(1):111-124.
-- Schneider W, Bortfeld T, Schlegel W (2000). "Correlation between CT
-  numbers and tissue parameters needed for Monte Carlo simulations of
-  clinical dose distributions." Phys Med Biol 45(2):459-478.
+Thin compatibility layer over the single canonical physical model,
+:mod:`src.processing.mcsquare_calibration` (the MCsquare ``default``-scanner
+calibration that matches how the ground-truth dose was generated). Every ADoTA
+metric (WEPL / Pflugfelder HI, Interface Severity Index, Bragg-peak estimation,
+...) resolves HU -> density / RSP through that one model, so results are
+physically consistent and defensible. New code should import
+:mod:`src.processing.mcsquare_calibration` directly; these wrappers are kept for
+backward compatibility.
 """
 
 from pathlib import Path
 from typing import Optional
 
 import numpy as np
-import yaml
 
-# ── Schneider 1996 Table 3: piecewise-linear HU → mass density [g/cm³] ──
-# Control points for linear interpolation (same approach as OpenTPS
-# PiecewiseHU2Density).
-_HU_DENSITY_TABLE = np.array(
-    [
-        # HU,       density [g/cm³]
-        [-1024.0, 0.0012],  # vacuum / air
-        [-950.0, 0.044],  # inflated lung
-        [-700.0, 0.302],  # lung tissue
-        [-100.0, 0.924],  # adipose / fat
-        [0.0, 1.000],  # water
-        [15.0, 1.020],  # soft tissue
-        [100.0, 1.076],  # muscle
-        [300.0, 1.145],  # soft bone / cartilage
-        [500.0, 1.331],  # spongy bone
-        [1000.0, 1.824],  # dense bone
-        [1500.0, 2.196],  # cortical bone
-        [2000.0, 2.568],
-        [3071.0, 2.862],  # extrapolation guard
-    ]
-)
+from src.processing.mcsquare_calibration import get_default_calibration
 
-_HU_KNOTS = _HU_DENSITY_TABLE[:, 0]
-_DENS_KNOTS = _HU_DENSITY_TABLE[:, 1]
-
-DENSITY_WATER = 1.0  # g/cm³
+DENSITY_WATER = 1.0  # g/cm^3
 
 
 def hu_to_density(ct_hu: np.ndarray) -> np.ndarray:
-    """Convert HU → mass density [g/cm³] via piecewise-linear table."""
-    return np.interp(ct_hu, _HU_KNOTS, _DENS_KNOTS)
+    """HU -> mass density [g/cm^3] (canonical MCsquare default-scanner table)."""
+    return get_default_calibration().convert_hu_to_density(
+        np.asarray(ct_hu, dtype=float)
+    )
 
 
 def hu_to_rsp_density(ct_hu: np.ndarray) -> np.ndarray:
-    """Approximate RSP ≈ ρ(HU) / ρ_water  (energy-independent)."""
-    return hu_to_density(ct_hu) / DENSITY_WATER
+    """Deprecated alias: returns the canonical MCsquare RSP.
+
+    Historically this returned the crude density ratio ``rho/rho_water``; it now
+    delegates to the proper stopping-power-based RSP so no caller silently uses
+    the old approximation. Prefer :func:`hu_to_rsp`.
+    """
+    return get_default_calibration().convert_hu_to_rsp(np.asarray(ct_hu, dtype=float))
 
 
 def hu_to_rsp(
@@ -60,24 +42,34 @@ def hu_to_rsp(
     calibration: Optional[dict] = None,
     calibration_path: Optional[Path] = None,
 ) -> np.ndarray:
-    """Convert HU volume → relative stopping power (RSP).
+    """Convert HU volume -> relative stopping power (RSP).
 
-    Uses a Schneider-style piecewise-linear calibration.  Supply either
-    a pre-loaded ``calibration`` dict or a ``calibration_path`` YAML.
-    If neither is given, falls back to :func:`hu_to_rsp_density`.
+    Uses the canonical MCsquare ``default``-scanner calibration unless an
+    explicit piecewise ``calibration`` dict (or ``calibration_path`` YAML with a
+    ``segments`` list) is supplied, in which case that override is honoured for
+    backward compatibility.
     """
     if calibration is None and calibration_path is not None:
+        import yaml
+
         with open(calibration_path) as f:
             calibration = yaml.safe_load(f)
 
     if calibration is None:
-        return hu_to_rsp_density(ct_hu)
+        return get_default_calibration().convert_hu_to_rsp(
+            np.asarray(ct_hu, dtype=float)
+        )
 
+    # Explicit piecewise-linear segment override (legacy calibration YAML).
+    ct_hu = np.asarray(ct_hu, dtype=np.float64)
     rsp = np.zeros_like(ct_hu, dtype=np.float64)
     for seg in calibration["segments"]:
         mask = (ct_hu >= seg["hu_min"]) & (ct_hu <= seg["hu_max"])
         rsp[mask] = seg["slope"] * ct_hu[mask] + seg["intercept"]
-    rsp_min = calibration.get("rsp_min", 0.001)
-    rsp_max = calibration.get("rsp_max", 2.5)
-    np.clip(rsp, rsp_min, rsp_max, out=rsp)
+    np.clip(
+        rsp,
+        calibration.get("rsp_min", 0.001),
+        calibration.get("rsp_max", 2.5),
+        out=rsp,
+    )
     return rsp

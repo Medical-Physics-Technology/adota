@@ -221,3 +221,11 @@ runs/
 run_logs/
 
 publications/*
+
+# graphify knowledge-graph output (regenerable via /graphify); keep only the report
+graphify-out/*
+!graphify-out/GRAPH_REPORT.md
+src/graphify-out/
+
+# Rendered report PDF (regenerable from the .md via pandoc + chrome; keep the .md source)
+research/acquisition_function_final_summary.pdf

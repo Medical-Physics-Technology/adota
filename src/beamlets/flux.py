@@ -22,7 +22,12 @@ from src.beamlets.bdl import BeamDataLibrary
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["flux_spatial_spread", "flux_projection", "flux_projection_gpu"]
+__all__ = [
+    "flux_spatial_spread",
+    "flux_projection",
+    "flux_projection_gpu",
+    "flux_projection_gpu_batched",
+]
 
 
 def flux_spatial_spread(bdl: BeamDataLibrary, energy: float) -> Tuple[float, float]:
@@ -35,11 +40,28 @@ def flux_spatial_spread(bdl: BeamDataLibrary, energy: float) -> Tuple[float, flo
     Returns:
         ``(SpotSize1x, SpotSize1y)`` of the row whose ``MeanEnergy`` is closest to
         ``energy``.
+
+    Note:
+        The result is memoized on ``bdl`` (see
+        :attr:`~src.beamlets.bdl.BeamDataLibrary.spot_size_cache`). The selection
+        itself is unchanged -- a cache miss runs exactly the code below -- so the
+        returned sigmas are identical with or without the memo.
     """
+    # Memoized per BDL instance: the scan below is a pandas argsort over the whole
+    # energy table and used to run once per *spot*, while a plan has only one
+    # energy per layer -- tens of distinct values against tens of thousands of
+    # spots (measured 1.65 ms/call, ~42 s over the 8 publication plans). The
+    # lookup is a pure function of ``(energy_table, energy)``, so a hit returns
+    # exactly what a miss would have computed; the numerics below are untouched.
+    cached = bdl.spot_size_cache.get(energy)
+    if cached is not None:
+        return cached
+
     table = bdl.energy_table
     closest = table.iloc[(table["MeanEnergy"] - energy).abs().argsort()[:1]]
     sigma_x = float(closest["SpotSize1x"].values[0])
     sigma_y = float(closest["SpotSize1y"].values[0])
+    bdl.spot_size_cache[energy] = (sigma_x, sigma_y)
     return sigma_x, sigma_y
 
 
@@ -185,3 +207,110 @@ def flux_projection_gpu(
         flux = flux * initial_energy
 
     return flux.detach().cpu().numpy()
+
+
+def flux_projection_gpu_batched(
+    beamlet_entrences: "Sequence[Sequence[float]]",
+    beamlet_directions: "Sequence[Sequence[float]]",
+    sigmas_xy: "Sequence[Sequence[float]]",
+    shape: Sequence[int],
+    initial_energies: "Optional[Sequence[float]]" = None,
+    spacing: np.ndarray = np.asarray([1, 1, 1], dtype=np.float32),
+    device: str = "cuda",
+    dtype: "Optional[object]" = None,
+    return_numpy: bool = False,
+):
+    """Batched GPU twin of :func:`flux_projection` for ``B`` beamlets at once.
+
+    Computes ``B`` flux projections that share the same output ``shape`` in a
+    single set of tensor ops (one meshgrid, batched rotation matrices, one
+    ``exp``), so the per-spot NumPy/meshgrid overhead is amortised across the
+    batch. The math is identical to :func:`flux_projection` /
+    :func:`flux_projection_gpu` (same ``meshgrid("xy")`` layout, same rotation
+    order ``R_y(theta_x) @ R_x(theta_y)``, same coefficient and Gaussian).
+
+    Unlike :func:`flux_projection_gpu`, the result is **kept on the device** by
+    default (no host copy), so the benchmark can charge the device->host transfer
+    separately. Timing uses ``dtype=torch.float32`` (the precision the flux is
+    stored and consumed at); ``dtype=torch.float64`` reproduces the CPU path to
+    round-off for the equivalence test.
+
+    Args:
+        beamlet_entrences: ``(B, 3)`` entrances ``[x0, y0, z0]`` in crop voxels.
+        beamlet_directions: ``(B, 2)`` angles ``(theta_x, theta_y)`` in degrees.
+        sigmas_xy: ``(B, 2)`` spot spreads ``(sigma_x, sigma_y)``.
+        shape: Shared output ``(z, y, x)`` numpy shape.
+        initial_energies: Optional ``(B,)`` per-spot scalar multipliers.
+        spacing: Voxel spacing used to convert the sigmas to voxel units.
+        device: Torch device string.
+        dtype: Torch dtype (default ``torch.float32``).
+        return_numpy: If ``True`` return a host ``(B, *grid)`` float array;
+            otherwise return the on-device tensor.
+
+    Returns:
+        ``(B, S0, S1, S2)`` flux batch (torch tensor on ``device``, or numpy).
+    """
+    import torch
+
+    dev = torch.device(device)
+    dt = dtype if dtype is not None else torch.float32
+
+    ent = torch.as_tensor(np.asarray(beamlet_entrences, dtype=np.float64), dtype=dt, device=dev)
+    ang = torch.as_tensor(np.asarray(beamlet_directions, dtype=np.float64), dtype=dt, device=dev)
+    sig = torch.as_tensor(np.asarray(sigmas_xy, dtype=np.float64), dtype=dt, device=dev)
+    n_batch = ent.shape[0]
+
+    # Shared meshgrid (same construction as the single-spot paths).
+    x = torch.arange(0, shape[1], 1, dtype=dt, device=dev)
+    y = torch.arange(0, shape[0], 1, dtype=dt, device=dev)
+    z = torch.arange(0, shape[2], 1, dtype=dt, device=dev)
+    xx, yy, zz = torch.meshgrid(x, y, z, indexing="xy")
+    grid_shape = xx.shape
+    coords = torch.stack([xx.reshape(-1), yy.reshape(-1), zz.reshape(-1)], dim=0)  # (3, N)
+
+    # Per-spot centred coordinates: (B, 3, N).
+    coords_b = coords.unsqueeze(0) - ent.unsqueeze(-1)
+
+    theta_x = ang[:, 0] / 180.0 * math.pi
+    theta_y = ang[:, 1] / 180.0 * math.pi
+
+    def _rot_y(theta: "torch.Tensor") -> "torch.Tensor":  # matches R_y in the single-spot path
+        c, s = torch.cos(theta), torch.sin(theta)
+        m = torch.zeros((n_batch, 3, 3), dtype=dt, device=dev)
+        m[:, 0, 0] = 1.0
+        m[:, 1, 1] = c
+        m[:, 1, 2] = -s
+        m[:, 2, 1] = s
+        m[:, 2, 2] = c
+        return m
+
+    def _rot_x(theta: "torch.Tensor") -> "torch.Tensor":  # matches R_x in the single-spot path
+        c, s = torch.cos(theta), torch.sin(theta)
+        m = torch.zeros((n_batch, 3, 3), dtype=dt, device=dev)
+        m[:, 0, 0] = c
+        m[:, 0, 2] = s
+        m[:, 1, 1] = 1.0
+        m[:, 2, 0] = -s
+        m[:, 2, 2] = c
+        return m
+
+    rot = torch.bmm(_rot_y(theta_x), _rot_x(theta_y))  # (B, 3, 3)
+    rotated = torch.bmm(rot, coords_b)  # (B, 3, N)
+    x_t = rotated[:, 0, :]
+    y_t = rotated[:, 1, :]
+
+    sigma_x = sig[:, 0] / float(spacing[0])
+    sigma_y = sig[:, 1] / float(spacing[1])
+    coef = 1.0 / (2.0 * math.pi * sigma_x * sigma_y)
+    flux = coef.unsqueeze(-1) * torch.exp(
+        -(x_t ** 2) / 2.0 / (sigma_x.unsqueeze(-1) ** 2)
+        - (y_t ** 2) / 2.0 / (sigma_y.unsqueeze(-1) ** 2)
+    )
+    if initial_energies is not None:
+        e = torch.as_tensor(np.asarray(initial_energies, dtype=np.float64), dtype=dt, device=dev)
+        flux = flux * e.unsqueeze(-1)
+
+    flux = flux.reshape(n_batch, *grid_shape)
+    if return_numpy:
+        return flux.detach().cpu().numpy()
+    return flux

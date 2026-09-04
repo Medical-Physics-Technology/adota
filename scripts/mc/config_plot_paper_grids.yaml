@@ -1,0 +1,38 @@
+# Publication beamlet-angle GPR grids: the two reported patients at 102 + 135 MeV
+# (thoracic Lung-PET-CT-Dx_768, pelvic StageII-Colorectal-CT_168). Re-rendered with
+# the current plotting code (shared per-criterion scale; per-figure and shared-bar
+# variants) as drop-in replacements. Reuses the existing predictions (run with
+# --no-inference), so only the rendering changes, not the numbers.
+#
+#   uv run python scripts/mc/plot_angle_robustness.py \
+#       --config scripts/mc/config_plot_paper_grids.yaml --no-inference
+
+model:
+  name: DoTA_v3_grid_search_v11
+  fname: best_model.pth
+  device_index: 0
+
+gamma_criteria:
+  - {dose: 2, dist: 2, cutoff: 10}
+  - {dose: 1, dist: 3, cutoff: 0.1}
+
+grid_n: 18
+theta_range: [-2.0, 2.0]
+mode: per_patient          # one panel per (patient, energy) = 4 panels; shared scale across them
+
+cmap: viridis
+
+emit:
+  bare: true               # no colorbar (for a LaTeX grid + one shared bar)
+  with_colorbar: true      # per-figure colorbar (shared scale) -> "colorbar on each figure"
+  standalone_colorbar: true
+
+render_examples: false     # legacy UUID stems: skip best/worst example figures
+
+inputs:
+  - /scratch/mstryja/DoTA_dataset_v2/beamlet_angle_robustness_Lung-PET-CT-Dx_768_e102
+  - /scratch/mstryja/DoTA_dataset_v2/beamlet_angle_robustness_Lung-PET-CT-Dx_768_e135_v2
+  - /scratch/mstryja/DoTA_dataset_v2/beamlet_angle_robustness_StageII-Colorectal-CT_168_e102
+  - /scratch/mstryja/DoTA_dataset_v2/beamlet_angle_robustness_StageII-Colorectal-CT_168_e135
+
+output_dir: /scratch/mstryja/DoTA_dataset_v2/robustness_figures_paper

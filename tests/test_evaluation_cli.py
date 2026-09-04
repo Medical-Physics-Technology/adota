@@ -6,7 +6,6 @@ import torch
 
 from src.evaluation.cli import merge_config, resolve_device
 
-
 # ── merge_config ─────────────────────────────────────────────────────────────
 
 

@@ -1,0 +1,50 @@
+# Fair optimized-GPU reinterpretation benchmark
+# =============================================
+# Configures scripts/reinterp_gpu_benchmark.py. CLI flags override these.
+#
+#   uv run python scripts/reinterp_gpu_benchmark.py \
+#       --config scripts/config_reinterp_gpu_benchmark.yaml
+#
+# Optimizes BOTH sides symmetrically (batched GPU flux vs batched GPU BEV
+# sampling), fp32, with full variability, transfer accounting, threading/hardware
+# disclosure, a batch-size throughput sweep, and two MEASURED plan runs.
+
+# --- Required ---
+plan_dir: /scratch/mstryja/opentps_plans/Prostate-AEC-007_Publication_Prostate-AEC-007_100MperBeam
+model_name: DoTA_v3_grid_search_v11
+model_fname: best_model.pth
+
+# --- Device / output ---
+device_index: 0
+runs_dir: /scratch/mstryja/tmp_adota/runs
+
+# --- Geometry ---
+# 2 => rotate/crop/flux on the 2mm field grid (the per-beamlet resize is bypassed
+# for both pipelines, isolating the flux-vs-rotation comparison).
+grid_factor: 2
+
+# --- Timing methodology ---
+# Batch-size sweep for the throughput curve. batch=1 is the per-item GPU point;
+# headline = largest batch. Every cell: median of `repeats` timed calls after one
+# warm-up. CPU baselines are timed once over all beamlets (batch-independent).
+batch_sizes: "1,8,16,32,56,112"
+# Timed repeats per op (per-unit median; damps noise). Variability across
+# beamlets/batches is reported separately (std/IQR/CI).
+repeats: 5
+# Spots used for the timing matrix (null = ALL extracted beamlets). We run the
+# full plan; no subsample.
+n_benchmark: null
+# CPU threads: pinned and logged. scipy.ndimage.affine_transform is single-
+# threaded regardless; run again with a higher value to report the multi-thread
+# CPU number.
+num_threads: 1
+# Extraction subset (null = whole plan) and sampling seed.
+n_spots: null
+seed: 0
+
+# --- Measured plan runs (adota_flux + dota_rotation via the streaming harness) ---
+# Executes both reinterpretations on the real plan; reports compute-only (excl I/O).
+run_measured_plan: true
+
+overwrite: true
+verbose: false

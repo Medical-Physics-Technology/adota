@@ -14,7 +14,9 @@ This first iteration wires up the foundation only:
 6. Accumulate the predicted dose into a single 3D dose grid (Dose_ADoTA.mhd),
 7. Generate comparison figures (plan dose comparison, DVH comparison, gamma map) and metrics. 
 
-Different running modes supported: stream, extract+infer+accumulate, or any subset of the stages. The streaming mode fuses all three stages into a single pass, avoiding disk I/O and saving time.
+Different running modes supported: stream, extract+infer+accumulate, or any subset
+of the stages. The streaming mode fuses all three stages into a single pass,
+avoiding disk I/O and saving time.
 
 Usage:
     uv run python scripts/run_plan_opentps.py \\
@@ -26,7 +28,6 @@ For detailed usage, see the ./scripts/README.md and the --help output.
 import gc
 import json
 import logging
-import sys
 from pathlib import Path
 from time import perf_counter
 from typing import Annotated, Optional
@@ -37,13 +38,15 @@ import torch
 import typer
 
 # Add the project root to the path for imports.
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
 from src.adota.config import load_yaml_config, setup_logging, setup_run_directory
 from src.adota.utils import load_model
 from src.beamlets.accumulation import AccumulationConfig, run_accumulation
 from src.beamlets.bdl import BeamDataLibrary
+from src.beamlets.beamlet_analysis import (
+    BeamletAnalysisConfig,
+    default_beamlet_dir,
+    run_beamlet_analysis,
+)
 from src.beamlets.dose_scaling import load_dose_gy
 from src.beamlets.extraction import (
     ExtractionConfig,
@@ -52,10 +55,12 @@ from src.beamlets.extraction import (
 )
 from src.beamlets.inference import InferenceConfig, run_inference
 from src.beamlets.isocenter import isocenter_index_zyx
+from src.beamlets.plan_spots import expand_plan_to_spots
 from src.beamlets.streaming import StreamingConfig, run_streaming_pipeline
 from src.beamlets.structures import load_oriented_structures
 from src.dcm.load_data import list_all_files
 from src.evaluation.cli import resolve_device
+from src.figures.beamlet_analysis import beamlet_analysis_figure, gpr_per_layer_figure
 from src.figures.dvh_comparison import dvh_comparison_figure, write_dvh_metrics_json
 from src.figures.gamma_comparison import plan_gamma_figure
 from src.figures.plan_comparison import plan_dose_comparison
@@ -63,10 +68,15 @@ from src.loaders.plan_directory import load_plan_directory
 from src.metrics.plan_gamma import parse_criteria, plan_gamma
 from src.metrics.plan_metrics import plan_dose_metrics
 
-# Pipeline stages, in execution order. "extract", "infer", "accumulate", "gamma"
-# and "stream" are implemented; "compare" is reserved for a later task. "stream"
-# is the fused, disk-free alternative to extract+infer+accumulate.
-ALL_STAGES = ("extract", "infer", "accumulate", "stream", "gamma", "compare")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+# Pipeline stages, in execution order. "extract", "infer", "accumulate", "stream",
+# "dvh", "gamma" and "beamlets" are implemented; "compare" is reserved for a later
+# task. "stream" is the fused, disk-free alternative to extract+infer+accumulate.
+# "dvh" regenerates only the DVH figure + metrics from an existing Dose_ADoTA.mhd.
+# "beamlets" compares the per-spot ADoTA predictions against the MCsquare
+# per-beamlet ground truth (beamlets_*/); both are standalone, like "gamma".
+ALL_STAGES = ("extract", "infer", "accumulate", "stream", "dvh", "gamma", "beamlets", "compare")
 BEAMLET_SUBDIR = "adota_beamlets"
 ADOTA_DOSE_NAME = "Dose_ADoTA.mhd"
 
@@ -157,6 +167,9 @@ def _build_timing_report(
             "grid_factor": streaming.get("grid_factor", 1),
             "grid_mode": streaming.get("grid_mode", "1mm"),
             "precision": streaming.get("precision", "fp32"),
+            "batch_size": streaming.get("batch_size"),
+            "flux_batched": streaming.get("flux_batched", False),
+            "batched_prep": streaming.get("batched_prep", False),
             "steps": {k: _step(v) for k, v in t.items()},
         }
 
@@ -276,8 +289,12 @@ def _format_timing_report(report: dict) -> str:
         mode = "1mm" if gf == 1 else f"{gf}mm field"
         if st.get("precision", "fp32") == "fp16":
             mode += ", fp16"
-        sec = [[f"Streaming ({mode})", "", fs(st["total_s"]), fms(st),
-                f"{st['n_spots']} spots, {st['n_fields']} fields, no disk"]]
+        if st.get("flux_batched") or st.get("batched_prep"):
+            mode += ", batched I/O"
+        notes = f"{st['n_spots']} spots, {st['n_fields']} fields, no disk"
+        if st.get("batch_size"):
+            notes += f", batch {st['batch_size']}"
+        sec = [[f"Streaming ({mode})", "", fs(st["total_s"]), fms(st), notes]]
         prep_lbl = "input prep (downsample)" if gf == 1 else "input prep (no resize)"
         post_lbl = "postprocess (upsample)" if gf == 1 else "postprocess (no resize)"
         for label, key in (
@@ -404,6 +421,14 @@ def main(
     no_overlays: Annotated[
         Optional[bool], typer.Option(help="Skip per-field overlay PNGs.")
     ] = None,
+    no_figures: Annotated[
+        Optional[bool],
+        typer.Option(help="accumulate/stream stages: skip the dose-comparison and "
+                          "DVH figures. They are pure-CPU matplotlib work that can "
+                          "dominate the wall clock, so a timing run measures the "
+                          "dose generation itself. Dose_ADoTA.mhd is unchanged; the "
+                          "figures can be regenerated later from it."),
+    ] = None,
     verbose: Annotated[
         Optional[bool], typer.Option(help="Enable verbose/debug logging.")
     ] = None,
@@ -427,6 +452,29 @@ def main(
         Optional[bool],
         typer.Option(help="dose_comparison figure: show only the shared dose "
                           "colorbar (difference range goes in its panel title)."),
+    ] = None,
+    dvh_max_dose: Annotated[
+        Optional[float],
+        typer.Option(help="dvh stage: fixed DVH x-axis upper limit in Gy (e.g. "
+                          "70 prostate / 80 thoracic). Default: a robust "
+                          "percentile, so an outlier voxel cannot stretch the axis."),
+    ] = None,
+    dvh_compact: Annotated[
+        Optional[bool],
+        typer.Option(help="dvh stage: compact panel for multi-panel composition "
+                          "(no title, no ADoTA/MCsquare legend; keeps the "
+                          "structure legend)."),
+    ] = None,
+    beamlet_dir: Annotated[
+        Optional[Path],
+        typer.Option(help="beamlets stage: the MCsquare per-beamlet directory "
+                          "(default: newest beamlets_* in the plan dir)."),
+    ] = None,
+    beamlet_energy_split_mev: Annotated[
+        Optional[float],
+        typer.Option(help="beamlets stage: energy [MeV] marking out-of-distribution "
+                          "spots/layers (default 150 = thoracic training limit; set "
+                          "higher for pelvic/prostate plans)."),
     ] = None,
 ) -> None:
     """Main CLI entry point for the ADoTA plan pipeline.
@@ -470,6 +518,9 @@ def main(
     no_overlays = (
         no_overlays if no_overlays is not None else yaml_config.get("no_overlays", False)
     )
+    no_figures = (
+        no_figures if no_figures is not None else yaml_config.get("no_figures", False)
+    )
     verbose = verbose if verbose is not None else yaml_config.get("verbose", False)
     dose_render = (
         dose_render if dose_render is not None
@@ -490,6 +541,18 @@ def main(
         single_colorbar if single_colorbar is not None
         else bool(yaml_config.get("single_colorbar", False))
     )
+    # dvh-stage options: CLI overrides YAML; write back so _run_dvh_stage reads them.
+    yaml_config["dvh_max_dose"] = (
+        dvh_max_dose if dvh_max_dose is not None else yaml_config.get("dvh_max_dose")
+    )
+    yaml_config["dvh_compact"] = bool(
+        dvh_compact if dvh_compact is not None else yaml_config.get("dvh_compact", False)
+    )
+    # beamlets-stage options: CLI overrides YAML.
+    if beamlet_dir is not None:
+        yaml_config["beamlet_dir"] = str(beamlet_dir)
+    if beamlet_energy_split_mev is not None:
+        yaml_config["beamlet_energy_split_mev"] = float(beamlet_energy_split_mev)
 
     # Parse the stage / beam lists.
     stage_list = [s.strip() for s in str(stages_raw).split(",") if s.strip()]
@@ -650,7 +713,7 @@ def main(
         # Auto-generate the ADoTA vs MCsquare comparison + DVH figures.
         figure_s = _generate_comparison_figures(
             plan_directory, plan_dir, dose_path, dose_render=dose_render,
-            single_colorbar=single_colorbar,
+            single_colorbar=single_colorbar, enabled=not no_figures,
         )
 
     # --- Stage: stream (fused, disk-free alternative to extract+infer+accumulate) -
@@ -663,8 +726,19 @@ def main(
         )
         flux_on_gpu = bool(yaml_config.get("flux_on_gpu", False))
         grid_factor = int(yaml_config.get("grid_factor", 1))
+        # Batched host<->device staging (see StreamingConfig): one batched GPU flux
+        # call kept resident on the device, and one contiguous pinned host->device
+        # copy for the batch's CT crops, instead of 2*batch_size per-spot transfers.
+        flux_batched = bool(yaml_config.get("flux_batched", False))
+        batched_prep = bool(yaml_config.get("batched_prep", False))
+        flux_batched_dtype = str(yaml_config.get("flux_batched_dtype", "float64"))
         logger.info("=" * 70)
         logger.info("Stage: stream -> %s (fused, no per-beamlet disk I/O)", dose_path)
+        if flux_batched or batched_prep:
+            logger.info(
+                "Batched device staging: flux_batched=%s (%s), batched_prep=%s",
+                flux_batched, flux_batched_dtype, batched_prep,
+            )
         if grid_factor != 1:
             logger.info(
                 "Field-level resampling ENABLED: grid_factor=%d (%dmm field grid)",
@@ -681,6 +755,9 @@ def main(
             bdl_path=bdl_path,
             batch_size=yaml_config.get("batch_size", 56),
             flux_on_gpu=flux_on_gpu,
+            flux_batched=flux_batched,
+            flux_batched_dtype=flux_batched_dtype,
+            batched_prep=batched_prep,
             flux_device=str(device),
             calibration_factor=calibration_factor,
             grid_factor=grid_factor,
@@ -692,13 +769,13 @@ def main(
         # Same comparison + DVH figures as the accumulate stage (quality investigation).
         figure_s = _generate_comparison_figures(
             plan_directory, plan_dir, dose_path, dose_render=dose_render,
-            single_colorbar=single_colorbar,
+            single_colorbar=single_colorbar, enabled=not no_figures,
         )
 
     remaining = [
         s
         for s in stage_list
-        if s not in ("extract", "accumulate", "infer", "stream", "gamma")
+        if s not in ("extract", "accumulate", "infer", "stream", "dvh", "gamma", "beamlets")
     ]
     if remaining:
         logger.info("Stages not yet implemented, skipped: %s", remaining)
@@ -746,6 +823,14 @@ def main(
     timing_path.write_text(json.dumps(timing_report, indent=2) + "\n")
     logger.info("Timing written to %s", timing_path)
 
+    # --- Stage: dvh (regenerate DVH only; standalone, opt-in via stages) -----
+    if "dvh" in stage_list:
+        _run_dvh_stage(plan_directory, plan_dir, yaml_config)
+
+    # --- Stage: beamlets (per-spot ADoTA vs MC; standalone, opt-in) ----------
+    if "beamlets" in stage_list:
+        _run_beamlets_stage(plan_directory, plan_dir, yaml_config)
+
     # --- Stage: gamma (after timing; opt-in via stages) ----------------------
     if "gamma" in stage_list:
         _run_gamma_stage(plan_directory, plan_dir, yaml_config)
@@ -755,7 +840,7 @@ def main(
 
 def _generate_comparison_figures(
     plan_directory, plan_dir: Path, dose_path: Path, dose_render: str = "image",
-    single_colorbar: bool = False,
+    single_colorbar: bool = False, enabled: bool = True,
 ) -> float:
     """Generate the ADoTA vs MCsquare dose-comparison + DVH figures/metrics.
 
@@ -765,7 +850,16 @@ def _generate_comparison_figures(
     ``stream`` stages so both produce the same quality-investigation figures.
     ``dose_render`` (``"image"`` or ``"contour"``) selects the dose-panel style of
     the comparison figure (filled overlay vs clinical filled-isodose contours).
+    ``enabled=False`` (``--no-figures``) skips the whole block and returns 0.0 --
+    the figures are pure-CPU matplotlib work that can dominate a run's wall clock,
+    so a timing run measures the dose generation rather than the plotting.
     """
+    if not enabled:
+        logger.info(
+            "Comparison/DVH figures skipped (--no-figures); Dose_ADoTA.mhd is "
+            "written and they can be regenerated from it later."
+        )
+        return 0.0
     if plan_directory.mc_dose_path is None:
         logger.warning("No MC Dose.mhd in the plan dir; skipping comparison figure.")
         return 0.0
@@ -809,6 +903,225 @@ def _generate_comparison_figures(
     except ValueError as exc:
         logger.warning("Skipping DVH comparison: %s", exc)
     return perf_counter() - figure_t
+
+
+def _load_structure_names(plan_dir: Path, yaml_config: dict) -> Optional[dict]:
+    """Optional ``{mask_key: display_name}`` map for renaming DVH structures.
+
+    Precedence: a ``structure_names.json`` in the plan directory, then a
+    ``structure_names`` mapping in the YAML config, else ``None`` (raw keys, the
+    unchanged default). Only the ``dvh`` stage uses this.
+    """
+    names_path = plan_dir / "structure_names.json"
+    if names_path.exists():
+        try:
+            data = json.loads(names_path.read_text())
+            if isinstance(data, dict) and data:
+                return {str(k): str(v) for k, v in data.items()}
+            logger.warning("%s is not a non-empty object; ignoring.", names_path)
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning("Could not read %s (%s); using raw structure names.", names_path, exc)
+    cfg_names = yaml_config.get("structure_names")
+    if isinstance(cfg_names, dict) and cfg_names:
+        return {str(k): str(v) for k, v in cfg_names.items()}
+    return None
+
+
+def _apply_structure_names(
+    structures: dict, mapping: Optional[dict], target_keyword: str = "target"
+):
+    """Rename structure-dict keys via ``mapping``; return ``(renamed, target_kw)``.
+
+    Unmapped keys are kept as-is. The renamed target name is returned as the new
+    ``target_keyword`` so target-first ordering and target/OAR metric
+    classification are preserved. With ``mapping`` falsy this is a no-op.
+    """
+    if not mapping:
+        return structures, target_keyword
+    renamed: dict = {}
+    new_target = None
+    for name, mask in structures.items():
+        display = mapping.get(name, name)
+        if display in renamed:
+            logger.warning(
+                "Structure name collision on %r (from %r); keeping the first.",
+                display, name,
+            )
+            continue
+        renamed[display] = mask
+        if target_keyword.lower() in name.lower():
+            new_target = display
+    return renamed, (new_target or target_keyword)
+
+
+def _run_dvh_stage(plan_directory, plan_dir: Path, yaml_config: dict) -> None:
+    """Regenerate ONLY the DVH figure + metrics from an existing Dose_ADoTA.mhd.
+
+    Standalone (like the gamma stage): it reuses the accumulated ``Dose_ADoTA.mhd``
+    (from this run or a prior ``accumulate``/``stream``) and the MCsquare
+    ``Dose.mhd``, both converted to Gy, re-renders ``dvh_comparison.*`` and
+    ``dvh_metrics.json`` next to the plan, and does not touch any other output.
+    Structures are optionally renamed to anatomical names via ``structure_names``
+    (see :func:`_load_structure_names`); with no mapping the behaviour is
+    identical to the DVH the accumulate/stream stages produce.
+    """
+    dose_path = plan_dir / ADOTA_DOSE_NAME
+    if not dose_path.exists():
+        logger.warning(
+            "DVH stage: %s not found (run the accumulate/stream stage first); skipping.",
+            dose_path,
+        )
+        return
+    if plan_directory.mc_dose_path is None:
+        logger.warning("DVH stage: no MC Dose.mhd in the plan dir; skipping.")
+        return
+
+    logger.info("=" * 70)
+    logger.info("Stage: dvh (regenerate DVH figure + metrics)")
+    logger.info("=" * 70)
+
+    bdl = BeamDataLibrary.from_file(plan_directory.bdl_path)
+    dose_adota = sitk.GetArrayFromImage(load_dose_gy(dose_path, plan_directory.plan, bdl))
+    dose_mc = sitk.GetArrayFromImage(
+        load_dose_gy(plan_directory.mc_dose_path, plan_directory.plan, bdl)
+    )
+    try:
+        structures, _flips = load_oriented_structures(plan_directory)
+    except ValueError as exc:
+        logger.warning("DVH stage: %s; skipping.", exc)
+        return
+
+    spacing = plan_directory.ct.GetSpacing()
+    mapping = _load_structure_names(plan_dir, yaml_config)
+    structures, target_kw = _apply_structure_names(structures, mapping)
+    if mapping:
+        logger.info("Applied structure name mapping: %s", mapping)
+
+    max_dose = yaml_config.get("dvh_max_dose")
+    max_dose = float(max_dose) if max_dose is not None else None
+    compact = bool(yaml_config.get("dvh_compact", False))
+    if max_dose is not None:
+        logger.info("DVH x-axis capped at %.1f Gy", max_dose)
+    if compact:
+        logger.info("DVH compact mode: no title, no ADoTA/MCsquare legend")
+
+    figure_t = perf_counter()
+    dvh_paths = dvh_comparison_figure(
+        structures, dose_adota, dose_mc, spacing,
+        str(plan_dir / "dvh_comparison"), labels=("ADoTA", "MCsquare"),
+        target_keyword=target_kw, max_dose=max_dose, compact=compact,
+    )
+    write_dvh_metrics_json(
+        plan_dir / "dvh_metrics.json", structures, dose_adota, dose_mc,
+        spacing, labels=("ADoTA", "MCsquare"), target_keyword=target_kw,
+    )
+    for dvh_path in dvh_paths:
+        logger.info("  DVH figure: %s", dvh_path)
+    logger.info("  DVH metrics: %s", plan_dir / "dvh_metrics.json")
+    logger.info("DVH regeneration took %.2f s", perf_counter() - figure_t)
+
+
+def _run_beamlets_stage(plan_directory, plan_dir: Path, yaml_config: dict) -> None:
+    """Per-spot ADoTA vs MCsquare comparison (reuses existing per-spot predictions).
+
+    Standalone (like gamma/dvh): it does not re-run inference. It needs the ADoTA
+    per-spot predictions (``adota_beamlets/{id}_ds_pred.npy`` from a prior
+    ``extract,infer``) and the MCsquare per-beamlet matrix (``beamlets_*/``).
+    Writes ``beamlet_metrics.csv`` (one row per spot), ``beamlet_metrics.json``
+    (aggregates, stratified by energy about 150 MeV, unweighted and MU-weighted)
+    and ``beamlet_analysis.*`` figures next to the plan.
+    """
+    adota_dir = plan_dir / BEAMLET_SUBDIR
+    preds = list(adota_dir.glob("*_ds_pred.npy")) if adota_dir.exists() else []
+    if not preds:
+        logger.warning(
+            "Beamlets stage: no per-spot ADoTA predictions in %s "
+            "(run the extract,infer stages first); skipping.", adota_dir,
+        )
+        return
+
+    bdir_cfg = yaml_config.get("beamlet_dir")
+    beamlet_dir = Path(bdir_cfg) if bdir_cfg else default_beamlet_dir(plan_dir)
+    if beamlet_dir is None or not beamlet_dir.exists():
+        logger.warning(
+            "Beamlets stage: no MCsquare beamlets_* directory in %s "
+            "(set beamlet_dir); skipping.", plan_dir,
+        )
+        return
+
+    n_frac = len(plan_directory.plan.fractions)
+    if n_frac != 1:
+        logger.warning(
+            "Beamlets stage: plan has %d fractions; the matrix-column join "
+            "requires 1 (expand_plan_to_spots increments beam across fractions). "
+            "Skipping.", n_frac,
+        )
+        return
+
+    logger.info("=" * 70)
+    logger.info("Stage: beamlets (per-spot ADoTA vs MCsquare) <- %s", beamlet_dir.name)
+    logger.info("=" * 70)
+
+    records = expand_plan_to_spots(plan_directory.plan)
+    cfg = BeamletAnalysisConfig(
+        energy_split_mev=float(yaml_config.get("beamlet_energy_split_mev", 150.0)),
+        high_dose_frac=float(yaml_config.get("beamlet_high_dose_frac", 0.5)),
+    )
+    t = perf_counter()
+    df, agg = run_beamlet_analysis(
+        plan_directory, plan_dir, beamlet_dir, adota_dir, records, cfg
+    )
+    elapsed = perf_counter() - t
+
+    csv_path = plan_dir / "beamlet_metrics.csv"
+    df.to_csv(csv_path, index=False)
+    json_path = plan_dir / "beamlet_metrics.json"
+    json_path.write_text(json.dumps(agg, indent=2) + "\n")
+    fig_paths = beamlet_analysis_figure(
+        df, str(plan_dir / "beamlet_analysis"),
+        primaries=agg.get("primaries_per_beamlet"),
+        energy_split_mev=cfg.energy_split_mev,
+    )
+    # Per-layer mean GPR (one figure per gamma criterion), OOD layers marked.
+    cutoff = int(cfg.gamma_lower_cutoff_pct)
+    for dp, dm in cfg.gamma_criteria:
+        col = f"gpr_{int(dp)}pct_{int(dm)}mm"
+        if col not in df:
+            continue
+        stem = plan_dir / f"gpr_per_layers_{int(dp)}pct_{int(dm)}mm_cut{cutoff}"
+        lp = gpr_per_layer_figure(
+            df, str(stem), col, dp, dm, cutoff,
+            primaries=agg.get("primaries_per_beamlet"),
+            energy_split_mev=cfg.energy_split_mev,
+        )
+        logger.info("  per-layer GPR figure: %s", lp[-1])
+
+    # Compact results table: overall + stratified about the energy split.
+    split = int(cfg.energy_split_mev)
+    lines = ["", "=" * 66,
+             f"PER-BEAMLET ADoTA vs MCsquare ({agg['n_spots']} spots, "
+             f"{agg.get('primaries_per_beamlet'):.0e} primaries)", "=" * 66,
+             f"{'group':<18}{'n':>4}{'GPR2/2':>9}{'GPR3/3':>9}{'MAPE%':>8}{'R80mm':>8}"]
+
+    def _row(label, stats):
+        def g(k):
+            s = stats.get(k)
+            return f"{s['mean']:.2f}" if s and s.get("mean") is not None else "n/a"
+        return (f"{label:<18}{stats.get('n_spots', 0):>4}"
+                f"{g('gpr_2pct_2mm'):>9}{g('gpr_3pct_3mm'):>9}"
+                f"{g('mape_pct'):>8}{g('r80_diff_mm'):>8}")
+
+    lines.append(_row("overall", agg["overall"]))
+    lines.append(_row(f"< {split} MeV", agg[f"below_{split}MeV"]))
+    lines.append(_row(f">= {split} MeV", agg[f"at_or_above_{split}MeV"]))
+    lines.append("-" * 66)
+    lines.append(f"MU fraction >= {split} MeV: {agg['mu_fraction_above_split']:.3f}")
+    lines.append("=" * 66)
+    logger.info("\n".join(lines))
+    logger.info(
+        "Beamlet metrics: %s | %s | figure %s (%.1fs)",
+        csv_path, json_path, fig_paths[-1], elapsed,
+    )
 
 
 def _run_gamma_stage(plan_directory, plan_dir: Path, yaml_config: dict) -> None:

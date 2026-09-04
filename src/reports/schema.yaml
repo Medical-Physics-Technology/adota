@@ -1,0 +1,62 @@
+# Schema for the adota report records (the research log that backs the papers
+# and the thesis). The validator, the scaffolder and the templates all read this
+# file, so a field is declared in exactly one place.
+#
+# Records live in a separate private repository mounted at `reports/`; only this
+# schema and the tooling around it are public.
+
+id_pattern:
+  change: '^CHG-[0-9]{4}$'
+  experiment: '^EXP-[0-9]{4}$'
+
+# Where each kind lives inside the records root.
+directories:
+  change: changes
+  experiment: experiments
+
+frontmatter:
+  common:
+    required:
+      id: str
+      title: str
+      kind: {enum: [change, experiment]}
+      date: date
+      status: {enum: [planned, running, complete, abandoned, superseded]}
+      branch: str
+    optional:
+      pr: int
+      commits: list
+      related: list          # ids of other records; must resolve
+      supersedes: str        # id of the record this replaces; must resolve
+      tags: list
+      publication: dict      # {target, section, figures}
+      artifacts: dict        # {run_dir, figures, tables}
+      commands: list
+      compute: dict          # {device, wall_time_h, mc_seconds}
+  experiment:
+    required:
+      hypothesis: str
+      data: list             # entries need a `name`; `path`/`n`/`patients` optional
+      metrics: list          # entries need `name` and `value`
+    optional: {}
+  change:
+    required: {}
+    optional: {}
+
+# Body sections every record carries. "Results: negative" is mandatory on
+# purpose: the negative results are the ones that evaporate from memory first
+# and the ones that stop an experiment being repeated by accident.
+sections:
+  required:
+    - What was done
+    - Methodology
+    - Data used
+    - What precisely changed
+    - 'Results: positive'
+    - 'Results: negative'
+    - What went well
+    - What went wrong
+    - Next steps
+  min_chars: 12
+  placeholders: [todo, tbd, fixme, xxx, '...', 'n/a']
+  # An explicit "None." is a valid answer; a placeholder is not.

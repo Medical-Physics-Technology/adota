@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from src.figures.single_beam import beamlet_input_figure
+from src.figures.beamlet_input import beamlet_input_figure
 
 
 def _ct_and_flux(shape=(8, 8, 20)):

@@ -1,12 +1,15 @@
 [project]
 name = "adota"
-version = "1.0.0"
+version = "1.5.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "h5py>=3.14.0",
     "matplotlib>=3.9.4",
+    # pymedphys >= 0.41 interpolates with an in-house numba kernel and ships
+    # numba only as an optional extra; without it `pymedphys.gamma` raises.
+    "numba>=0.60.0",
     "numpy>=2.0.2",
     "pandas>=2.3.3",
     "pydicom>=2.4.4",
@@ -15,12 +18,16 @@ dependencies = [
     "scipy>=1.13.0",
     "seaborn>=0.13.2",
     "simpleitk>=2.4.0",
-    "torch>=2.8.0",
+    # Pinned below 2.9: the 3.10 bump would otherwise resolve torch 2.11,
+    # whose CUDA build does not run on this machine's 535.x driver. The GPU
+    # gamma benchmark is measured on 2.8.0+cu128, so the stack stays fixed.
+    "torch>=2.8.0,<2.9",
     "tqdm>=4.66.0",
     "transformers>=4.45.0",
     "accelerate>=0.34.0",
     "typer>=0.21.1",
     "prettytable>=3.16.0",
+    "scikit-learn>=1.6.1",
 ]
 
 # Development-only tooling (test framework, linter). Not installed for plain
@@ -31,5 +38,48 @@ dev = [
     "ruff>=0.15.0",
 ]
 
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# The importable package root is `src/`, so scripts and tests can `import src.*`
+# from anywhere without a sys.path bootstrap.
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+# 120 rather than 100: the stricter width would reflow 234 pre-existing lines in
+# files this refactor does not otherwise touch. 120 still catches the genuinely
+# unreadable ones (the longest line in the repository was 258 characters).
+line-length = 120
+
+[tool.ruff.lint]
+# E/F: pycodestyle errors + pyflakes. I: import ordering, which PYTHON_CODE_STYLE
+# section 1 requires (standard library, then third-party, then local).
+select = ["E", "F", "I"]
+
+# E402 is correct everywhere except where an import is deliberately deferred:
+# both files must run setup code before the heavy scientific imports, and doing
+# it afterwards is a no-op.
+[tool.ruff.lint.per-file-ignores]
+# Pins BLAS to one thread before numpy/torch load, so the gamma process pool
+# can scale across cores.
+"scripts/mc/plot_angle_robustness.py" = ["E402"]
+"scripts/mc/prototype_beamlet_mode.py" = ["E402"]
+# Preloads the CUDA shared objects via ctypes before torch imports them;
+# mutating LD_LIBRARY_PATH from inside Python is too late.
+"scripts/rotation_performance_analysis.py" = ["E402"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# `src` resolves via the editable install; `.` additionally exposes `scripts.*`,
+# which several tests import directly. Replaces the sys.path bootstrap that used
+# to live in tests/conftest.py.
+pythonpath = ["."]
+markers = [
+    "integration: needs a real local dependency (dataset, checkpoint, external package)",
+    "e2e: full workflow across multiple components; opt-in",
+    "gpu: needs CUDA",
+    "slow: long-running; excluded from the default suite",
+]

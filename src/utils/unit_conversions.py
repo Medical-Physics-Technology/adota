@@ -1,3 +1,8 @@
+"""Physical unit conversions for dose values.
+
+MCsquare reports dose in MeV/g; papers and clinical metrics use Gy.
+"""
+
 def to_gy(dose_in_mev_per_g: float) -> float:
     """Convert dose from MeV/g to Gy.
 

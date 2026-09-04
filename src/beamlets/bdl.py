@@ -27,8 +27,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path
-from typing import Tuple
+from typing import Dict, Tuple
 
 import numpy as np
 import pandas as pd
@@ -67,6 +68,27 @@ class BeamDataLibrary:
     smy: float
     energy_table: pd.DataFrame
     source_path: Path
+    spot_size_cache: Dict[float, Tuple[float, float]] = dataclass_field(
+        default_factory=dict, compare=False, repr=False
+    )
+    """Per-instance memo for the nearest-energy spot-size lookup.
+
+    :func:`src.beamlets.flux.flux_spatial_spread` resolves a spot's sigmas by
+    scanning this library's ``energy_table``, which costs a pandas argsort over
+    the whole table -- once per *spot*, although a plan only has one energy per
+    layer (tens of distinct values against tens of thousands of spots). The
+    lookup is a pure function of ``(energy_table, energy)``, so the result is
+    cached here on first use.
+
+    It lives on the library rather than in a module-level cache because the
+    library owns the table being searched: the memo is then scoped to this
+    instance, cannot leak between plans with different BDLs, and is released with
+    it. (A ``functools.lru_cache`` is not an option -- ``energy_table`` is a
+    DataFrame, so the frozen dataclass is unhashable.)
+
+    Excluded from ``__eq__``/``repr`` so it stays invisible to value semantics.
+    Mutating it does not violate ``frozen=True``, which only blocks rebinding.
+    """
 
     # -- Geometry convenience -------------------------------------------------
 

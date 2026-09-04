@@ -188,3 +188,141 @@ low duplication — Phase 1 infra only).
 8. **`src/evaluation/` package name/location.** Acceptable, or do you prefer the
    shared engine to live under an existing package (e.g. `src/training/` or a
    new `src/inference/`)? *Need: confirm naming.*
+
+---
+
+# Appendix A — Per-file split proposal for the 500-line limit
+
+Added by the baseline-alignment refactor (see
+[baseline_alignment_refactor_plan.md](baseline_alignment_refactor_plan.md),
+Phase 5). **Nothing here has been executed.** It needs separate approval, and
+its proof of equivalence is the golden CSVs, which require the real dataset.
+
+## A.1 Where things stand
+
+Every file under `src/` is now within the mandatory 500-line limit. Sixteen
+files under `scripts/` are not:
+
+| Script | Lines | Tier |
+| --- | --- | --- |
+| `training_set_analysis_advanced_metrics.py` | 1804 | 1 |
+| `analysis_texture_with_inference.py` | 1577 | 1 |
+| `training_set_analysis.py` | 1448 | 1 |
+| `run_model.py` | 1379 | 1 |
+| `run_plan_opentps.py` | 1162 | 3 |
+| `training_set_vlm_based_quantification.py` | 1030 | 1 |
+| `rotation_performance_analysis.py` | 1007 | 2 |
+| `beamlet_timing_comparison.py` | 960 | 2 |
+| `beamlet_bev_rotation_timing.py` | 861 | 2 |
+| `threshold_sweep.py` | 841 | 1 |
+| `bragg_peak_estimation.py` | 839 | 1 |
+| `train_adota.py` | 657 | 3 |
+| `range_analysis.py` | 656 | 1 |
+| `run_model_h5py.py` | 640 | 1 |
+| `validation_adota.py` | 627 | 3 |
+| `reinterp_gpu_benchmark.py` | 507 | 2 |
+
+Tier 1 = adopts the shared `src/evaluation/` engine (the work Part 1 of this
+document began). Tier 2 = self-contained benchmark, split in place. Tier 3 =
+orchestration entry point, split in place.
+
+## A.2 Duplication, re-measured
+
+An AST scan over `scripts/` finds **~1784 lines of redundant copies** across 19
+duplicated names. The largest:
+
+| Name | Copies | Total lines |
+| --- | --- | --- |
+| `generate_publication_figures` | 4 | 512 |
+| `_make_per_sample_fn` | 5 | 499 |
+| `save_results_csv` | 7 | 251 |
+| `print_summary` | 5 | 214 |
+| `generate_correlation_analysis` | 2 | 158 |
+| `analyse_density_regions` | 2 | 140 |
+| `evaluate_samples` | 3 | 134 |
+| `_build_timing_report` | 2 | 124 |
+| `plot_energy_stratified` | 2 | 96 |
+| `plot_worst_idd_overlays` | 2 | 81 |
+
+This confirms the duplication map in section 1 and refines it: `_make_per_sample_fn`
+has spread to five scripts since that map was written, and `save_results_csv`
+to seven. **Extracting the duplicates is what brings most scripts under the
+limit** — a mechanical split into `_figures.py` / `_io.py` siblings would meet
+the letter of the rule while leaving the duplication in place, and is not what
+is proposed here.
+
+## A.3 Proposed destinations
+
+New shared modules, extending the existing `src/evaluation/` package:
+
+```
+src/evaluation/
+├── metrics_fn.py     # the per-sample metric callables the 5 _make_per_sample_fn
+│                     #   copies collapse into, parameterized by which metrics
+│                     #   are on (rmse/mape/rde/gpr/tv/cv/sigma_hu/bp)
+├── correlation.py    # generate_correlation_analysis + _correlate_target +
+│                     #   _partial_correlation + the metric/target vocabulary
+└── figures.py        # the shared parts of the 4 generate_publication_figures
+                      #   copies (best/worst/mean selection, panel layout)
+```
+
+`src/figures/` gains the plot functions that are currently duplicated in
+scripts: `plot_energy_stratified`, `plot_worst_idd_overlays`, `generate_gpr_plot`,
+the violin/scatter/histogram family from `training_set_analysis.py`.
+`src/schemas/results.py` absorbs the three local `TestDataset` dataclasses and
+`normalize_test_data_config` / `discover_sample_ids`.
+
+Per-script, after that extraction:
+
+| Script | Stays in the script | Moves out |
+| --- | --- | --- |
+| `training_set_analysis_advanced_metrics.py` | CLI, `extract_all_samples`, `read_angle_map` | density-region + advanced metrics -> `src/processing/`; correlation and energy-stratified analysis -> `src/evaluation/correlation.py`; angle-performance maps and clustermap -> `src/figures/` |
+| `analysis_texture_with_inference.py` | CLI, texture-metric selection | heterogeneity/GLCM/intensity metric wrappers -> `src/image_processing/`; correlation tables + plots -> `src/evaluation/correlation.py`; `generate_metrics_description` -> `src/tables/` |
+| `training_set_analysis.py` | CLI, prevalence report | BP sigma/TV/CV -> `src/processing/`; the six figure generators -> `src/figures/` |
+| `run_model.py` | CLI, anatomical-site summary | `density_variability_vs_gpr` + `advanced_metrics_and_figures` -> `src/figures/`; CSV/summary -> `src/evaluation/outputs.py` |
+| `training_set_vlm_based_quantification.py` | CLI, VLM prompt + parsing + voting | `render_review_panel` -> `src/figures/`; `analyse_density_regions` / `estimate_bp_range` -> shared (duplicated with the advanced-metrics script) |
+| `threshold_sweep.py` | CLI, `run_sweep` | the three plot functions -> `src/figures/` |
+| `bragg_peak_estimation.py` | CLI | the five estimator classes -> `src/processing/bp_estimators/`; its local `setup_logging`/`setup_run_directory`/`load_yaml_config`/`denormalize_energy` are re-implementations of `src.adota.config` and should just be deleted |
+| `range_analysis.py` | CLI | plots -> `src/figures/`; `TestDataset` plumbing -> `src/schemas/` |
+| `run_model_h5py.py` | CLI | figures -> `src/figures/`; CSV/summary -> `src/evaluation/outputs.py` |
+| `rotation_performance_analysis.py` | CLI | the three backend implementations (scipy/cupy/torch) -> `src/image_processing/rotation_backends/`; table + plot -> `src/figures/` |
+| `beamlet_timing_comparison.py` | CLI | `write_publication_preprocessing_figure` (194 lines) -> `src/figures/`; timing summary -> `src/evaluation/outputs.py` |
+| `beamlet_bev_rotation_timing.py` | CLI | validation figures -> `src/figures/`; `_build_timing_report` / `_format_timing_table` -> shared with `run_plan_opentps.py` (duplicated today) |
+| `reinterp_gpu_benchmark.py` | CLI | timing/table/figure helpers -> shared benchmark utilities |
+| `run_plan_opentps.py` | CLI, stage dispatch | each `_run_*_stage` -> `src/beamlets/stages/`; timing report -> shared |
+| `train_adota.py` | CLI | its 555-line `main` is an orchestration flow; extract the epoch loop body into `src/training/` helpers |
+| `validation_adota.py` | CLI | `_run_logs_mode` / `_run_inference_mode` -> `src/evaluation/` |
+
+## A.4 Sequencing and proof
+
+Do it one script at a time, in the Part 1 order (`run_model.py` and
+`run_model_h5py.py` first, since `src/evaluation/` already serves them), and
+after each one:
+
+1. `uv run ruff check .` clean, file under 500 lines;
+2. `tests/test_import_smoke.py`, `tests/test_public_api.py`,
+   `tests/test_cli_smoke.py` green — these run anywhere and catch a broken
+   extraction immediately;
+3. **on the machine with the dataset**, `python scripts/run-tests.py integration`
+   — the golden CSV for that script must be unchanged. This is the only check
+   that proves numeric equivalence, and it cannot run on a laptop.
+
+Extend `tests/golden/` to cover each Tier-1 script before that script is
+touched; today it covers four of them (`run_model`, `run_model_h5py`,
+`training_set_analysis`, `training_set_analysis_advanced_metrics`).
+
+## A.5 Note on two functions that will still be too large
+
+Outside `scripts/`, two figure functions survived the `src/` phase intact and
+breach PYTHON_CODE_STYLE section 5 (small, single-responsibility helpers) even
+though their files are now compliant:
+
+- `src/figures/single_beam.py::publication_figure` — 460 lines, leaving the file
+  at 482 of the permitted 500.
+- `src/figures/ct_visualizations.py::plot_ct_with_segmentation` — 336 lines.
+
+Both are single multi-panel matplotlib layouts. Decomposing them is safe only
+with a figure-level regression check (render to PNG, compare against a stored
+reference within tolerance); there is no such check today, and the existing
+tests only assert that the call completes. Recommend adding that check first,
+then splitting each into per-panel helpers.

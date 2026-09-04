@@ -1,0 +1,39 @@
+# GPR grids + best/worst examples for the water512 phantom (102.6, 135 MeV).
+# Colorbar locked to the SAME scale as robustness_figures_paper so the phantom
+# panels sit directly next to the patient panels in the paper.
+#   uv run python scripts/mc/plot_angle_robustness.py --config scripts/mc/config_plot_phantom_water512.yaml
+
+model:
+  name: DoTA_v3_grid_search_v11
+  fname: best_model.pth
+  device_index: 0
+
+gamma_criteria:
+  - {dose: 2, dist: 2, cutoff: 10}
+  - {dose: 1, dist: 3, cutoff: 0.1}
+
+grid_n: 18
+theta_range: [-2.0, 2.0]
+mode: per_patient
+
+cmap: viridis
+emit:
+  bare: true
+  with_colorbar: true
+  standalone_colorbar: true
+
+# Match the paper figures' colorbar exactly (per criterion key).
+fixed_scale:
+  g2_2_10:  [78.36185819070904, 99.6198816340278]
+  g1_3_0p1: [60.02889224950183, 95.34998442205837]
+
+render_examples: true          # phantom uses a{ix}_{iy} stems -> examples work
+n_examples: 3
+example_criterion: g2_2_10
+example_beamlet_shape: true
+
+inputs:
+  - /scratch/mstryja/DoTA_dataset_v2/water_phantom_phantom_water512_e102_v2
+  - /scratch/mstryja/DoTA_dataset_v2/water_phantom_phantom_water512_e135_v2
+
+output_dir: /scratch/mstryja/DoTA_dataset_v2/robustness_figures_phantom_water512

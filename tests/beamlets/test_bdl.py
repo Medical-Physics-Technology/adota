@@ -13,6 +13,7 @@ from src.beamlets.bdl import (
     angles_to_spot_position,
     spot_position_to_angles,
 )
+from tests.utils.bdl import BDL_TABLE_HEADER
 
 PLAN_BDL = Path(
     "/scratch/mstryja/opentps_plans/"
@@ -20,7 +21,7 @@ PLAN_BDL = Path(
 )
 
 # A tiny two-energy synthetic BDL with the OpenTPS header layout.
-_SYNTH_BDL = """\
+_SYNTH_BDL_TEMPLATE = """\
     --synthetic beam model--
 
     Nozzle exit to Isocenter distance
@@ -35,7 +36,7 @@ _SYNTH_BDL = """\
     Beam parameters
     2 energies
 
-    NominalEnergy MeanEnergy EnergySpread ProtonsMU Weight1 SpotSize1x Divergence1x Correlation1x SpotSize1y Divergence1y Correlation1y
+    {header}
     100.0 100.0 1.0 1000.0 1.0 4.0 0.003 0.5 3.0 0.004 0.6
     200.0 200.0 0.5 2000.0 1.0 3.0 0.002 0.3 2.0 0.003 0.4
 """
@@ -44,7 +45,7 @@ _SYNTH_BDL = """\
 @pytest.fixture()
 def synth_bdl(tmp_path: Path) -> BeamDataLibrary:
     path = tmp_path / "bdl.txt"
-    path.write_text(dedent(_SYNTH_BDL))
+    path.write_text(dedent(_SYNTH_BDL_TEMPLATE).format(header=BDL_TABLE_HEADER))
     return BeamDataLibrary.from_file(path)
 
 

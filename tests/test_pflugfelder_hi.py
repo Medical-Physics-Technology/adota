@@ -7,12 +7,15 @@ Phantoms use the project's data shape: (160, 30, 30), 2 mm isotropic.
 import numpy as np
 import pytest
 
+from src.processing.mcsquare_calibration import (
+    get_default_calibration,
+    hu_to_rsp_mcsquare,
+)
 from src.processing.pflugfelder_hi import (
     compute_pflugfelder_hi,
     compute_wepl_map,
     pflugfelder_hi,
 )
-from src.processing.rsp import hu_to_rsp
 
 RESOLUTION = (2.0, 2.0, 2.0)
 SHAPE = (160, 30, 30)
@@ -30,15 +33,21 @@ def _make_uniform_phantom(hu_value: float = 0.0):
 
 
 class TestWEPLMap:
-    def test_water_wepl_equals_geometric_depth(self):
-        """For water (RSP=1), WEPL should equal physical depth."""
-        ct = np.zeros(SHAPE, dtype=np.float64)  # HU=0 → RSP≈1
+    def test_water_wepl_matches_calibration_rsp(self):
+        """Uniform HU=0 phantom: WEPL = depth * RSP(HU=0).
+
+        With the MCsquare Schneider calibration HU=0 is assigned a soft-tissue
+        material (not pure water), so RSP(0) ~= 1.017 and WEPL is slightly above
+        the geometric depth. The expected value is taken from the calibration
+        itself so the test tracks the physics rather than a magic number.
+        """
+        ct = np.zeros(SHAPE, dtype=np.float64)
         bp_depth_mm = 100.0  # 50 slices × 2 mm
         wepl = compute_wepl_map(ct, RESOLUTION, bp_depth_mm)
 
+        rsp0 = float(get_default_calibration().convert_hu_to_rsp(np.array([0.0]))[0])
         assert wepl.shape == (30, 30)
-        # RSP for HU=0 is 1.0, so WEPL = 50 slices × 2mm × 1.0 = 100 mm
-        np.testing.assert_allclose(wepl, bp_depth_mm, atol=0.5)
+        np.testing.assert_allclose(wepl, bp_depth_mm * rsp0, atol=0.5)
 
     def test_dense_material_wepl_greater_than_water(self):
         """Bone (HU=1000) should give WEPL > physical depth."""
@@ -91,12 +100,27 @@ class TestPflugfelderHI:
 
 
 class TestRSPConsistency:
-    def test_water_rsp_is_one(self):
-        """HU=0 should give RSP ≈ 1.0."""
-        rsp = hu_to_rsp(np.array([0.0]))
-        np.testing.assert_allclose(rsp, 1.0, atol=0.02)
+    def test_soft_tissue_rsp_near_one(self):
+        """HU=0 (Schneider soft tissue) gives RSP just above 1 (~1.02)."""
+        rsp = hu_to_rsp_mcsquare(np.array([0.0]))
+        np.testing.assert_allclose(rsp, 1.02, atol=0.03)
 
     def test_air_rsp_near_zero(self):
         """HU=-1000 should give RSP close to 0."""
-        rsp = hu_to_rsp(np.array([-1000.0]))
+        rsp = hu_to_rsp_mcsquare(np.array([-1000.0]))
         assert rsp[0] < 0.05
+
+    def test_water_stopping_power_matches_opentps(self):
+        """Water SP at 100 MeV must match the OpenTPS reference value."""
+        assert get_default_calibration().water_sp(100.0) == pytest.approx(
+            7.25628392, abs=1e-3
+        )
+
+    def test_bone_rsp_below_density_ratio(self):
+        """Proper RSP for bone is well below the density ratio (the fix)."""
+        cal = get_default_calibration()
+        hu = np.array([1500.0])
+        rsp = cal.convert_hu_to_rsp(hu)[0]
+        density = cal.convert_hu_to_density(hu)[0]
+        assert rsp < density  # SP_bone/SP_water < 1
+        assert 1.5 < rsp < 1.7  # literature cortical-bone RSP range

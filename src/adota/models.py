@@ -1,7 +1,23 @@
+"""The ADoTA dose-prediction network.
+
+Defines :class:`DoTA3D_v3`: a convolutional encoder, a stack of
+energy-conditioned transformer encoder layers, and a convolutional decoder,
+assembled from the building blocks in :mod:`src.adota.layers`.
+
+Flow (``forward``):
+1. Encode the (CT, flux) volume into per-slice tokens, keeping skip tensors.
+2. Add positional information and the projected beam energy.
+3. Run the transformer stack over the slice sequence.
+4. Decode back to a dose volume, consuming the skip tensors.
+
+Both residual pathways (convolutional skips, transformer residuals) are
+separately switchable for ablations.
+"""
+
 import logging
 
-import torch
 import numpy as np
+import torch
 import torch.nn as nn
 
 from src.adota.layers import (

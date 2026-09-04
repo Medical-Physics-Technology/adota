@@ -1,0 +1,81 @@
+# Energy x gantry smoke test (2 energies, 3 random gantries, 5 beamlet angles)
+# ===========================================================================
+#   uv run python scripts/mc/generate_patient_set.py \
+#       --config scripts/mc/config_energy_gantry_smoke.yaml --dry-run   # preview
+#   uv run python scripts/mc/generate_patient_set.py \
+#       --config scripts/mc/config_energy_gantry_smoke.yaml
+#
+# 3 thoracic (Lung-PET-CT-Dx) + 3 abdominal (StageII-Colorectal) patients
+#   x 3 seeded random gantry angles per patient (shared by both energies)
+#   x 2 energies (102.6 / 135 MeV, both off the BDL's 10-MeV nominal grid)
+#   x 5 beamlet angles (the 4 corners + the centre of the +-2 deg square)
+#   = 180 beamlets at 1e6 primaries.
+#
+# The 5 angles sit exactly on the corners/centre of a 3x3 lattice over
+# [-2, 2] deg, so they drop straight into the usual GPR panel (grid_n: 3) with the
+# four edge-midpoint cells left empty. Scale up by replacing `angles` with the full
+# `grid_n: 18` sweep once the smoke test is clean.
+#
+# Patients: from the leakage-safe tail of each collection (`selection: last` pool,
+# the same interim guard as config_patient_set.yaml), chosen for CT *z coverage*.
+# theta_x steers the beamlet along the slice axis by d_smy*tan(theta_x) = 90.2 mm at
+# 2 deg, so a +-2 deg sweep needs >= 240 mm of z (90.2 + half the 60-voxel ROI
+# window, both sides) or the corner beamlets are dropped as roi_out_of_bounds after
+# their MC has been paid for. Screened with
+#   uv run python scripts/mc/generate_patient_set.py --config <cfg> --check-geometry
+# (run_logs/energy_gantry_smoke_geomscreen.log): many Lung-PET-CT-Dx diagnostic CTs
+# cover only 160-230 mm and cannot hold +-2 deg; the six below have 285-465 mm
+# (max |theta_x| >= 2.5 deg) and are unused by the earlier robustness runs.
+
+name: energy_gantry_smoke
+
+datasets:
+  - name: Lung-PET-CT-Dx           # thoracic held-out
+    anatomy: thoracic
+    root: /data/lung_cancer_dataset/manifest-1608669183333
+    collection: Lung-PET-CT-Dx
+    patient_ids: [Lung_Dx-G0037, Lung_Dx-G0049, Lung_Dx-G0056]   # z = 400 / 328 / 337 mm
+    qc: {min_slices: 70, max_spacing_xy: 1.5, max_spacing_z: 2.0}
+  - name: StageII-Colorectal       # abdominal / pelvic held-out
+    anatomy: abdominal
+    root: /scratch/mstryja/manifest-1646429317311
+    patient_ids: [StageII-Colorectal-CT-222, StageII-Colorectal-CT-225, StageII-Colorectal-CT-230]  # z = 290 / 315 / 465 mm
+    qc: {}                         # ungated (homogeneous 5mm collection)
+
+engine:
+  mcsquare_install: /home/mstryja/tools/mcsquare
+  mc_work_dir: /scratch/mstryja/mc_work/energy_gantry_smoke
+  bdl_file: hptc_beam_model_rsnone.txt
+  scanner: default
+
+robustness:
+  energies: [102.6, 135.0]       # non-nominal: MCsquare interpolates the BDL (70..244)
+  theta_x_range: [-2.0, 2.0]
+  theta_y_range: [-2.0, 2.0]
+  grid_n: 3                      # lattice the explicit angles are indexed on
+  angles:                        # 4 corners + centre; must be lattice points
+    - [2.0, -2.0]
+    - [-2.0, -2.0]
+    - [-2.0, 2.0]
+    - [2.0, 2.0]
+    - [0.0, 0.0]
+  gantry_mode: uniform_random    # 3 draws in [0, 360), seeded per patient UID
+  gantry_min: 0.0
+  gantry_max: 360.0
+  n_gantry: 3                    # gantries per patient, SHARED across both energies
+  gantry_seed: 20260901
+  rotate_to_canonical: true      # rotate CT so the beam is axis-aligned (gantry != 90)
+  roi_size: [60, 60, 320]
+  iso_spacing_mm: 1.0
+  num_primaries: 1.0e6
+  num_threads: 0
+  rng_seed: 0
+  min_deposition_ratio: 0.95     # as config_patient_set.yaml: at oblique gantries the
+                                 # outer beamlets can run past the 320 mm crop or leave
+                                 # the scan, and a truncated crop is not a fair GT --
+                                 # such cells are dropped (left empty in the panel)
+  output_root: /scratch/mstryja/DoTA_dataset_v2
+  experiment_prefix: energy_gantry_smoke
+  experiment_version: 1
+  make_figures: false
+  overwrite: false               # resumable: skip beamlets already written

@@ -21,15 +21,15 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-from src.training.losses import LMSE, LPS, TwoObjectiveBalancer
-from src.training.run import (
+from src.schemas.configs import TrainingConfig
+from src.training.diagnostics import (
     compute_grad_norm,
     compute_param_norm,
     dump_nan_context,
-    log_phase,
 )
+from src.training.logging_utils import log_phase
+from src.training.losses import LMSE, LPS, TwoObjectiveBalancer
 from src.training.utils import validate_tensor_ranges
-from src.schemas.configs import TrainingConfig
 
 logger = logging.getLogger(__name__)
 

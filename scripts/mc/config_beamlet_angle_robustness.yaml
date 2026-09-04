@@ -1,0 +1,60 @@
+# Beamlet-angle robustness MC dataset generation (reviewer R3)
+# =========================================================
+#   uv run python scripts/mc/beamlet_angle_robustness.py \
+#       --config scripts/mc/config_beamlet_angle_robustness.yaml
+#
+# Expands the angular analysis across multiple patients (4 anatomies) and energies.
+# CLI flags override: --grid-n 3 --make-figures for a QC run; --n-patients N.
+
+name: beamlet_angle_robustness
+
+# --- Datasets: one entry per anatomy (n_patients is the configurable knob) ---
+datasets:
+  - name: NSCLC-Radiomics
+    anatomy: thoracic
+    root: /scratch/mstryja/manifest-1603198545583
+    n_patients: 2
+    selection: first
+  - name: StageII-Colorectal
+    anatomy: abdominal
+    root: /scratch/mstryja/manifest-1646429317311
+    n_patients: 2
+    selection: first
+  - name: Prostate-AEC
+    anatomy: pelvic
+    root: /scratch/mstryja/manifest-1684259732535
+    n_patients: 2
+    selection: first
+  - name: Head-Neck-PET-CT
+    anatomy: head_neck
+    root: /data/mstryja/data_root/manifest-VpKfQUDr2642018792281691204
+    collection: Head-Neck-PET-CT
+    n_patients: 2
+    selection: first
+
+# --- MCsquare engine (independent install; working dir on /scratch) ---
+engine:
+  mcsquare_install: /home/mstryja/tools/mcsquare
+  mc_work_dir: /scratch/mstryja/mc_work/robustness
+  bdl_file: hptc_beam_model_rsnone.txt
+  scanner: default
+
+# --- Robustness sweep ---
+robustness:
+  energies: [90.0, 140.0, 200.0]
+  theta_x_range: [-2.0, 2.0]
+  theta_y_range: [-2.0, 2.0]
+  grid_n: 18                     # 18x18 = 324 angles (reviewer-comparable); use --grid-n 3 for QC
+  gantry_mode: fixed             # "fixed" | "bimodal_random" (seeded per patient)
+  gantry_value: 90.0
+  gantry_seed: 1234
+  roi_size: [60, 60, 320]
+  iso_spacing_mm: 1.0
+  num_primaries: 1.0e7
+  num_threads: 0                 # 0 = all available
+  rng_seed: 0
+  min_deposition_ratio: 0.5      # QA: fraction of plan dose captured in the ROI
+  output_root: /scratch/mstryja/DoTA_dataset_v2
+  experiment_version: 2
+  make_figures: false            # per-beamlet QC figures (heavy at full grid)
+  overwrite: false               # resumable: skip angles already written

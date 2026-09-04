@@ -3,6 +3,227 @@
 All notable changes to this project are documented in this file. This project
 adheres to [Semantic Versioning](https://semver.org).
 
+## [1.5.0] - 2026-09-03
+
+A GPU gamma index. `pymedphys.gamma` dominated gamma pass rate evaluation --
+it is why `src/training/gpr_pool.py` exists at all, computing GPR on a frozen
+*subset* of the validation set. `src/metrics/gamma_torch/` replaces the kernel
+with a torch implementation that keeps both dose grids on the device. **The
+reported metric is unchanged**: the backend is opt-in and defaults to
+pymedphys, and the `gamma_values -> gamma_pass_rate` arithmetic is shared
+verbatim between the two paths, quirky denominator included.
+
+### Changed
+
+- **Python floor raised to 3.10** (`requires-python`, `.python-version`, ruff
+  `target-version`), which moves `pymedphys` from 0.40 to 0.41 and its
+  interpolation from the econforge `interpolation` package to an in-house numba
+  kernel. `numba` is now an explicit dependency: pymedphys ships it only as an
+  optional extra and `pymedphys.gamma` raises without it.
+- **`torch` pinned `>=2.8.0,<2.9`.** The 3.10 resolution would otherwise take
+  torch 2.11, whose CUDA build does not load on the 535.x driver these machines
+  run.
+- The pymedphys 0.40 -> 0.41 interpolator change **moves published gamma pass
+  rates**, by up to 0.056 pp in absolute value across the eight-plan benchmark
+  corpus, in both directions (mean 0.0075 pp over the 40 plan x criterion
+  pairs). This affects previously reported numbers regardless of the GPU work.
+  It also makes the CPU path about 4.9x faster on its own. See
+  [`docs/gamma_gpu/`](docs/gamma_gpu/) for the full 40-row comparison.
+- `gamma_index`, `gamma_index_torch` and `plan_gamma` take `backend`
+  (`"pymedphys"` by default, or `"torch"`) and `backend_options`. Existing
+  callers are unaffected. Under the torch backend `gamma_index_torch`
+  de-normalises and thresholds on the tensors' own device instead of copying
+  two full volumes to the host first.
+
+### Added
+
+- **`src/metrics/gamma_torch/`** -- the gamma shell method in torch, for 1D, 2D
+  and 3D, supporting `local_gamma`, `max_gamma`, `skip_once_passed`,
+  `lower_percent_dose_cutoff`, `global_normalisation`, `interp_fraction` and
+  `random_subset`. Scalar thresholds only; the sequence form that
+  `pymedphys.gamma` answers with a dict raises `NotImplementedError`.
+  Apache-2.0 rather than the repository's MIT, and free of every `src.` import,
+  because it is written for contribution back to PyMedPhys.
+- **`scripts/gamma_benchmark.py`** plus `src/metrics/gamma_benchmark.py`,
+  `gamma_rungs.py` and `gamma_report.py` -- the deviation ladder and the
+  performance benchmark over the OpenTPS plan corpus at `$ADOTA_GAMMA_CORPUS`.
+  Guide: [`scripts/docs/gamma_benchmark.md`](scripts/docs/gamma_benchmark.md).
+- [`docs/gamma_gpu/`](docs/gamma_gpu/) -- the recorded results: the 40-row
+  deviation ladder, the voxel-level parity table and the performance table,
+  plus a `README.md` reading them.
+- `tests/test_gamma_torch.py` (synthetic parity against `pymedphys.gamma`) and
+  `tests/test_gamma_torch_corpus.py` (the same at plan scale; `integration`,
+  `slow`, `gpu`, and skips when the corpus is absent).
+
+### Measured
+
+Across all 40 (plan x criterion) pairs of the benchmark corpus, on one A40:
+
+| comparison | tolerance | max abs delta | verdict |
+|---|---|---|---|
+| rung 2 (torch-CPU float64) vs rung 1 (pymedphys) | 0.01 pp | 0.000000 pp | PASS |
+| rung 3 (GPU float64) vs rung 2 | 0.001 pp | 0.000000 pp | PASS |
+| rung 4 (GPU float32) vs rung 2 | 0.1 pp | 0.047677 pp | PASS |
+| rung 1 vs rung 0 (recorded) | reported | 0.056401 pp | not gated |
+
+The float64 backend reproduces the pymedphys pass rate exactly on every pair,
+on CPU and GPU alike, with zero gamma = 1 boundary crossings over the 9.3 M
+evaluated voxels whose maps were compared.
+
+Wall time for the whole corpus, same machine, warm-up excluded: pymedphys
+3016.0 s, torch-CPU 1767.9 s, **one A40 159.0 s in float64 (19.0x) and 111.3 s
+in float32**. Peak device memory 2.1 to 2.8 GiB. The 4.13 h in the recorded
+JSONs is provenance from another machine, not a controlled measurement, and no
+speedup is quoted against it.
+
+### Known gaps
+
+- `gamma_torch` requires uniformly spaced axes on both grids, which it checks
+  on entry.
+- Sequence thresholds are not implemented.
+- One deliberate numerical difference from pymedphys: it stores the per-shell
+  minimum relative dose difference in an array shaped like the reference dose,
+  so a float32 dose quantises that minimum. `gamma_torch` keeps it at the
+  working dtype. On float64 input the two agree to 1e-14; on the float32 doses
+  the plan pipeline uses, this accounts for a ~1e-7 difference in gamma, far
+  below the 0.01 pp pass-rate gate. Reproducing it would defeat the float64
+  mode.
+
+## [1.4.0] - 2026-08-22
+
+Repository alignment with the `an_instructions/` baselines. **No behaviour
+changes**: this release moves code, adds tooling and adds tests. Every dose
+number, metric and output format is unchanged. Planned and tracked in
+[`docs/baseline_alignment_refactor_plan.md`](docs/baseline_alignment_refactor_plan.md).
+
+### Changed
+
+- **`src/training/run.py` is gone**, split into four role-named modules. The old
+  name described runtime infrastructure, not an entry point (that is
+  `scripts/train_adota.py`). Update imports:
+  `CheckpointManager` -> `src.training.checkpoints`;
+  `GracefulShutdown`, `dump_nan_context`, `compute_grad_norm`,
+  `compute_param_norm` -> `src.training.diagnostics`;
+  `setup_training_logging`, `log_phase`, `log_banner`, `log_section`,
+  `format_duration`, `silence_pymedphys` -> `src.training.logging_utils`;
+  `setup_training_run_directory`, `write_manifest`, `save_resolved_config`,
+  `MetricsLog` -> `src.training.run_dir`.
+- `src.figures.single_beam` kept `publication_figure`; its shared helpers moved
+  to `src.figures.axes_utils` (`aligned_colorbar`, `identify_axes`,
+  `save_figure_as_publication_formats`), with `compare_two_inputs` in
+  `src.figures.input_comparison` and `beamlet_input_figure` in
+  `src.figures.beamlet_input`.
+- `plot_bp_estimation_diagnostic` moved to `src.figures.bp_diagnostic`.
+- `save_attention_snapshot` moved to `src.training.attention`; the energy-binning
+  and worst-K helpers to `src.training.binning`.
+- `src/adota/layers.py` and `src/beamlets/extraction.py` became packages. Their
+  import paths are unchanged -- every name is re-exported.
+- Version in `pyproject.toml` corrected from a stale `1.0.0` to match this file.
+
+### Added
+
+- **`scripts/run-tests.py`** -- the repository test runner:
+  `unit` / `integration` / `e2e` / `all`, with per-suite reporting and a
+  non-zero exit on failure. Extra arguments pass through to pytest.
+- **Registered pytest markers** (`integration`, `e2e`, `gpu`, `slow`). The
+  golden characterization suite is `integration`; the performance suite `slow`.
+- **`tests/utils/`** -- importable shared test helpers: `golden.py` (moved from
+  `tests/golden/_goldenlib.py`), `bdl.py` (one synthetic beam-data-library
+  builder replacing a fixture copied across eight modules), `deps.py`
+  (optional-dependency probes).
+- **Three data-free guard suites**: `test_import_smoke.py` (every module under
+  `src/` imports), `test_public_api.py` (the split modules still expose every
+  name they used to), `test_cli_smoke.py` (`--help` exits 0 on all 29 Typer
+  scripts).
+- **Committed ruff configuration** (`E`, `F`, `I`; py39; line length 120) and a
+  hatchling build backend, so the project installs editable and `src.*` resolves
+  from any directory.
+- **`.env.example`** documenting the five environment variables the code reads.
+- Module docstrings for the 21 modules and 11 packages that had none.
+
+### Fixed
+
+- Removed all 40 `sys.path` bootstraps, **including ten that hardcoded
+  `/home/mstryja/projects/adota`**, which made those scripts unrunnable from any
+  other checkout.
+- `ruff check .`: 508 errors to 0. Beyond formatting, this fixed 13 unused
+  variables and two ambiguous `l` identifiers.
+- The 7 pre-existing test failures now skip with actionable reasons instead of
+  failing: four need the external `datagenerator` package (set
+  `ADOTA_DATAGENERATOR_ROOT`), three need pymedphys's optional econforge
+  `interpolation` dependency.
+- Deleted `src/processing/plan_pencil.py`, an empty placeholder nothing imported.
+
+### Notes
+
+- Every file under `src/` is now within the mandatory 500-line limit. Sixteen
+  files under `scripts/` are not; the per-file proposal for those is Appendix A
+  of [`docs/scripts_refactor_plan.md`](docs/scripts_refactor_plan.md) and is not
+  yet executed.
+- Unit suite: 571 passed, 29 skipped, 0 failed (was 346 passed, 7 failed).
+
+## [1.3.0] - 2026-08-07
+
+Two additions: a single unified physical model behind every heterogeneity metric,
+and a complete input-only difficulty-score study for active-learning beamlet
+selection (report plus reproducible analysis code). The per-beamlet dose model is
+**unchanged**.
+
+### New
+- **`src/processing/mcsquare_calibration.py`** - self-contained HU to relative
+  stopping power (RSP) using the MCsquare `default` scanner tables (the ones the
+  DoTA data generation used): `RSP = rho(HU) * SP_material(HU,E) / SP_water(E)`.
+  Validated against OpenTPS to six decimals (water SP at 100 MeV = 7.256284), no
+  runtime OpenTPS dependency. Scanner and Geant4 material stopping-power tables
+  live in `src/processing/data/mcsquare_default/`.
+- **`src/processing/range_energy.py`** - Grevillot energy-to-R80 range fits, so the
+  Bragg-peak depth is derivable from the beam energy alone (input-only).
+- **[`research/acquisition_function_final_summary.md`](research/acquisition_function_final_summary.md)**
+  (with rendered [PDF](research/acquisition_function_final_summary.pdf)) - the
+  difficulty-score study. An input-only score (weighted sum of percentile-normalized
+  physics metrics) predicts the relative dose error on unseen patients to Pearson
+  0.85 / Spearman 0.86, with an interpretable 14-metric version at 0.79 / 0.82;
+  frozen-test validated on 7 held-out patients. The gamma pass rate is predictable
+  only to 0.71. Design and math framework in
+  [`research/acquisition_function_design.md`](research/acquisition_function_design.md).
+- **`scripts/analysis/`** - reproducible analysis behind the report:
+  `acquisition_regression_study.py` and `acquisition_dev_analysis.py` (achievability),
+  `acquisition_target_comparison.py` and `extract_mape.py` (target/transform),
+  `acquisition_single_metric_corr.py` (single-metric floor), `acquisition_frozen_test.py`
+  and `acquisition_rde_finalize.py` (final scorer plus frozen test),
+  `acquisition_ranking_benchmark.py` (tail-lift), `build_beamlet_provenance.py`
+  (per-beamlet anatomy/patient map), and the `plot_*` figure generators. Figures under
+  `research/figures/acquisition/`.
+
+### Changed
+- **Unified physical model** - `src/processing/rsp.py`,
+  `src/processing/tissue_decomposition.py`, `scripts/bragg_peak_estimation.py` and
+  `src/processing/pflugfelder_hi.py` now delegate their density and RSP values to
+  `mcsquare_calibration`, so WEPL, ISI, range and Bragg-peak estimation share one
+  physically consistent model (verified bit-identical across the entry points).
+
+### Fixed
+- **WEPL used a density ratio instead of stopping power** - the previous `hu_to_rsp`
+  defaulted to `rho/rho_water`, overestimating bone RSP by about 25 percent at
+  HU 1500. `compute_wepl_map` and the Pflugfelder index now use the MCsquare
+  stopping-power calibration.
+
+### Added (metric, not wired into the pipeline)
+- **`compute_parallel_beam_wepl_diff`** in `pflugfelder_hi.py` - a parallel-to-beam
+  WEPL split ("half bone, half air"). Kept and smoke-tested, but found redundant
+  with `wepl_std` (Spearman 0.92) and deliberately not wired into extraction.
+
+### Tests
+- `tests/test_pflugfelder_hi.py` updated for the stopping-power RSP (HU 0 now gives
+  soft-tissue RSP about 1.017, not pure water; added water-SP and bone-correction
+  checks). Golden-test baseline refreshed.
+
+### Dependencies
+- Added `scikit-learn>=1.6.1` (used by the acquisition analysis scripts).
+
+### Docs
+- `guides/` - the supervisor's publication guidelines that the report follows.
+
 ## [1.2.0] - 2026-06-16
 
 Plan-level dose pipeline: a new `src/beamlets/` package and

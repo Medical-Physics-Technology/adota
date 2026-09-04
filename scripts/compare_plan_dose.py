@@ -8,15 +8,11 @@ Usage:
     uv run python scripts/compare_plan_dose.py --plan-dir /scratch/.../<plan>
 """
 
-import sys
 from pathlib import Path
 from typing import Annotated, Optional
 
 import SimpleITK as sitk
 import typer
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.beamlets.bdl import BeamDataLibrary
 from src.beamlets.dose_scaling import load_dose_gy
@@ -24,6 +20,8 @@ from src.beamlets.structures import load_oriented_structures
 from src.figures.dvh_comparison import dvh_comparison_figure, write_dvh_metrics_json
 from src.figures.plan_comparison import plan_dose_comparison
 from src.loaders.plan_directory import load_plan_directory
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 app = typer.Typer(help="Compare ADoTA vs MCsquare plan dose maps.")
 
@@ -70,7 +68,7 @@ def main(
     lo, hi = (float(v) for v in ct_window.split(","))
 
     out = output or (plan_dir / "dose_comparison")
-    paths = plan_dose_comparison(
+    plan_dose_comparison(
         ct,
         dose_a,  # ADoTA, in Gy
         dose_b,  # MCsquare, in Gy

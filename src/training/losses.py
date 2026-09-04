@@ -17,7 +17,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
 # Numerical guard added to denominators so that empty-dose samples
 # (all-zero ground truth) yield 0 instead of NaN. Tuned to be small
 # relative to the post-normalization dose dynamic range.

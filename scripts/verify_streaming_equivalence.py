@@ -16,15 +16,11 @@ from __future__ import annotations
 import argparse
 import logging
 import shutil
-import sys
 from pathlib import Path
 from time import perf_counter
 
 import numpy as np
 import SimpleITK as sitk
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.adota.utils import load_model
 from src.beamlets.accumulation import AccumulationConfig, run_accumulation
@@ -33,6 +29,8 @@ from src.beamlets.inference import InferenceConfig, run_inference
 from src.beamlets.streaming import StreamingConfig, run_streaming_pipeline
 from src.evaluation.cli import resolve_device
 from src.loaders.plan_directory import load_plan_directory
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 

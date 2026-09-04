@@ -102,8 +102,8 @@ as the staged path, so the accumulated dose is **numerically identical** (verifi
 by `tests/beamlets/test_streaming.py` and, on a real plan with the production model,
 bit-identical to the staged dose).
 
-`gamma` runs after either mode (it reuses `Dose_ADoTA.mhd`, so `--stages gamma`
-works standalone).
+`gamma` and `dvh` run after either mode and both reuse `Dose_ADoTA.mhd`, so
+`--stages gamma` and `--stages dvh` work standalone (no re-run, no model needed).
 
 ---
 
@@ -147,6 +147,62 @@ directly comparable.
 
 ---
 
+## Batched host↔device staging (`flux_batched` / `batched_prep`)
+
+At `grid_factor: 2` the per-beamlet resize is already gone, so what was left
+dominating the stream stage was **transfer overhead**, not compute: the pipeline
+moved two arrays per beamlet across the PCIe bus one at a time, and built the flux
+one spot at a time. Ported from the optimized-GPU reinterpretation benchmark
+([`reinterp_gpu_benchmark.py`](../reinterp_gpu_benchmark.py)), two options move each
+batch as a single contiguous block instead:
+
+- **`batched_prep`** stages the batch's CT crops into one contiguous pinned block
+  and copies them host→device **once** instead of `batch_size` times, then
+  normalizes / permutes / resizes over the batch
+  (`prepare_inputs_from_arrays_batched`).
+- **`flux_batched`** builds the whole batch's flux in one
+  `flux_projection_gpu_batched` call and — with `batched_prep` — hands the result
+  straight to the model input as a device tensor, so the flux never makes a
+  device→host→device round trip.
+
+Measured on `LUNG1-062_Publication_Plan_1` (285 spots, 2 mm, fp16, batch 120):
+
+| Step | per-spot | batched | |
+|---|---:|---:|---|
+| flux projection | 1.502 s | 0.019 s | 79× |
+| input prep (H→D) | 4.983 s | 0.097 s | 51× |
+| **stream compute** | **10.77 s** | **2.86 s** | **3.8×** |
+| **wall clock** | **13.33 s** | **5.19 s** | **2.6×** |
+
+`batch_size` was swept at 56 / 120 / 240 / 360 → 3.28 / 2.86 / 3.28 / 2.97 s of
+compute: **120 is the sweet spot**, and bigger is not better (the forward stops
+getting cheaper and the pinned staging buffers just grow).
+
+### What this does to the dose
+
+The pipeline is bit-reproducible (running the same config twice gives *zero*
+differing voxels), so these differences are real signal, not run-to-run noise:
+
+| Variant vs the per-spot path | fp32 | fp16 (production) |
+|---|---:|---:|
+| `batched_prep` alone | **0** (bit-identical) | **0** (bit-identical) |
+| `flux_batched` (float64) | 1.5e-5 of peak | 1.8e-4 of peak |
+
+`batched_prep` only changes *how* the batch reaches the GPU, so it is bit-identical
+end to end. `flux_batched` is a **reassociation** of the same float64 math (batched
+matmul instead of per-spot), which lands within one float32 ulp on the normalized
+flux channel the model consumes; the fp16 forward then amplifies that to 1.8e-4
+(0.018 %) of the peak dose — 16× below the ~0.3 % the fp16 forward itself already
+costs, with **gamma pass rates vs MCsquare unchanged**. `flux_batched_dtype:
+float32` is ~2× faster on the flux alone but an order of magnitude looser; it is
+not used for publication runs.
+
+Guarded by `tests/beamlets/test_flux_gpu.py` (batched flux vs the per-spot NumPy
+and GPU paths), `tests/loaders/test_dir_based_batched_prep.py` (batched prep is
+bit-identical to the per-spot loop, CPU and CUDA) and
+`tests/beamlets/test_streaming.py` (whole-pipeline equivalence at both grid
+factors).
+
 ## Dose-comparison figure style (`dose_render`)
 
 The ADoTA-vs-reference **`dose_comparison.*`** figure (written by the `accumulate`
@@ -188,7 +244,92 @@ Run any comma-separated subset, in order:
 | `infer` | Batched ADoTA inference over the extracted beamlets | `adota_beamlets/{id}_ds_pred.npy` |
 | `accumulate` | Deposit predicted beamlets back onto the full CT grid (de-rotating each field); auto-generates the dose-comparison + DVH figures | `Dose_ADoTA.mhd`, `dose_comparison.*`, `dvh_comparison.*`, `dvh_metrics.json` |
 | `stream` | **Fused, disk-free** alternative to `extract,infer,accumulate`: crop → flux → infer → deposit per field in one pass. Same `Dose_ADoTA.mhd` + figures, no per-beamlet files | `Dose_ADoTA.mhd`, `dose_comparison.*`, `dvh_comparison.*` |
+| `dvh` | **Regenerate only the DVH** figure + metrics from an existing `Dose_ADoTA.mhd` (standalone, like `gamma`; no re-run). Optionally renames structures to anatomical names via `structure_names.json` (see below). Touches nothing else | `dvh_comparison.*`, `dvh_metrics.json` |
 | `gamma` | Plan gamma pass rate per criterion + MAPE / RMSE / RDE + gamma-map figure (reuses `Dose_ADoTA.mhd`, so it can run standalone) | `gamma_comparison.*`, `gamma_metrics.json` |
+| `beamlets` | **Per-spot** ADoTA vs MCsquare comparison against the MC per-beamlet matrix (`beamlets_*/`); reuses the existing `adota_beamlets/` predictions (run `extract,infer` first). Standalone, like `gamma`. | `beamlet_metrics.csv`, `beamlet_metrics.json`, `beamlet_analysis.*` |
+
+### Per-beamlet analysis (`beamlets` stage)
+
+Compares ADoTA and MCsquare **spot by spot** (not just at plan level), to see which
+pencil beams ADoTA reproduces well as a function of energy. It needs two things in
+the plan dir:
+
+- the MCsquare **per-beamlet** matrix `beamlets_<primaries>/` (from OpenTPS'
+  `reconstructPlanFromPencil.py`; format in [`docs/mcsquare_beamlet_format.md`](../../docs/mcsquare_beamlet_format.md)), and
+- the ADoTA **per-spot predictions** `adota_beamlets/{id}_ds_pred.npy` — so run
+  `--stages extract,infer` once first (the `stream` path writes no per-spot files).
+
+It matches spot `i` (matrix column) to ADoTA record `b{beam}_l{layer}_s{spot}`
+(asserted), scales each to Gy on the same footing as the accumulated dose, and
+compares **in the ADoTA BEV crop frame** (the MC beamlet is rotated+cropped into
+each spot's crop). Metrics per spot (reusing `src/metrics/`): local gamma 2%/2mm &
+3%/3mm, MAPE/RMSE on high-dose voxels, and the R80 range difference. Everything is
+restricted to the beamlet's support; the sparse matrix is never densified. At
+`1e5` primaries the MC beamlets are noisy, so `max()` is never used and the
+low-dose noise floor is reported.
+
+Outputs: `beamlet_metrics.csv` (one row per spot: indices, `energy_mev`, `mu`,
+`mu_fraction`, the metrics), `beamlet_metrics.json` (aggregates: overall and
+stratified above/below 150 MeV, unweighted and MU-weighted; records the
+`beamlet_dir` + `primaries_per_beamlet`), `beamlet_analysis.*` (metric-vs-energy
+scatter, point colour/size = MU fraction, 150 MeV reference line), and
+`gpr_per_layers_<%>pct_<mm>mm_cut<cutoff>.*` — one per gamma criterion: the plain
+**per-energy-layer mean** GPR vs plan energy layer (error bars = within-layer std),
+with the out-of-distribution layers (≥ 150 MeV, above the thoracic training limit)
+shaded and drawn as distinct markers. This is the single publication panel for the
+energy-layer trend.
+
+```bash
+# generate per-spot predictions once, then analyse against the MC beamlets
+uv run python scripts/run_plan_opentps.py --config scripts/config_run_plan_opentps.yaml \
+    --plan-dir "$PLAN_DIR" --stages extract,infer --overwrite
+uv run python scripts/run_plan_opentps.py --config scripts/config_run_plan_opentps.yaml \
+    --plan-dir "$PLAN_DIR" --stages beamlets            # --beamlet-dir to pick a specific beamlets_* set
+```
+
+### Regenerating just the DVH (`dvh` stage)
+
+`--stages dvh` re-renders `dvh_comparison.{png,pdf,svg}` and `dvh_metrics.json` from the
+**already-accumulated** `Dose_ADoTA.mhd` and the MC `Dose.mhd` — no extraction,
+inference, accumulation, dose-comparison or gamma. It needs no model, so it runs
+without `--model-name`. Use it to refresh DVH figures (e.g. after changing structure
+labels) without recomputing the plan dose.
+
+#### Anatomical structure names (`structure_names.json`)
+
+By default the DVH labels structures by their mask keys (`target`, `OAR_1`, `OAR_2`, …).
+Drop a **`structure_names.json`** in the plan directory to relabel them to anatomical
+names in both the figure legend and `dvh_metrics.json`:
+
+```json
+{ "target": "Target", "OAR_1": "Spinal-Cord", "OAR_2": "Lung-Right" }
+```
+
+Keep the target generic (`"Target"`) rather than a plan-specific GTV/Prostate name;
+it stays classified as the target regardless of the label.
+
+Only the `dvh` stage reads it (accumulate/stream are unchanged). Renaming is a pure
+relabel: the DVH curves and metric **values are identical**, and the renamed target is
+still classified as the target (keeps `D95`/`D98`). Unmapped keys are left as-is; with
+no file present, behaviour is unchanged. A `structure_names` mapping in the YAML config
+is used as a fallback when the per-plan file is absent.
+
+Legend labels are formatted for display (`Femur_Head_L` → `Femur Head L`,
+`Lungs-Total` → `Lungs (Total)`), and each structure uses a **fixed anatomy-aware
+colour** so the same organ keeps the same colour across every DVH panel.
+
+**Axis and multi-panel options (dvh stage):**
+
+| Option (CLI / config) | Effect |
+|---|---|
+| `--dvh-max-dose` / `dvh_max_dose` | Fixed DVH x-axis upper limit in Gy (e.g. **70** prostate, **80** thoracic) for a shared, comparable scale. Default: a robust dose percentile, so a single outlier voxel can't stretch the axis to the raw maximum. |
+| `--dvh-compact` / `dvh_compact` | Compact panel for multi-panel composition: **no title, no ADoTA/MCsquare (solid/dashed) legend**; keeps only the per-panel Structure legend + axes. Default off. |
+
+```bash
+# thoracic panel for the paper (capped 0-80 Gy, compact for tiling)
+uv run python scripts/run_plan_opentps.py --config scripts/config_run_plan_opentps.yaml \
+    --plan-dir "$PLAN_DIR" --stages dvh --dvh-max-dose 80 --dvh-compact --overwrite
+```
 
 ---
 
@@ -206,14 +347,20 @@ to your own locations.**
 | `bdl_path` | `null` | Override the beam data library (default: plan-local `bdl.txt`) |
 | `device_index` | `0` | CUDA device index (`-1` for CPU) |
 | `runs_dir` | example path | Base for auxiliary run outputs — set to any directory you like (keep large outputs off your home if space-constrained) |
-| `stages` | `extract` | Comma-separated stage list (see table above) |
+| `stages` | `extract` | Comma-separated stage list (see table above; e.g. `dvh`, `gamma`) |
+| `structure_names` | `null` | Fallback `{mask_key: display_name}` map for the `dvh` stage when a plan has no `structure_names.json` (per-plan file takes precedence) |
+| `beamlet_dir` | `null` | `beamlets` stage: MCsquare per-beamlet directory (default: newest `beamlets_*` in the plan dir) |
+| `beamlet_energy_split_mev` / `beamlet_high_dose_frac` | `150` / `0.5` | `beamlets` stage: energy stratification split (MeV) and the high-dose mask fraction of the robust peak |
 | `n_spots` / `beams` | `null` | Subset controls for cheap runs (first N spots / specific field indices) |
 | `overwrite` | `false` | Allow (re)writing into a non-empty `adota_beamlets/` |
 | `no_overlays` | `true` | Skip the per-field overlay PNGs |
 | `flux_on_gpu` | `false` | Compute the flux projection on the GPU (`flux_projection_gpu`); numerically identical to NumPy, a speed option |
 | `extraction_parallel` | `false` | `false` → serial `run_extraction`; `true` → thread-pooled `run_extraction_pooled` (bit-identical output) |
 | `extraction_workers` | `0` | Thread count when parallel (`0` = auto, `min(32, os.cpu_count())`) |
-| `batch_size` | `56` | Spots per GPU forward pass (inference / stream) |
+| `batch_size` | `56` | Spots per GPU forward pass (inference / stream). With batched I/O on, `120` is the measured sweet spot; beyond it the forward stops getting cheaper and the pinned buffers just grow |
+| `flux_batched` | `false` | `stream`: build the whole batch's flux in one `flux_projection_gpu_batched` call and (with `batched_prep`) keep it resident on the device instead of a device→host→device round trip |
+| `batched_prep` | `false` | `stream`: stage the batch's CT crops into one contiguous pinned block and copy them host→device **once** instead of `batch_size` times, then normalize/permute/resize over the batch. **Bit-identical** end to end |
+| `flux_batched_dtype` | `float64` | Compute dtype of the batched flux. `float64` is the same math as the per-spot `flux_projection_gpu`, agreeing to round-off; `float32` is ~2× faster on the flux alone but an order of magnitude looser |
 | **`grid_factor`** | **`1`** | **Field-level resampling: `1` = 1 mm per-beamlet (byte-identical); `2` = 2 mm field grid (see above). Applies to stream and staged.** |
 | `dose_render` | `image` | Dose-comparison figure style: `image` (filled jet overlay) or `contour` (clinical filled isodose contours at 10/30/50/70/90/95/100 % of peak + labeled lines; the difference panel stays a heatmap) |
 | `dose_source` | `null` | `prediction` (model dose) or `flux` (stand-in); auto-selected when `infer` ran |
@@ -286,6 +433,7 @@ Both scripts contain a `PLANS=( ... )` array — **edit it to your plan director
 | Script | What it does |
 |---|---|
 | [`run_all_plans.sh`](../run_all_plans.sh) | Runs `stream,gamma` on the 2 mm field grid (`--grid-factor 2`) over the listed plans, sequentially; per-plan logs in `run_logs/`. |
+| [`run_publication_plans.sh`](../run_publication_plans.sh) | Timing run over the 8 publication plans (`stream`, 2 mm, fp16, batched I/O). Archives each plan's previous `pipeline_timing.json` first so the merge cannot carry stale stages into the measurement, then calls `summarize_publication_timing.py` for a combined table. |
 | [`run_grid_factor_ab.sh`](../run_grid_factor_ab.sh) | The **A/B harness**: for each plan runs `stream,gamma` twice (`grid_factor` 1 then 2) and archives each mode's dose + `gamma_metrics.json` + `pipeline_timing.json` into `<plan>/grid_ab/{1mm,2mm}/` for a direct go/no-go comparison. |
 
 ```bash
