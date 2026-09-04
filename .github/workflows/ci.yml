@@ -1,0 +1,74 @@
+# Continuous integration for adota.
+#
+# Gates every merge into `dev` and `main`. Three jobs, whose names are the
+# status-check contexts the branch rulesets require: `lint`, `unit`, `guards`.
+#
+# What is NOT here, deliberately:
+#   * `ruff format --check`: the repository is not ruff-formatted (218 of 273
+#     files would be rewritten), and a mass reformat would destroy `git blame`
+#     for no correctness gain. Lint (E/F/I) is enforced; layout is not.
+#   * the `integration`, `e2e`, `gpu` and `golden` suites: they need the HDF5
+#     dataset, a checkpoint, MCsquare and a GPU, none of which exist on a hosted
+#     runner. They belong on a self-hosted runner. A test that lacks its data
+#     must skip with a reason (CLAUDE.md), so this workflow doubles as the check
+#     that they really do skip rather than fail.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      # uvx runs ruff standalone, so linting does not pay for the project sync
+      # (torch alone is over a gigabyte). The version tracks the dev group.
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uvx ruff@0.15.11 check .
+
+  unit:
+    name: unit
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Sync the locked environment
+        run: uv sync --frozen
+      - name: Unit suite
+        run: uv run python scripts/run-tests.py unit --fast
+
+  guards:
+    name: guards
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0          # the report check diffs against the base commit
+      - name: Module-size ratchet
+        run: python ci/check_module_size.py
+      - name: Report record present
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: python ci/check_report_record.py --base ${{ github.event.pull_request.base.sha }}

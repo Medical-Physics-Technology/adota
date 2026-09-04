@@ -1,0 +1,22 @@
+# Modules that exceed the 500-line rule today, with their current size.
+# New files must stay under the limit; these must not grow. See
+# docs/scripts_refactor_plan.md for the planned splits.
+
+1804 scripts/training_set_analysis_advanced_metrics.py
+1577 scripts/analysis_texture_with_inference.py
+1448 scripts/training_set_analysis.py
+1379 scripts/run_model.py
+1203 scripts/run_plan_opentps.py
+1030 scripts/training_set_vlm_based_quantification.py
+1007 scripts/rotation_performance_analysis.py
+960 scripts/beamlet_timing_comparison.py
+861 scripts/beamlet_bev_rotation_timing.py
+844 scripts/threshold_sweep.py
+839 scripts/bragg_peak_estimation.py
+657 scripts/train_adota.py
+656 scripts/range_analysis.py
+640 scripts/run_model_h5py.py
+627 scripts/validation_adota.py
+524 src/loaders/dir_based.py
+520 src/beamlets/streaming.py
+507 scripts/reinterp_gpu_benchmark.py
