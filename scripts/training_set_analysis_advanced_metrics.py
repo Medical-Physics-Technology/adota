@@ -15,7 +15,7 @@ import shutil
 from dataclasses import asdict
 from pathlib import Path
 from time import perf_counter
-from typing import Annotated, Optional, Tuple
+from typing import Annotated, Optional
 
 import h5py
 import matplotlib.pyplot as plt
@@ -28,6 +28,8 @@ from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.ndimage import gaussian_filter
 from scipy.spatial.distance import squareform
 from scipy.stats import pearsonr, spearmanr
+
+from src.acquisition.features import analyse_density_regions, compute_advanced_metrics
 
 # Add project root to path
 from src.adota.config import (
@@ -50,7 +52,7 @@ from src.figures.advanced_metrics import (
     generate_beam_angle_figures,
     generate_figures_for_selection,
 )
-from src.figures.ct_visualizations import segment_hu, smooth_ct
+from src.figures.ct_visualizations import smooth_ct
 from src.loaders.generator import H5PYGenerator
 from src.loaders.utils import validate_inputs
 from src.metrics.classic import calculate_relative_dose_error
@@ -169,225 +171,6 @@ def denorm_ctx(
 
 
 # ── Density region analysis ─────────────────────────────────────────────────
-
-
-def analyse_density_regions(
-    ct_hu: np.ndarray,
-    flux: np.ndarray,
-    z_min: float,
-    z_max: float,
-    flux_threshold_frac: float = 0.10,
-) -> Tuple[int, float, list[dict]]:
-    """Count distinct density regions along the beamlet path in the BP zone.
-
-    For each depth slice between *z_min* and *z_max* the lateral flux
-    (fast beamlet-shape projection) is used as a weight mask to compute
-    a flux-weighted mean HU value.  The resulting 1-D HU profile is
-    then segmented using :func:`segment_hu`'s tissue classes, and
-    consecutive slices with the same tissue class are grouped into
-    contiguous *density regions*.
-
-    Args:
-        ct_hu: 3-D CT volume ``(D, H, W)`` in HU.
-        flux: 3-D flux / fast beamlet-shape volume ``(D, H, W)``.
-        z_min: Proximal BP boundary (depth-slice index, float).
-        z_max: Distal BP boundary (depth-slice index, float).
-        flux_threshold_frac: Fraction of the per-slice flux maximum
-            below which voxels are ignored (default 10 %).
-
-    Returns:
-        ``(n_regions, total_hu_change, region_details)``
-
-        * **n_regions** -- number of distinct contiguous tissue-class
-          regions along the beam path.
-        * **total_hu_change** -- sum of absolute mean-HU differences
-          between consecutive regions.
-        * **region_details** -- list of dicts, one per region, each
-          containing ``class_idx``, ``label``, ``mean_hu``,
-          ``start_slice``, ``end_slice``.
-    """
-    from src.figures.ct_visualizations import HU_LUT
-
-    k_start = int(np.ceil(z_min))
-    k_end = int(np.floor(z_max))
-
-    if k_end <= k_start:
-        return 0, 0.0, []
-
-    # -- Flux-weighted mean HU per depth slice --------------------------------
-    mean_hu_per_slice = np.zeros(k_end - k_start + 1)
-    for i, k in enumerate(range(k_start, k_end + 1)):
-        flux_slice = np.abs(flux[k])  # (H, W)
-        ct_slice = ct_hu[k]  # (H, W)
-
-        # Threshold: only consider voxels where flux is significant
-        f_max = flux_slice.max()
-        if f_max < 1e-12:
-            mean_hu_per_slice[i] = ct_slice.mean()
-            continue
-
-        mask = flux_slice >= flux_threshold_frac * f_max
-        if mask.sum() == 0:
-            mean_hu_per_slice[i] = ct_slice.mean()
-            continue
-
-        weights = flux_slice[mask]
-        mean_hu_per_slice[i] = np.average(ct_slice[mask], weights=weights)
-
-    # -- Segment the 1-D mean-HU profile into tissue classes ------------------
-    class_per_slice = segment_hu(mean_hu_per_slice)  # (N,) int array
-
-    # -- Group consecutive slices of the same class into regions --------------
-    regions: list[dict] = []
-    current_class = int(class_per_slice[0])
-    region_start = k_start
-
-    for i in range(1, len(class_per_slice)):
-        if int(class_per_slice[i]) != current_class:
-            # Close the current region
-            region_end = k_start + i - 1
-            region_mask = slice(region_start - k_start, region_end - k_start + 1)
-            regions.append(
-                {
-                    "class_idx": current_class,
-                    "label": HU_LUT[current_class][0],
-                    "mean_hu": float(np.mean(mean_hu_per_slice[region_mask])),
-                    "start_slice": region_start,
-                    "end_slice": region_end,
-                }
-            )
-            current_class = int(class_per_slice[i])
-            region_start = k_start + i
-
-    # Close the last region
-    region_mask = slice(region_start - k_start, len(class_per_slice))
-    regions.append(
-        {
-            "class_idx": current_class,
-            "label": HU_LUT[current_class][0],
-            "mean_hu": float(np.mean(mean_hu_per_slice[region_mask])),
-            "start_slice": region_start,
-            "end_slice": k_end,
-        }
-    )
-
-    # -- Total absolute HU change between consecutive regions -----------------
-    total_hu_change = 0.0
-    for j in range(1, len(regions)):
-        total_hu_change += abs(regions[j]["mean_hu"] - regions[j - 1]["mean_hu"])
-
-    return len(regions), total_hu_change, regions
-
-
-def compute_advanced_metrics(
-    ct_hu: np.ndarray,
-    flux: np.ndarray,
-    gt_dose: np.ndarray,
-    z_min: float,
-    z_max: float,
-    region_details: list[dict],
-    flux_threshold_frac: float = 0.10,
-) -> dict:
-    """Compute advanced heterogeneity metrics for a single beamlet.
-
-    Returns a dict with keys:
-        max_hu_jump, sigma_hu_bp, max_hu_gradient,
-        lateral_hu_var_bp, hetero_fraction, interface_bp_distance.
-    """
-
-    k_start = int(np.ceil(z_min))
-    k_end = int(np.floor(z_max))
-
-    # -- Defaults for degenerate cases ------------------------------------
-    defaults = dict(
-        max_hu_jump=0.0,
-        sigma_hu_bp=0.0,
-        max_hu_gradient=0.0,
-        lateral_hu_var_bp=0.0,
-        hetero_fraction=0.0,
-        interface_bp_distance=0.0,
-    )
-    if k_end <= k_start:
-        return defaults
-
-    # -- Flux-weighted mean HU profile (recomputed, cheap) ----------------
-    n_slices = k_end - k_start + 1
-    mean_hu = np.zeros(n_slices)
-    for i, k in enumerate(range(k_start, k_end + 1)):
-        flux_slice = np.abs(flux[k])
-        ct_slice = ct_hu[k]
-        f_max = flux_slice.max()
-        if f_max < 1e-12:
-            mean_hu[i] = ct_slice.mean()
-            continue
-        mask = flux_slice >= flux_threshold_frac * f_max
-        if mask.sum() == 0:
-            mean_hu[i] = ct_slice.mean()
-            continue
-        weights = flux_slice[mask]
-        mean_hu[i] = np.average(ct_slice[mask], weights=weights)
-
-    # (1) max_hu_jump: largest |mean_hu| difference between consecutive regions
-    max_hu_jump = 0.0
-    if len(region_details) >= 2:
-        for j in range(1, len(region_details)):
-            jump = abs(region_details[j]["mean_hu"] - region_details[j - 1]["mean_hu"])
-            if jump > max_hu_jump:
-                max_hu_jump = jump
-
-    # (2) sigma_hu_bp: std of the flux-weighted mean HU profile
-    sigma_hu_bp = float(np.std(mean_hu))
-
-    # (3) max_hu_gradient: max |dH/dk| along beam path at slice resolution
-    if n_slices >= 2:
-        hu_grad = np.abs(np.diff(mean_hu))
-        max_hu_gradient = float(np.max(hu_grad))
-    else:
-        max_hu_gradient = 0.0
-
-    # (4) lateral_hu_var_bp: flux-weighted HU variance at BP slice
-    idd = gt_dose.sum(axis=(1, 2))
-    bp_idx = int(np.argmax(idd))
-    flux_bp = np.abs(flux[bp_idx])
-    ct_bp = ct_hu[bp_idx]
-    f_max_bp = flux_bp.max()
-    lateral_hu_var_bp = 0.0
-    if f_max_bp > 1e-12:
-        mask_bp = flux_bp >= flux_threshold_frac * f_max_bp
-        if mask_bp.sum() > 1:
-            w_bp = flux_bp[mask_bp]
-            mu_bp = np.average(ct_bp[mask_bp], weights=w_bp)
-            lateral_hu_var_bp = float(
-                np.average((ct_bp[mask_bp] - mu_bp) ** 2, weights=w_bp)
-            )
-
-    # (5) hetero_fraction: fraction of slices NOT in the dominant class
-    class_per_slice = segment_hu(mean_hu)
-    unique, counts = np.unique(class_per_slice, return_counts=True)
-    dominant_count = counts.max()
-    hetero_fraction = 1.0 - dominant_count / len(class_per_slice)
-
-    # (6) interface_bp_distance: distance (slices) from BP to nearest
-    #     tissue-class transition
-    bp_local = bp_idx - k_start  # BP index in local array
-    bp_local = max(0, min(bp_local, len(class_per_slice) - 1))
-    interface_bp_distance = float(len(class_per_slice))  # fallback: max
-    for i in range(1, len(class_per_slice)):
-        if class_per_slice[i] != class_per_slice[i - 1]:
-            # transition between slice i-1 and i
-            transition_pos = (i - 1 + i) / 2.0
-            dist = abs(transition_pos - bp_local)
-            if dist < interface_bp_distance:
-                interface_bp_distance = dist
-
-    return dict(
-        max_hu_jump=max_hu_jump,
-        sigma_hu_bp=sigma_hu_bp,
-        max_hu_gradient=max_hu_gradient,
-        lateral_hu_var_bp=lateral_hu_var_bp,
-        hetero_fraction=hetero_fraction,
-        interface_bp_distance=interface_bp_distance,
-    )
 
 
 def _make_per_sample_fn(

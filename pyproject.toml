@@ -70,6 +70,9 @@ select = ["E", "F", "I"]
 # Preloads the CUDA shared objects via ctypes before torch imports them;
 # mutating LD_LIBRARY_PATH from inside Python is too late.
 "scripts/rotation_performance_analysis.py" = ["E402"]
+# Pins BLAS to one thread before numpy loads, so its feature-extraction process
+# pool does not oversubscribe the cores.
+"scripts/analysis/acquisition_input_only_features.py" = ["E402"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
