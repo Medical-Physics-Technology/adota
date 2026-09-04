@@ -65,3 +65,15 @@ def test_real_frozen_scorer_if_present():
     except FileNotFoundError:
         pytest.skip(f"study scorer not on this machine: {path}")
     assert len(scorer.metrics) == 14 and len(scorer.grids) == 30
+
+
+def test_deployed_scorer_loads_and_is_the_30_metric_analytic_fit():
+    from src.acquisition.features import FEATURE_NAMES
+    scorer = DifficultyScorer.load()
+    assert scorer.variant == FULL and len(scorer.metrics) == 30 and set(scorer.grids) == set(FEATURE_NAMES)
+    sparse = DifficultyScorer.load(variant=SPARSE)
+    assert 5 <= len(sparse.metrics) <= 14
+    # a deep, heterogeneous beamlet scores above a shallow homogeneous one
+    hard = {m: float(np.percentile(scorer.grids[m], 90)) for m in FEATURE_NAMES}
+    easy = {m: float(np.percentile(scorer.grids[m], 10)) for m in FEATURE_NAMES}
+    assert scorer.score(hard) > scorer.score(easy)

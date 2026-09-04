@@ -21,6 +21,9 @@ import pandas as pd
 
 SPARSE, FULL = "sparse (Lasso)", "full (ridge)"
 N_GRID = 101
+# The deployed input-only score (EXP-0006), fitted on beamlets whose peak lies
+# inside the crop; apply it only to candidates that pass `peak_inside_crop`.
+DEPLOYED_SCORER = Path(__file__).parent / "data" / "analytic_scorer.json"
 
 
 @dataclass(frozen=True)
@@ -34,12 +37,15 @@ class DifficultyScorer:
     source: str = ""
 
     @classmethod
-    def load(cls, path: Union[str, Path], variant: str = SPARSE, arm: Optional[str] = None) -> "DifficultyScorer":
-        """Load a frozen scorer.
+    def load(cls, path: Union[str, Path] = DEPLOYED_SCORER, variant: str = FULL,
+             arm: Optional[str] = None) -> "DifficultyScorer":
+        """Load a frozen scorer; by default the deployed input-only 30-metric score.
 
         Args:
-            path: ``frozen_final_scorer.json`` or ``analytic_scorer.json``.
-            variant: ``"sparse (Lasso)"`` or ``"full (ridge)"``.
+            path: The vendored ``analytic_scorer.json`` (default), the study's
+                ``frozen_final_scorer.json``, or a refit output keyed by arm.
+            variant: ``"full (ridge)"`` (default: it transfers across anatomy
+                better, EXP-0006) or ``"sparse (Lasso)"`` (interpretable).
             arm: For the arms-keyed layout, which ``arm/population`` entry to use
                 (for example ``"analytic/both_inside_crop"``). Ignored otherwise.
         """
