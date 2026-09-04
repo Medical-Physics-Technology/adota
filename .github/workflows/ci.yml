@@ -65,10 +65,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0          # the report check diffs against the base commit
+      # The guards are typer CLIs like every other entry point in this repository,
+      # so they run under uv. `--no-project` keeps them off the full sync: they
+      # need typer and nothing else, and the job stays a few seconds long.
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
       - name: Module-size ratchet
-        run: python ci/check_module_size.py
+        run: uv run --no-project --with typer python ci/check_module_size.py
       - name: Report record present
         if: github.event_name == 'pull_request'
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
-        run: python ci/check_report_record.py --base ${{ github.event.pull_request.base.sha }}
+        run: >
+          uv run --no-project --with typer python ci/check_report_record.py
+          --base ${{ github.event.pull_request.base.sha }}

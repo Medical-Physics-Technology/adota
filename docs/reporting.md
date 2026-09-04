@@ -17,6 +17,7 @@ src/reports/schema.yaml       the single declaration of every field and section
 src/reports/templates/        the scaffolds `report.py new` fills in
 scripts/report.py             the CLI (new / validate / index / export)
 ci/check_report_record.py     the CI guard: code changed => pointer moved
+ci/check_module_size.py       the 500-line ratchet
 reports/                      the private submodule (records live here)
   changes/CHG-0001-*.md       one per pull request
   experiments/EXP-0001-*.md   one per experiment or analysis
