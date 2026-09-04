@@ -21,11 +21,12 @@ import pytest
 def pymedphys_gamma_works() -> bool:
     """True when ``pymedphys.gamma`` can actually complete a computation.
 
-    Importing pymedphys is not sufficient: its gamma shell needs the optional
-    econforge ``interpolation`` package, and when that is absent pymedphys
-    raises ``FileNotFoundError`` while building its own error message (it looks
-    for ``dependency-extra.txt`` relative to a source checkout, which does not
-    exist in an installed environment). So we run a tiny gamma and see.
+    Importing pymedphys is not sufficient: its gamma shell interpolates through
+    an optional extra -- ``numba`` from 0.41 onwards, the econforge
+    ``interpolation`` package up to 0.40 -- and when that is absent the failure
+    surfaces only at the first interpolation, sometimes as a ``FileNotFoundError``
+    raised while pymedphys builds its own error message. So we run a tiny gamma
+    and see.
     """
     try:
         import numpy as np
@@ -51,8 +52,8 @@ def pymedphys_gamma_works() -> bool:
 requires_pymedphys_gamma = pytest.mark.skipif(
     not pymedphys_gamma_works(),
     reason=(
-        "pymedphys gamma is not usable here: it needs the optional econforge "
-        "`interpolation` package. Install it (`uv pip install interpolation`) "
-        "to enable these tests."
+        "pymedphys gamma is not usable here: it needs its optional interpolation "
+        "extra (`numba` for pymedphys >= 0.41). Run `uv sync` to install it and "
+        "enable these tests."
     ),
 )

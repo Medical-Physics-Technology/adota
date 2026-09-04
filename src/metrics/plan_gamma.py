@@ -64,6 +64,8 @@ def plan_gamma(
     spacing_zyx: Tuple[float, float, float],
     criteria: Sequence[Tuple[float, float, float]],
     extra_params: dict | None = None,
+    backend: str = "pymedphys",
+    backend_options: dict | None = None,
 ) -> List[dict]:
     """Compute the gamma map + pass rate for each criterion on the plan grid.
 
@@ -75,6 +77,10 @@ def plan_gamma(
         extra_params: Extra pymedphys gamma params merged over
             :data:`src.adota.config.DEFAULT_GAMMA_PARAMS` (e.g. ``interp_fraction``,
             ``max_gamma``, ``local_gamma``, ``random_subset``).
+        backend: ``"pymedphys"`` (default) or ``"torch"``; forwarded to
+            :func:`src.metrics.gamma_pass_rate.gamma_index`.
+        backend_options: Torch-backend extras (``device``, ``dtype``,
+            ``tile_elements``, ``stats``).
 
     Returns:
         One dict per criterion: ``{"criterion", "label", "pass_rate_pct",
@@ -122,6 +128,8 @@ def plan_gamma(
             gamma_params=gamma_params,
             resolution=resolution,
             cutoff=0,
+            backend=backend,
+            backend_options=backend_options,
         )
         pass_rate_pct = float(pass_rate[0]) * 100.0
         logger.info(

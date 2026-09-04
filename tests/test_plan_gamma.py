@@ -74,3 +74,76 @@ def test_shape_mismatch_raises() -> None:
     ref = _gaussian_dose()
     with pytest.raises(ValueError, match="share shape"):
         plan_gamma(ref[..., :-1], ref, (1.0, 1.0, 1.0), [(2.0, 2.0, 10.0)], _FAST)
+
+
+@requires_pymedphys_gamma
+def test_torch_backend_matches_pymedphys_backend() -> None:
+    """The backend switch changes the kernel and nothing else.
+
+    ``plan_gamma`` forwards ``backend`` to ``gamma_index``, which swaps only the
+    computation of the gamma array; the pass-rate arithmetic downstream is shared
+    verbatim. So both backends must report the same pass rate for the same plan.
+    """
+    import torch
+
+    dose_ref = _gaussian_dose().astype(np.float64)
+    dose_eval = (dose_ref * 1.005).astype(np.float64)
+    criteria = [(2.0, 2.0, 10.0)]
+
+    expected = plan_gamma(dose_eval, dose_ref, (1.0, 1.0, 1.0), criteria, _FAST)
+    actual = plan_gamma(
+        dose_eval, dose_ref, (1.0, 1.0, 1.0), criteria, _FAST,
+        backend="torch",
+        backend_options={"device": "cpu", "dtype": torch.float64},
+    )
+    assert actual[0]["pass_rate_pct"] == pytest.approx(
+        expected[0]["pass_rate_pct"], abs=1e-9
+    )
+    np.testing.assert_allclose(
+        actual[0]["gamma_map"], expected[0]["gamma_map"], rtol=0, atol=1e-10
+    )
+
+
+def test_unknown_backend_raises() -> None:
+    from src.metrics.gamma_pass_rate import gamma_index
+
+    dose = _gaussian_dose((6, 6, 6)).astype(np.float64)
+    with pytest.raises(ValueError, match="Unknown gamma backend"):
+        gamma_index(
+            ground_truth=dose.copy(),
+            prediction=dose.copy(),
+            scale={"y_max": 10.0, "y_min": 0.0},
+            gamma_params={"dose_percent_threshold": 2, "distance_mm_threshold": 2},
+            backend="cupy",
+        )
+
+
+@requires_pymedphys_gamma
+def test_torch_backend_5d_entry_point_matches_pymedphys() -> None:
+    """The ``(N, C, D, H, W)`` entry point agrees across backends.
+
+    The two paths reach the kernel differently: the pymedphys one calls
+    ``.detach().cpu().numpy()`` on both volumes and de-normalises in numpy, while
+    the torch one de-normalises and thresholds on whatever device the tensors are
+    already on and brings back only the gamma array. They must still report the
+    same pass rate.
+    """
+    import torch
+
+    from src.metrics.gamma_pass_rate import gamma_index_torch
+
+    scale = {"y_max": 10.0, "y_min": 0.0}
+    normalised = torch.as_tensor(
+        _gaussian_dose((10, 12, 12)) / scale["y_max"], dtype=torch.float64
+    )[None, None]
+    perturbed = normalised * 1.005
+    params = {"dose_percent_threshold": 2, "distance_mm_threshold": 2, **_FAST}
+
+    _, expected = gamma_index_torch(normalised, perturbed, scale, params)
+    _, actual = gamma_index_torch(
+        normalised, perturbed, scale, params,
+        backend="torch",
+        backend_options={"device": "cpu", "dtype": torch.float64},
+    )
+    assert actual[0] == pytest.approx(expected[0], abs=1e-9)
+    assert actual[1] == pytest.approx(expected[1], abs=1e-9)
