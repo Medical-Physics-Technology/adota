@@ -28,6 +28,7 @@ options, config reference, outputs, and requirements.
 
 | Script | Config | What it does | Guide |
 |---|---|---|---|
+| [`analysis/acquisition_input_only_features.py`](analysis/acquisition_input_only_features.py), [`..._compare.py`](analysis/acquisition_input_only_compare.py), [`..._refit.py`](analysis/acquisition_input_only_refit.py) | CLI flags | Validate the input-only difficulty features against the reference study: compute the ground-truth and analytic arms, gate the reproduction, measure the agreement, refit the score. | [docs/acquisition_input_only.md](docs/acquisition_input_only.md) |
 | [`analysis_texture_with_inference.py`](analysis_texture_with_inference.py) | `config_analysis_texture_with_inference.yaml` | Correlate model error (MAPE, GPR) with CT texture / heterogeneity metrics. | [docs/analysis_texture_with_inference.md](docs/analysis_texture_with_inference.md) |
 | [`training_set_analysis.py`](training_set_analysis.py) | `config_training_set_analysis.yaml` | Tissue-interface prevalence at the Bragg peak + interface-vs-homogeneous performance split. | [docs/training_set_analysis.md](docs/training_set_analysis.md) |
 | [`rotation_performance_analysis.py`](rotation_performance_analysis.py) | CLI flags | Benchmark 3-D rotation (SciPy / CuPy / PyTorch) around a plan pivot; correctness + timings. | [docs/rotation_performance_analysis.md](docs/rotation_performance_analysis.md) |

@@ -67,8 +67,13 @@ def _experiment_dir(cfg: RobustnessConfig, rec: CTRecord, energy: float,
 
 
 @dataclass(frozen=True)
-class _FieldGeometry:
-    """The CT (and derived isocenters) for one field angle of one patient."""
+class FieldGeometry:
+    """The CT (and derived isocenters) for one field angle of one patient.
+
+    Public because the active-learning candidate scorer
+    (:mod:`src.acquisition.candidates`) puts a CT into the beam's-eye frame with
+    exactly this code, so a candidate is extracted the way its label would be.
+    """
     ct: "sitk.Image"
     ct_array: np.ndarray
     body: np.ndarray                     # (z,y,x) body contour, 1.0 inside the patient
@@ -96,8 +101,8 @@ def _isocenters(ct: "sitk.Image", body: np.ndarray, cfg: RobustnessConfig):
     return isocenters_from_world(ct, com)
 
 
-def _field_geometry(ct: "sitk.Image", field_gantry: float, cfg: RobustnessConfig,
-                    bdl: BeamDataLibrary) -> _FieldGeometry:
+def field_geometry(ct: "sitk.Image", field_gantry: float, cfg: RobustnessConfig,
+                   bdl: BeamDataLibrary) -> FieldGeometry:
     """Put the CT into the beam's-eye frame for ``field_gantry``.
 
     Random / non-90 gantry: rotate the CT into the gantry-aligned beam's-eye frame
@@ -122,7 +127,7 @@ def _field_geometry(ct: "sitk.Image", field_gantry: float, cfg: RobustnessConfig
     if not (cfg.rotate_to_canonical and abs(field_gantry - 90.0) > 1e-6):
         body = body_mask(ct, cfg.body_hu_threshold)
         iso_mc, iso_ext = _isocenters(ct, body, cfg)
-        return _FieldGeometry(
+        return FieldGeometry(
             ct=ct, ct_array=sitk.GetArrayFromImage(ct), body=body, iso_mc=iso_mc,
             iso_ext=iso_ext, field_gantry=float(field_gantry),
             mc_gantry=float(field_gantry), ct_rotation_deg=0.0)
@@ -142,14 +147,19 @@ def _field_geometry(ct: "sitk.Image", field_gantry: float, cfg: RobustnessConfig
     trimmed = trim_beam_axis(rotated, x_size, x0)
     body = body_mask(trimmed, cfg.body_hu_threshold)
     iso_mc, iso_ext = _isocenters(trimmed, body, cfg)
-    return _FieldGeometry(
+    return FieldGeometry(
         ct=trimmed, ct_array=sitk.GetArrayFromImage(trimmed), body=body, iso_mc=iso_mc,
         iso_ext=iso_ext, field_gantry=float(field_gantry),
         mc_gantry=90.0, ct_rotation_deg=float(ct_rotation_deg))
 
 
+# Former private names, kept for existing imports.
+_FieldGeometry = FieldGeometry
+_field_geometry = field_geometry
+
+
 def _process_beamlet(
-    rec: CTRecord, bdl: BeamDataLibrary, cfg: RobustnessConfig, geom: _FieldGeometry,
+    rec: CTRecord, bdl: BeamDataLibrary, cfg: RobustnessConfig, geom: FieldGeometry,
     energy: float, cell: Tuple[int, int, float, float], spot, dose_img, sim_res: dict,
     out_dir: Path, fig_dir: Path,
 ) -> str:
@@ -243,7 +253,7 @@ def _process_beamlet(
 
 def _generate_energy_block(
     rec: CTRecord, runner: MCSquareRunner, bdl: BeamDataLibrary, cfg: RobustnessConfig,
-    geom: _FieldGeometry, energy: float, grid: List[Tuple[int, int, float, float]],
+    geom: FieldGeometry, energy: float, grid: List[Tuple[int, int, float, float]],
 ) -> dict:
     """Generate every beamlet of one (patient, field angle, energy) block.
 
@@ -324,7 +334,7 @@ def generate_for_record(
              "saved": 0, "skipped_existing": 0, "skipped_qa": 0, "fields": []}
 
     for field_gantry in gantries:
-        geom = _field_geometry(ct, field_gantry, cfg, bdl)
+        geom = field_geometry(ct, field_gantry, cfg, bdl)
         field_stats = {"gantry": float(field_gantry),
                        "ct_rotation_deg": geom.ct_rotation_deg,
                        "grid_size": list(geom.ct.GetSize()), "energies": {}}

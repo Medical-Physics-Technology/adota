@@ -1,0 +1,23 @@
+# Nominal energy [MeV] and Gaussian energy spread (1 sigma) [MeV] of the HPTC beam model
+# used by MCsquare to generate every ground-truth beamlet (BDL hptc_beam_model_rsnone.txt).
+# Vendored so the analytic dose surrogate straggles like the beam that made the data.
+nominal_energy_mev,energy_spread_mev
+70,1.1203900065
+80,1.1428229213
+90,1.1277549532
+100,1.1198807716
+110,1.0585991686
+120,0.980652252833
+130,0.8710221877465
+140,0.7988414423806
+150,0.7515671094259
+160,0.734410494566
+170,0.6911192781785
+180,0.652653031879
+190,0.6191924245734
+200,0.5426414489746
+210,0.4516990298317
+220,0.3506924239072
+230,0.2593949981358
+240,0.1534374952316
+244,0.1040616387227

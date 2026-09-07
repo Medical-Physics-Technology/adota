@@ -2,6 +2,36 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Phantom & Geometry Conventions
+
+- **Never surround a phantom with air on every face.** `PhantomSpec.air_layer_depth` in
+  [src/datasets/phantom.py](src/datasets/phantom.py) puts an air shell on all six faces and causes
+  lateral grazing, which surfaces as corner-beamlet artifacts in the dose maps. Use `air_front_mm`
+  instead: an air slab only in front of the beam, full width. The all-faces field is kept so old runs
+  reproduce, not for new geometries.
+- **Screen the geometry before generating.** `sweep_fits_ct`, `sweep_z_half_extent_mm` and
+  `max_theta_x_deg` in [src/mc_generation/sweep.py](src/mc_generation/sweep.py) decide whether the
+  whole angle lattice fits inside the CT; `dose_in_body_fraction` in
+  [src/mc_generation/geometry.py](src/mc_generation/geometry.py) says how much of a beamlet's dose
+  landed in the patient. Run both on a few beamlets before committing to a long sweep. A beamlet
+  leaving the body is sometimes real physics rather than a bug, so say which one it is.
+- **Body masks come from `body_mask`** in
+  [src/mc_generation/geometry.py:96](src/mc_generation/geometry.py#L96), never from a fresh
+  implementation. Per axial slice it labels external air as the air connected to the slice border and
+  takes the complement, which keeps lung inside the patient. Do **not** swap it for
+  `scipy.ndimage.binary_fill_holes`: hole-filling drops the lung wherever it joins external air
+  through the airways, and that is the exact bug the current implementation was written to fix.
+
+## Before Launching Long MC Jobs
+
+- **Smoke test first.** Run a single beamlet at a low particle count and print the dose statistics
+  (min, max, mean, NaN count) together with the in-body dose fraction before submitting a full sweep.
+  A geometry mistake costs seconds there and hours in the sweep.
+- **Hand back the log, do not narrate it.** Once a long job is launched, report the exact command,
+  the process or job id, and the full path of the log file, then stop. Do not tail the log, summarize
+  progress, or estimate remaining runtime unless explicitly asked. The user checks status themselves,
+  and polling only burns context.
+
 ## Development Commands
 
 ### Setup
@@ -127,3 +157,28 @@ Understanding these four flows explains most of `src/`:
 ### Golden tests
 
 `tests/golden/` compares against reference CSVs stored outside the repository at `$ADOTA_GOLDEN_DIR`, and is marked `integration`. Set `ADOTA_GOLDEN_UPDATE=1` to re-capture rather than compare, and leave it unset in normal use. Shared, importable test helpers live in [tests/utils/](tests/utils/) rather than in fixtures.
+
+## Analysis & Figure Output
+
+- **Reuse the figure code that already exists.** `src/figures/` is the publication figure layer
+  (plan, beamlet, gamma, DVH, CT, robustness-grid, transect). Every new figure either calls a function
+  there or adds one to it. Do not open a one-off matplotlib block inside a script: the drift is already
+  measurable, seven of the nine `scripts/analysis/plot_*.py` call `fig.savefig` directly and five of
+  them import nothing from `src/figures/` at all, which is why the same quantity comes out looking
+  different from run to run. Before writing any plotting code, state which `src/figures/` function is
+  being reused or extended.
+- **Saving is `save_figure_as_publication_formats`** from
+  [src/figures/axes_utils.py:68](src/figures/axes_utils.py#L68). It writes SVG, PDF and PNG side by
+  side at 300 dpi with `bbox_inches="tight"`. Do not call `fig.savefig` directly, and do not invent a
+  different dpi or a different format set.
+- **Colorbars use `aligned_colorbar`** from the same module, so the bar height matches the image axis.
+- **Write the numbers beside the figure.** Any figure reporting metrics gets a CSV or JSON of the
+  underlying values in the same output directory, so a panel can always be traced back to the run that
+  produced it.
+- **Figures go to `/scratch`** through the config's `output_dir` key, never into the repository. This
+  is the large-outputs convention above.
+- **Gamma pass rates default to 3%/3mm with a 10% dose cutoff** unless told otherwise, and the criteria
+  belong in both the filename and the caption. The plan pipeline evaluates a list of criteria
+  (`gamma_criteria` in [scripts/config_run_plan_opentps.yaml](scripts/config_run_plan_opentps.yaml))
+  and the training and ablation configs default to 2%/2mm, so 3%/3mm is the headline number rather
+  than the only one computed.
