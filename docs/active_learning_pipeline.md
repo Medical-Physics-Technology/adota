@@ -1,7 +1,10 @@
 # Active-learning pipeline: design
 
-Status: design, 2026-09-05. Decisions taken with the supervisor on 2026-09-04;
-the slots marked **to measure** are filled after the first runs, not guessed.
+Status: implemented 2026-09-08 (`src/active_learning/`, branch
+`feat/active-learning-loop`); the slots marked **to measure** are still filled
+after the first runs, not guessed. Design decisions taken with the supervisor on
+2026-09-04. **Section 10 records where the implementation departs from this
+document and why** -- read it before comparing a run against this text.
 Companion documents: `research/sampling_architecture.md` (the earlier framing,
 superseded where this disagrees), `research/publication_plan.md` (the results
 blueprint), and the difficulty score that this loop selects with
@@ -204,3 +207,89 @@ Reused, not rebuilt: `src.acquisition.score_candidates` (scoring and validity),
 - Percentile grids for scoring pool candidates: the frozen reference-pool grids
   (comparable to the study) or grids over the candidate pool (better-calibrated
   ranking). Frozen for the main arm.
+
+## 10. Where the implementation departs from this design
+
+Three departures, all deliberate, all made during implementation and verified by
+the end-to-end smoke run. They are recorded here rather than folded silently into
+the text above, because a reader comparing a run against this document needs to
+know which parts of it the code does not do.
+
+### 10.1 A cycle is a step budget with oversampling, not a pass over the union
+
+Section 5 says "train B_c epochs (continue from the previous cycle's weights, full
+union)". The code instead trains a fixed number of optimizer steps
+(`al_steps_per_epoch` x `num_epochs`) in which `al_oversample_fraction` of every
+batch is drawn from the beamlets the loop bought.
+
+The reason is arithmetic. A cycle buys a few thousand beamlets against a training
+split of 56,114. Under uniform sampling a new beamlet is seen once every several
+epochs, so a cycle at any budget that fits a night would move the validation
+metrics by nothing measurable, and the experiment would report a null result
+caused by the sampler rather than by the acquisition function.
+
+The cost of the departure: both arms use the same regime, so they stay comparable
+to **each other**, which is what the paired comparison needs. Neither is
+comparable to a plain-union baseline, so the absolute learning curve is not the
+curve this document originally described. A plain-union arm remains available by
+setting `al_oversample_fraction` to the natural share.
+
+### 10.2 A cycle hands on `last.pth`, not `best.pth`
+
+`best` is selected by the loss on the HDF5 validation split -- the distribution
+the model already fits. A cycle trained on newly bought beamlets can raise that
+loss while improving on exactly the geometry it just bought, so selecting on it
+would carry the pre-cycle weights forward and the loop would measure nothing. A
+cycle is a fixed budget, so what it produced is what it hands on
+(`LoopConfig.checkpoint_selection`, default `last`).
+
+### 10.3 Monte Carlo cost is grouped, and the grouping is not neutral
+
+Section 6 makes Monte Carlo seconds the budget axis. Measured on this machine, a
+beamlet costs **3.31 s** in beamlet mode at 1e6 primaries on 48 threads, and each
+`(patient, gantry, energy)` group costs a further **~12 s** of MCsquare setup
+whatever it holds. Beamlet-mode parallelism is one thread per spot, so throughput
+scales roughly with the thread count; on a shared machine, divide.
+
+**This makes the cost axis strategy-dependent, which the design did not
+anticipate.** In the smoke run the same eight beamlets cost 203 s under `score`
+(2 groups, 4 per group) and 292 s under `random` (4 groups, 2 per group): a 44%
+overhead from packing alone. `random` spreads over more patients by construction,
+so at equal beamlet count it spends more seconds, and a learning curve plotted
+against seconds credits `score` for packing rather than for choosing well.
+
+Mitigations, none of them yet chosen: report both axes (beamlets and seconds) and
+say so; equalise the budget in seconds rather than beamlets; or drive
+`n_cts_per_cycle` low enough that both strategies pack similarly. **The first
+results must state which was used.**
+
+## 11. What the first runs measured
+
+From the end-to-end smoke run of 2026-09-08 (`scripts/config_al_smoke.yaml`),
+which exercised both arms with real Monte Carlo and real training:
+
+- **Candidate validity is strongly energy-dependent.** At 80 and 105 MeV, 80 of
+  80 thoracic candidates were valid. At 155-180 MeV a large fraction fail
+  `peak_outside_crop`: low-density lung extends the range past the 320 mm crop.
+  Section 3's validity gate does its job before any Monte Carlo is paid for, but
+  **the candidate pool must be sized against the valid count, not the raw count**,
+  and the energy layer set of `config_al.yaml` needs a `--dry-run` measurement per
+  anatomy before the first real launch.
+- **Out-of-body dose is real physics here, not a geometry fault.** Thoracic
+  beamlets at random gantry deposited 47-61% of their dose inside the body mask,
+  confirmed against an independent HU threshold on the same crop. The patient
+  starts 20-29 mm into the crop (the configured standoff), only 9-15% of dose
+  lands before entry, and the remainder is beyond and lateral to a thorax that is
+  far shorter than the 320 mm crop. Deposition ratio stayed at 0.995, so nothing
+  escapes the crop.
+- **The validation recipe does not balance patients.** `select_balanced`
+  stratifies by anatomy, energy layer and score decile as specified; with two CTs
+  and eight beamlets it drew all eight from one patient. Immaterial at 4,000
+  beamlets over ten CTs, but it is not a guarantee, and a per-patient quota is the
+  obvious fix if the drawn set turns out lopsided.
+- **Arms share the beamlet cache, not their training sets.** Candidate ids are
+  content-addressed, so a candidate selected by both arms is simulated once and
+  reused; each arm still trains only on its own `training_sources.csv`. The reused
+  beamlet is counted in the selecting arm's Monte Carlo seconds, which is the cost
+  of what it chose.
+

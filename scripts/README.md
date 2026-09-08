@@ -23,6 +23,7 @@ options, config reference, outputs, and requirements.
 | [`run_plan_opentps.py`](run_plan_opentps.py) | `config_run_plan_opentps.yaml` | **End-to-end plan-level dose pipeline**: plan directory → per-spot inputs → inference → accumulated plan dose → validation (DVH, gamma) vs Monte-Carlo. Staged or fused (`stream`), optional 2 mm field grid (`grid_factor`). | [docs/run_plan_opentps.md](docs/run_plan_opentps.md) |
 | [`train_adota.py`](train_adota.py) | `config_train_adota.yaml` | Train the per-beamlet `DoTA3D_v3` model on an HDF5 dataset (AdamW + `ReduceLROnPlateau`, deterministic resume, full reproducibility manifest). | [docs/train_adota.md](docs/train_adota.md) |
 | [`run_model.py`](run_model.py) | `config_run_model.yaml` | Single-beamlet inference + gamma evaluation on a directory of numpy samples. | [docs/run_model.md](docs/run_model.md) |
+| [`al_build_pool.py`](al_build_pool.py), [`al_build_validation_set.py`](al_build_validation_set.py), [`al_loop.py`](al_loop.py) | `config_al.yaml`, `config_al_train.yaml` | **Active-learning loop**: split held-out CTs into pool and validation roles → generate the frozen difficulty-balanced validation set → run one arm per sampling strategy (score, label with Monte Carlo, retrain, validate) against a Monte Carlo budget. Smoke config: `config_al_smoke.yaml`. | [docs/al_loop.md](docs/al_loop.md) |
 
 ## Analysis & benchmarks
 

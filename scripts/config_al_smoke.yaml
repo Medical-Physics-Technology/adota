@@ -1,0 +1,118 @@
+# Active-learning loop: end-to-end smoke test (minutes, not hours)
+# =================================================================
+#   uv run python scripts/al_build_validation_set.py --config scripts/config_al_smoke.yaml --n-cts 2
+#   uv run python scripts/al_loop.py --config scripts/config_al_smoke.yaml --strategy score
+#
+# The same code path as scripts/config_al.yaml with every dimension cut to the
+# smallest value that still exercises it: two CTs, one gantry, two energy layers,
+# eight beamlets per stage, one cycle, twenty optimizer steps. It runs real
+# MCsquare and real training, so a geometry or plumbing mistake costs ten minutes
+# here instead of a night in the full run.
+#
+# Everything it writes goes to /scratch/mstryja/al_smoke, never the dataset root,
+# so a smoke run cannot contaminate the training set or the frozen validation set.
+
+name: al_smoke
+
+datasets:
+  - name: Lung-PET-CT-Dx
+    anatomy: thoracic
+    root: /data/lung_cancer_dataset/manifest-1608669183333
+    collection: Lung-PET-CT-Dx
+    qc: {min_slices: 70, max_spacing_xy: 1.5, max_spacing_z: 2.0, min_z_extent_mm: 260.0}
+  - name: StageII-Colorectal
+    anatomy: abdominal
+    root: /scratch/mstryja/manifest-1646429317311
+    qc: {min_z_extent_mm: 260.0}
+
+pool:
+  pool_csv: registry/al_pool_selection.csv     # the real split; the smoke run only reads it
+  n_holdout: 30
+  n_validation: 5
+  exclude_files:
+    - registry/robustness_clean_selection.csv
+    - registry/robustness_multipatient_selection.csv
+
+candidates:
+  n_gantry_per_ct: 1
+  n_per_field: 40
+  energies: [80.0, 105.0]
+  theta_half_range_deg: 1.5
+  lattice_n: 18
+  gantry_min_deg: 0.0
+  gantry_max_deg: 360.0
+  seed: 20260908
+
+validation_set:
+  n_beamlets: 8
+  manifest: /scratch/mstryja/al_smoke/validation_set.csv
+  beamlet_prefix: alsmoke_val
+  beamlet_version: 1
+  seed: 20260909
+
+engine:
+  mcsquare_install: /home/mstryja/tools/mcsquare
+  mc_work_dir: /scratch/mstryja/mc_work/al_smoke
+  bdl_file: hptc_beam_model_rsnone.txt
+  scanner: default
+
+robustness:
+  energies: [80.0, 105.0]
+  theta_x_range: [-1.5, 1.5]
+  theta_y_range: [-1.5, 1.5]
+  grid_n: 18
+  rotate_to_canonical: true
+  isocenter_mode: grid_center
+  beam_entrance_standoff_mm: 20.0
+  roi_size: [60, 60, 320]
+  iso_spacing_mm: 1.0
+  num_primaries: 1.0e6
+  num_threads: 8                 # the machine is shared; stay small
+  beamlet_mode: true
+  beamlet_block_size: 8
+  rng_seed: 0
+  min_deposition_ratio: 0.95
+  output_root: /scratch/mstryja/al_smoke/beamlets
+  experiment_prefix: alsmoke
+  experiment_version: 1
+  make_figures: false
+  overwrite: false
+
+loop:
+  arm: warm
+  n_cycles: 1
+  beamlets_per_cycle: 8
+  n_cts_per_cycle: 2
+  score_column: score_full
+  score_alpha: 2.0
+  max_per_patient_frac: 1.0      # 8 beamlets over 2 patients: a cap would starve it
+  n_score_workers: 2
+  seed: 20260908
+  device_index: 2
+  beamlet_prefix: alsmoke
+  beamlet_version: 1
+  init_checkpoint: models/DoTA_v3_grid_search_v11/best_model.pth
+  hyperparams: models/DoTA_v3_grid_search_v11/hyperparams.json
+  train_config: scripts/config_al_train_smoke.yaml
+  checkpoint_selection: last
+  evaluate_initial: true
+
+runs_dir: /scratch/mstryja/al_smoke/runs
+
+gamma_params:
+  dose_percent_threshold: 3
+  distance_mm_threshold: 3
+  interp_fraction: 10
+  max_gamma: 2
+  lower_percent_dose_cutoff: 10
+  random_subset: null
+  local_gamma: false
+  quiet: true
+
+scale:
+  min_ds: 0.0
+  max_ds: 25277028.0
+  min_ct: -1024
+  max_ct: 3071
+  min_energy: 70.0
+  max_energy: 270.0

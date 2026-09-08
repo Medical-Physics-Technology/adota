@@ -39,6 +39,47 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 - `src.mc_generation.robustness`: `_FieldGeometry` / `_field_geometry` are now
   public as `FieldGeometry` / `field_geometry`; the underscore names remain as
   aliases.
+- **`generate_beamlets` is the generator's beamlet entry point.**
+  `src.mc_generation.robustness._generate_energy_block` now delegates to it.
+  It takes an explicit list of beamlets and optional output stems instead of a
+  lattice, so the active-learning oracle labels an arbitrary selection through
+  exactly the MC path and QA gates the reference datasets used. Lattice sweeps
+  are unaffected: with no `stems`, filenames stay `a{ix}_{iy}`.
+- `RobustnessConfig.beamlet_block_size` caps the spots per beamlet-mode MCsquare
+  call. `None` (the default) keeps the previous behaviour of sending a whole
+  block at once, which holds `len(spots) x grid` of dense dose on scratch -- over
+  100 GB for a 324-spot thoracic field.
+- `TrainingConfig` gains `al_dir_sources`, `al_oversample_fraction`,
+  `al_steps_per_epoch`, `al_preload_dir_records` and `max_val_batches`. With
+  `al_dir_sources` set, `build_dataloaders` returns the union loaders; unset,
+  every existing run is byte-identical.
+- `CheckpointManager.load_weights_only` and `src.adota.utils.load_model` now
+  accept either checkpoint shape: a training snapshot (weights under `"model"`)
+  or the bare `state_dict` the deployed checkpoints under `models/` are stored
+  as. Warm-starting the loop from `DoTA_v3_grid_search_v11` needs the second.
+- `src.loaders.dir_based` no longer pins its own logger to `DEBUG`. A library
+  module inherits the level the application configures; pinning it leaked a
+  per-record line into every caller's log. Set the level in your entry point to
+  get the old verbosity back.
+
+### Added (active learning)
+
+- **`src/active_learning/`**: `pool` (CT roles and the leakage rule, with the
+  selection recorded in `registry/al_pool_selection.csv`), `candidates`
+  (version-0 candidate generation and content-addressed ids; scoring a pool of
+  CTs one worker per CT), `sampling` (`random`, `score`, `score_topk`,
+  `stratified_score`, with per-patient and per-energy quotas), `oracle`
+  (Monte Carlo labelling of a selected batch, and the group-cost estimate),
+  `dataset` (`DirBeamletDataset` and the oversampled union with the HDF5 set),
+  `validation` (the difficulty-balanced recipe, and GPR / MAPE / RDE / **dR80**
+  on the frozen set), `training` (the retraining step) and `loop` (the cycle,
+  its manifest and its resume).
+- **`scripts/al_build_pool.py`, `scripts/al_build_validation_set.py`,
+  `scripts/al_loop.py`** with `config_al.yaml`, `config_al_train.yaml` and the
+  `config_al_smoke.yaml` / `config_al_train_smoke.yaml` pair that runs the whole
+  pipeline in minutes. Guide: `scripts/docs/al_loop.md`.
+- `src.evaluation.sources.MultiDirSource`: a `DirSource` spanning several
+  directories, which is what any set assembled across patients looks like.
 
 ## [1.5.0] - 2026-09-03
 
