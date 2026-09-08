@@ -171,7 +171,13 @@ class CheckpointManager:
         fresh training run (fresh schedule, epoch counter at 0) from a prior
         set of weights. Unwraps ``torch.compile`` so a compiled model loads an
         eager checkpoint and vice versa.
+
+        Accepts either shape of file: a training snapshot, which keeps the
+        weights under ``"model"``, or a bare ``state_dict`` as the deployed
+        checkpoints under ``models/`` are stored. Warm-starting the active-learning
+        loop from a deployed model needs the second.
         """
         map_location = device if device is not None else "cpu"
         state = torch.load(path, map_location=map_location, weights_only=False)
-        _unwrap_compiled(model).load_state_dict(state["model"])
+        weights = state["model"] if isinstance(state, dict) and "model" in state else state
+        _unwrap_compiled(model).load_state_dict(weights)

@@ -107,6 +107,51 @@ class DirSource:
         )
 
 
+class MultiDirSource:
+    """A :class:`DirSource` spanning several directories.
+
+    The Monte Carlo generators write one directory per ``(patient, gantry, energy)``,
+    so any set assembled across patients -- the active-learning validation set, a
+    labelled batch -- is a list of ``(directory, sample_id)`` pairs rather than one
+    directory with many ids. Loading is otherwise identical to :class:`DirSource`;
+    ``sample_id`` stays the stem, and ``extra`` also carries the directory so a
+    result row can be traced back to the field it came from.
+    """
+
+    def __init__(
+        self,
+        entries: Sequence[tuple],
+        *,
+        scale: dict,
+        normalize_flux: bool = True,
+        downsampling_method: str = "interpolation",
+        beamlet_angle: bool = True,
+    ):
+        self.entries = [(str(d), str(s)) for d, s in entries]
+        self._sources = {
+            directory: DirSource(directory, [], scale=scale, normalize_flux=normalize_flux,
+                                 downsampling_method=downsampling_method,
+                                 beamlet_angle=beamlet_angle)
+            for directory in {d for d, _ in self.entries}
+        }
+
+    @property
+    def sample_ids(self) -> list:
+        return [s for _, s in self.entries]
+
+    def __len__(self) -> int:
+        return len(self.entries)
+
+    def __iter__(self) -> Iterator[Sample]:
+        for directory, sample_id in self.entries:
+            yield self.load(directory, sample_id)
+
+    def load(self, directory: str, sample_id: str) -> Sample:
+        sample = self._sources[directory].load(sample_id)
+        sample.extra["directory"] = directory
+        return sample
+
+
 class H5Source:
     """HDF5-backed source wrapping an existing :class:`H5PYGenerator`.
 

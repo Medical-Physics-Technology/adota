@@ -161,17 +161,20 @@ _field_geometry = field_geometry
 def _process_beamlet(
     rec: CTRecord, bdl: BeamDataLibrary, cfg: RobustnessConfig, geom: FieldGeometry,
     energy: float, cell: Tuple[int, int, float, float], spot, dose_img, sim_res: dict,
-    out_dir: Path, fig_dir: Path,
+    out_dir: Path, fig_dir: Path, stem: Optional[str] = None,
 ) -> str:
     """Crop, QA-gate and save one beamlet; return ``"saved"`` or ``"qa"``.
 
     Shared by both MC paths, so a beamlet is written identically whether its dose
-    came from a per-spot call or from a beamlet-mode field.
+    came from a per-spot call or from a beamlet-mode field. ``stem`` names the
+    output files; the sweep leaves it unset and gets the lattice-cell name, while
+    the active-learning oracle passes its own candidate id (its beamlets do not
+    sit on a lattice).
     """
     ix, iy, tx, ty = cell
     ct = geom.ct
     d_nozzle, d_smx, d_smy = bdl.distances
-    stem = f"a{ix:02d}_{iy:02d}"
+    stem = f"a{ix:02d}_{iy:02d}" if stem is None else stem
     dose_arr = sitk.GetArrayFromImage(dose_img)
 
     cropped_ct, entrance, _, oob = extract_beamlet_roi(
@@ -251,56 +254,77 @@ def _process_beamlet(
     return "saved"
 
 
+def generate_beamlets(
+    rec: CTRecord, runner: MCSquareRunner, bdl: BeamDataLibrary, cfg: RobustnessConfig,
+    geom: FieldGeometry, energy: float, cells: Sequence[Tuple[int, int, float, float]],
+    out_dir: Path, stems: Optional[Sequence[str]] = None,
+) -> dict:
+    """Simulate and save an explicit list of beamlets at one (patient, field, energy).
+
+    The sweep passes its angle lattice; the active-learning oracle
+    (:mod:`src.active_learning.oracle`) passes whatever candidates the acquisition
+    function selected, under its own ``stems``. Both go through the same MC call and
+    the same QA gates, so a beamlet the loop buys is written exactly like a beamlet
+    of the reference dataset.
+
+    Beamlets already on disk are skipped unless ``cfg.overwrite`` (resume). With
+    ``cfg.beamlet_mode`` the outstanding spots go to MCsquare in one dose-influence
+    call (~3x faster: the CT and scoring setup is paid once and each spot gets its
+    own thread), in chunks of ``cfg.beamlet_block_size``. That chunk bounds scratch:
+    MCsquare writes every spot's dense dose grid before Python reads any of them, so
+    a chunk holds ``len(spots) x grid`` on disk at once (a 324-spot thoracic field is
+    over 100 GB), and an interrupted chunk is redone from its remaining spots.
+    """
+    d_smx, d_smy = bdl.d_smx, bdl.d_smy
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fig_dir = out_dir / "qc_figures"
+    stems = [f"a{ix:02d}_{iy:02d}" for ix, iy, _, _ in cells] if stems is None else list(stems)
+
+    work = [(cell, stem) for cell, stem in zip(cells, stems)
+            if cfg.overwrite or not (out_dir / f"{stem}_sim_res.json").exists()]
+    n_exist = len(cells) - len(work)
+    n_saved = n_qa = 0
+    block = cfg.beamlet_block_size or max(len(work), 1)
+
+    for start in range(0, len(work), block):
+        chunk = work[start:start + block]
+        spots = [angles_to_spot_position(tx, ty, d_smx, d_smy) for (_, _, tx, ty), _ in chunk]
+        if cfg.beamlet_mode:
+            for index, dose_img, sim_res in runner.run_beamlet_field(
+                    geom.ct, energy=energy, gantry_angle=geom.mc_gantry, spots_xy=spots,
+                    isocenter=geom.iso_mc, num_primaries=cfg.num_primaries,
+                    num_threads=cfg.num_threads, rng_seed=cfg.rng_seed):
+                outcome = _process_beamlet(
+                    rec, bdl, cfg, geom, energy, chunk[index][0], spots[index], dose_img,
+                    sim_res, out_dir, fig_dir, stem=chunk[index][1])
+                n_saved += outcome == "saved"
+                n_qa += outcome == "qa"
+        else:
+            for index, (cell, stem) in enumerate(chunk):
+                dose_img, sim_res = runner.run_beamlet(
+                    geom.ct, energy=energy, gantry_angle=geom.mc_gantry, spot_xy=spots[index],
+                    isocenter=geom.iso_mc, num_primaries=cfg.num_primaries,
+                    num_threads=cfg.num_threads, rng_seed=cfg.rng_seed,
+                )
+                outcome = _process_beamlet(rec, bdl, cfg, geom, energy, cell, spots[index],
+                                           dose_img, sim_res, out_dir, fig_dir, stem=stem)
+                n_saved += outcome == "saved"
+                n_qa += outcome == "qa"
+
+    return {"saved": n_saved, "qa_skipped": n_qa, "existing": n_exist, "dir": out_dir.name}
+
+
 def _generate_energy_block(
     rec: CTRecord, runner: MCSquareRunner, bdl: BeamDataLibrary, cfg: RobustnessConfig,
     geom: FieldGeometry, energy: float, grid: List[Tuple[int, int, float, float]],
 ) -> dict:
-    """Generate every beamlet of one (patient, field angle, energy) block.
-
-    With ``cfg.beamlet_mode`` the block's outstanding spots go through MCsquare in a
-    single dose-influence call (~3x faster: the CT and scoring setup is paid once
-    and each spot gets its own thread). Resume still works -- the plan is built from
-    the spots that are missing, so a restart re-simulates only those -- but the
-    granularity is the block: MCsquare writes every spot's dense dose grid before
-    Python reads any of them, so a block needs ``len(spots) x grid`` of scratch
-    (tens of GB) and an interrupted block is redone from its remaining spots.
-    """
-    d_smx, d_smy = bdl.d_smx, bdl.d_smy
+    """Generate every beamlet of one (patient, field angle, energy) lattice block."""
     out_dir = _experiment_dir(cfg, rec, energy, geom.field_gantry)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    fig_dir = out_dir / "qc_figures"
-
-    pending = [cell for cell in grid
-               if cfg.overwrite or not (out_dir / f"a{cell[0]:02d}_{cell[1]:02d}_sim_res.json").exists()]
-    n_exist = len(grid) - len(pending)
-    n_saved = n_qa = 0
-    spots = [angles_to_spot_position(tx, ty, d_smx, d_smy) for _, _, tx, ty in pending]
-
-    if pending and cfg.beamlet_mode:
-        for index, dose_img, sim_res in runner.run_beamlet_field(
-                geom.ct, energy=energy, gantry_angle=geom.mc_gantry, spots_xy=spots,
-                isocenter=geom.iso_mc, num_primaries=cfg.num_primaries,
-                num_threads=cfg.num_threads, rng_seed=cfg.rng_seed):
-            outcome = _process_beamlet(rec, bdl, cfg, geom, energy, pending[index],
-                                       spots[index], dose_img, sim_res, out_dir, fig_dir)
-            n_saved += outcome == "saved"
-            n_qa += outcome == "qa"
-    else:
-        for index, cell in enumerate(pending):
-            dose_img, sim_res = runner.run_beamlet(
-                geom.ct, energy=energy, gantry_angle=geom.mc_gantry, spot_xy=spots[index],
-                isocenter=geom.iso_mc, num_primaries=cfg.num_primaries,
-                num_threads=cfg.num_threads, rng_seed=cfg.rng_seed,
-            )
-            outcome = _process_beamlet(rec, bdl, cfg, geom, energy, cell, spots[index],
-                                       dose_img, sim_res, out_dir, fig_dir)
-            n_saved += outcome == "saved"
-            n_qa += outcome == "qa"
-
+    stats = generate_beamlets(rec, runner, bdl, cfg, geom, energy, grid, out_dir)
     logger.info("  %s e%s g%.1f: saved=%d qa_skip=%d existing=%d -> %s",
                 rec.patient_id, energy_tag(energy), geom.field_gantry,
-                n_saved, n_qa, n_exist, out_dir)
-    return {"saved": n_saved, "qa_skipped": n_qa, "existing": n_exist, "dir": out_dir.name}
+                stats["saved"], stats["qa_skipped"], stats["existing"], out_dir)
+    return stats
 
 
 def generate_for_record(
