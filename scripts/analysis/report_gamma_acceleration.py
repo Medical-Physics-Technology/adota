@@ -221,6 +221,7 @@ def main(
             sweep_rows.extend(payload["rows"])
     if matched_array and matched_tensor:
         summaries.validate_same_environment([matched_array, matched_tensor])
+        summaries.validate_same_settings([matched_array, matched_tensor])
     if sweep_rows:
         matched_rows = summaries.summarise_matched(sweep_rows)
         latex.write_csv(data / "matched.csv", matched_rows)

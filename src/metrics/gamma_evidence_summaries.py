@@ -36,6 +36,7 @@ __all__ = [
     "summarise_scaling",
     "summarise_profile",
     "validate_same_environment",
+    "validate_same_settings",
 ]
 
 SHARED_CRITERIA: Tuple[str, ...] = ("1%/1mm/10%", "2%/2mm/10%", "3%/3mm/10%")
@@ -69,6 +70,22 @@ def validate_same_environment(
     conflicts = {key: values for key, values in seen.items() if len(values) > 1}
     if conflicts:
         raise ValueError(f"runs were taken under different environments: {conflicts}")
+
+
+def validate_same_settings(payloads: Iterable[Dict[str, Any]], keys: Sequence[str] = ("criteria",)) -> None:
+    """Refuse to combine sweeps that were run with different gamma settings.
+
+    Raises:
+        ValueError: If any of ``keys`` in the payloads' ``settings`` differ.
+    """
+    seen: Dict[str, set] = defaultdict(set)
+    for payload in payloads:
+        settings = payload.get("settings", {})
+        for key in keys:
+            seen[key].add(json.dumps(settings.get(key), sort_keys=True))
+    conflicts = {key: values for key, values in seen.items() if len(values) > 1}
+    if conflicts:
+        raise ValueError(f"sweeps were run with different settings: {conflicts}")
 
 
 def _quantiles(values: Sequence[float]) -> Dict[str, float]:

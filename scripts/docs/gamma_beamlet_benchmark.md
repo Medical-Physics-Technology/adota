@@ -91,6 +91,15 @@ uv run python scripts/gamma_beamlet_benchmark.py report \
     --out-dir docs/gamma_beamlet
 ```
 
+## The maps subcommand and provenance
+
+`maps` computes the raw gamma map of every (beamlet, criterion, rung) and
+compares each rung against rung 1 (and rung 3 against rung 2) in memory, in the
+dtype the backend produced, before the pass-rate reduction zeroes the NaNs.
+Maps are saved in native precision under `<out dir>/maps/`. `--provenance` on
+any subcommand writes a `manifest.json` and raw system dumps beside `--out`.
+Both are described in [gamma_evidence.md](gamma_evidence.md).
+
 ## What is measured, and how
 
 * The evaluation dose comes from a **real prediction**, not from a perturbed

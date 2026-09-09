@@ -150,3 +150,10 @@ def test_environment_validation_refuses_mixed_runs():
     with pytest.raises(ValueError):
         other = {"environment": {"gpu": "A100", "torch": "2.8", "pymedphys": "0.41"}}
         summaries.validate_same_environment(same + [other])
+
+
+def test_settings_validation_refuses_different_criteria():
+    same = [{"settings": {"criteria": [{"dose_percent_threshold": 2.0}]}}] * 2
+    summaries.validate_same_settings(same)
+    with pytest.raises(ValueError):
+        summaries.validate_same_settings(same + [{"settings": {"criteria": [{"dose_percent_threshold": 3.0}]}}])
