@@ -363,7 +363,7 @@ def write_interp_table(interp_rows: Sequence[Dict], out_dir: Path) -> None:
         [
             r"\begin{tabular}{rrrrrr}",
             r"\toprule",
-            r"$N_i$ & mean pass rate [\%] & rung 1 [s] & rung 4 [s]"
+            r"$N_{\mathrm{int}}$ & mean pass rate [\%] & rung 1 [s] & rung 4 [s]"
             r" & speed-up & max $|\Delta|$ [pp] \\",
             r"\midrule",
             *body,
