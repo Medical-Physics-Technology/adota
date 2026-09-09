@@ -23,6 +23,20 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   are no longer the bottleneck. Times both the NumPy entry point and the
   device-resident one, the latter being the training path. See
   `scripts/docs/gamma_beamlet_benchmark.md` and `docs/gamma_beamlet/`.
+- **EXP-0008 evidence harnesses** (`src/metrics/gamma_pool_benchmark.py`,
+  `gamma_scaling_benchmark.py`, `gamma_map_agreement.py`,
+  `benchmark_provenance.py`; `scripts/gamma_pool_benchmark.py`,
+  `gamma_scaling_benchmark.py`, `gamma_profile_beamlet.py`,
+  `gamma_plan_map_agreement.py`) and their reductions
+  (`src/metrics/gamma_evidence_summaries.py`, `gamma_evidence_latex.py`,
+  `src/figures/gamma_scaling.py`, `scripts/analysis/audit_gamma_report.py`).
+  `gamma_beamlet_report.paired_speedups` raises `MatchedSetError` on unmatched
+  case sets; the ratio-of-medians `speedup` is now withheld there too.
+  `gamma_beamlet_benchmark.sweep` retains every repetition, rotates the rung
+  order per beamlet and records the resolved configuration. The rung and
+  criterion specs moved to `src/metrics/gamma_beamlet_specs.py` and pair
+  construction to `src/metrics/gamma_beamlet_pairs.py`; both are re-exported.
+  See `scripts/docs/gamma_evidence.md`.
 - **`src/figures/gamma_backend_performance.py`**:
   `gamma_backend_performance_figure`, the two-scale timing and speed-up panels.
 - **`scripts/analysis/report_gamma_acceleration.py`**: assembles both gamma
