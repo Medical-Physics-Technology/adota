@@ -1,39 +1,43 @@
-"""Assemble the gamma-acceleration technical report's tables and figure.
+"""Assemble the gamma-acceleration technical report's tables, figures and data.
 
-Reads the two benchmarks that already exist -- the plan-level ladder written by
-``scripts/gamma_benchmark.py report`` and the beamlet-level sweeps written by
-``scripts/gamma_beamlet_benchmark.py sweep`` -- and emits, into one directory:
+Reads the recorded benchmarks and writes, into one report directory:
 
 * ``tables/*.tex``   LaTeX ``tabular`` fragments, one per table in the report;
-* ``figures/gamma_backend_performance.{svg,pdf,png}`` through
-  :func:`src.figures.gamma_backend_performance.gamma_backend_performance_figure`;
-* ``data/*.csv``     the numbers behind each table and the figure, so a panel can
-  be traced back to the run that produced it.
+* ``tables/numbers.tex``  ``\\newcommand`` macros for every headline number the
+  prose quotes, so the text cannot drift from the tables;
+* ``figures/*``      through the ``src/figures`` publication layer;
+* ``data/*.csv``     the numbers behind every table and panel.
 
-Nothing is computed here that the benchmarks did not already measure: this
-script selects, formats and cross-references. Keeping it separate from the
-report source means the report can be rebuilt from the recorded JSONs without
-re-running a single gamma evaluation.
+Inputs, all optional except the plan ladder, so the report can be rebuilt from
+whichever experiments have run:
+
+* ``--plan-json``     the CHG-0005 plan-level ladder (``docs/gamma_gpu/``);
+* ``--exp7-json``     the EXP-0007 beamlet report, for the search-resolution
+  table and the projections experiment C is checked against;
+* ``--evidence-dir``  an EXP-0008 run directory with ``A/``, ``B_beamlet/``,
+  ``B_plan/``, ``C/``, ``D/`` and ``E/``.
+
+Nothing is computed here that a harness did not measure: this script selects,
+reduces through :mod:`src.metrics.gamma_evidence_summaries`, and formats
+through :mod:`src.metrics.gamma_evidence_latex`.
 
 Example::
 
     uv run python scripts/analysis/report_gamma_acceleration.py \\
         --plan-json docs/gamma_gpu/gamma_gpu_results.json \\
-        --beamlet-sweep /scratch/mstryja/gamma_beamlet/sweep_main.json \\
-        --beamlet-sweep /scratch/mstryja/gamma_beamlet/sweep_cpu.json \\
-        --interp-sweep /scratch/mstryja/gamma_beamlet/sweep_interp_2.json \\
+        --exp7-json docs/gamma_beamlet/gamma_beamlet_results.json \\
+        --evidence-dir /scratch/mstryja/gamma_evidence/exp0008_<stamp> \\
         --out-dir reports/technical-reports/gamma-pass-rate
 """
 
 from __future__ import annotations
 
-import csv
 import json
 import logging
 import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 import typer
@@ -42,406 +46,243 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.figures.gamma_backend_performance import (  # noqa: E402
-    gamma_backend_performance_figure,
-)
-from src.metrics.gamma_beamlet_report import (  # noqa: E402
-    REFERENCE_RUNG,
-    parity_table,
-    timing_table,
-)
+from src.figures.gamma_backend_performance import gamma_backend_performance_figure  # noqa: E402
+from src.figures.gamma_scaling import gamma_scaling_figure  # noqa: E402
+from src.metrics import gamma_evidence_latex as latex  # noqa: E402
+from src.metrics import gamma_evidence_summaries as summaries  # noqa: E402
 
 logger = logging.getLogger(__name__)
+app = typer.Typer(help="Build the tables, figures and data files of the gamma-acceleration report.",
+                  add_completion=False)
 
-app = typer.Typer(
-    help="Build the tables, figure and data files of the gamma-acceleration report.",
-    add_completion=False,
-)
-
-# The three criteria the report compares across both scales. The plan corpus
-# carries five; the two extra ones (1%/2mm/3% and 1%/3mm/0.1%) are reported in
-# the plan table only, because the beamlet sweep does not include them.
-SHARED_CRITERIA: Tuple[str, ...] = ("1%/1mm/10%", "2%/2mm/10%", "3%/3mm/10%")
-
-RUNG_LABELS: Dict[int, str] = {
-    1: "pymedphys cpu",
-    2: "torch cpu float64",
-    3: "torch cuda float64",
-    4: "torch cuda float32",
-}
-
-# LaTeX-safe rung names for the table headers.
-RUNG_TEX: Dict[int, str] = {
-    1: r"\texttt{pymedphys}, CPU",
-    2: r"\texttt{gamma\_torch}, CPU, float64",
-    3: r"\texttt{gamma\_torch}, GPU, float64",
-    4: r"\texttt{gamma\_torch}, GPU, float32",
+CRITERIA = summaries.SHARED_CRITERIA
+RUNG_LABELS = {1: "pymedphys cpu", 2: "torch cpu float64", 3: "torch cuda float64", 4: "torch cuda float32"}
+POOL_NAMES = {
+    "test200": "Held-out test, subset",
+    "testall": "Held-out test, complete",
+    "valsplit2000": "Training-run validation split, subset",
 }
 
 
-def _tex_criterion(label: str) -> str:
-    """``"3%/3mm/10%"`` in a form LaTeX will typeset."""
-    return label.replace("%", r"\%")
+# ── CHG-0005 plan ladder ────────────────────────────────────────────────────
 
 
-def _write_csv(path: Path, rows: Sequence[Dict[str, object]]) -> None:
-    """Write the rows behind a table, so every number has a machine-readable twin."""
-    if not rows:
-        return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
-        writer.writeheader()
-        writer.writerows(rows)
-    logger.info("Wrote %s", path)
-
-
-def _write_tex(path: Path, lines: Sequence[str]) -> None:
-    """Write one LaTeX fragment."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(lines) + "\n")
-    logger.info("Wrote %s", path)
-
-
-# ── Plan-scale selection ────────────────────────────────────────────────────
-
-
-def plan_summary(plan_json: Dict) -> List[Dict[str, object]]:
-    """Median plan time and speed-up per criterion, from the recorded ladder."""
+def plan_summary(plan_json: Dict) -> List[Dict[str, Any]]:
+    """Median plan time and median paired speed-up per criterion, from the recorded ladder."""
     grouped: Dict[str, List[Dict]] = defaultdict(list)
     for record in plan_json["performance"]:
         grouped[record["criterion"]].append(record)
-
-    summary: List[Dict[str, object]] = []
+    rows = []
     for criterion, records in grouped.items():
-        times = {
-            rung: np.array([record[f"rung{rung}_s"] for record in records], dtype=float)
-            for rung in (1, 2, 3, 4)
-        }
-        row: Dict[str, object] = {
-            "criterion": criterion,
-            "plans": len(records),
-            "median_voxels_m": float(
-                np.median([record["n_voxels"] for record in records]) / 1e6
-            ),
-        }
+        times = {rung: np.array([r[f"rung{rung}_s"] for r in records], dtype=float) for rung in (1, 2, 3, 4)}
+        row: Dict[str, Any] = {"criterion": criterion, "plans": len(records)}
         for rung in (1, 2, 3, 4):
             row[f"rung{rung}_median_s"] = float(np.median(times[rung]))
-            row[f"rung{rung}_speedup"] = float(np.median(times[1] / times[rung]))
-        summary.append(row)
-    return sorted(summary, key=lambda item: SHARED_CRITERIA.index(item["criterion"])
-                  if item["criterion"] in SHARED_CRITERIA else 99)
+            ratios = times[1] / times[rung]
+            row[f"rung{rung}_paired_median"] = float(np.median(ratios))
+            row[f"rung{rung}_paired_min"] = float(ratios.min())
+            row[f"rung{rung}_paired_max"] = float(ratios.max())
+        rows.append(row)
+    order = {c: i for i, c in enumerate(CRITERIA)}
+    return sorted(rows, key=lambda r: order.get(r["criterion"], 99))
 
 
-def beamlet_summary(rows: Sequence[Dict]) -> List[Dict[str, object]]:
-    """Median beamlet time and speed-up per criterion, for the array path."""
-    timing = [record for record in timing_table(rows) if record["path"] == "array"]
-    grouped: Dict[str, Dict[int, Dict]] = defaultdict(dict)
-    for record in timing:
-        grouped[record["criterion"]][record["rung"]] = record
-
-    summary: List[Dict[str, object]] = []
-    for criterion, by_rung in grouped.items():
-        row: Dict[str, object] = {"criterion": criterion}
-        for rung, record in sorted(by_rung.items()):
-            row[f"rung{rung}_median_s"] = record["median_s"]
-            row[f"rung{rung}_max_s"] = record["max_s"]
-            row[f"rung{rung}_speedup"] = record["speedup"]
-            row[f"rung{rung}_total_speedup"] = record["total_speedup"]
-            row[f"rung{rung}_beamlets"] = record["beamlets"]
-        summary.append(row)
-    return sorted(
-        summary,
-        key=lambda item: SHARED_CRITERIA.index(item["criterion"])
-        if item["criterion"] in SHARED_CRITERIA
-        else 99,
-    )
+def plan_timing_table(rows: Sequence[Dict[str, Any]]) -> List[str]:
+    body = [
+        " & ".join([latex.criterion_tex(r["criterion"]), str(r["plans"]), f"{r['rung1_median_s']:.1f}",
+                    f"{r['rung3_median_s']:.2f}", f"{r['rung4_median_s']:.2f}",
+                    f"{r['rung3_paired_median']:.1f} ({r['rung3_paired_min']:.1f}--{r['rung3_paired_max']:.1f})",
+                    f"{r['rung4_paired_median']:.1f} ({r['rung4_paired_min']:.1f}--{r['rung4_paired_max']:.1f})"])
+        + r" \\"
+        for r in rows
+    ]
+    header = [r"Criterion & plans & PyMedPhys [s] & GPU float64 [s] & GPU float32 [s]"
+              r" & paired speed-up float64 & paired speed-up float32 \\",
+              r" & & median & median & median & median (range) & median (range) \\"]
+    return latex._tabular("lrrrrrr", header, body)
 
 
-# ── Table writers ───────────────────────────────────────────────────────────
-
-
-def write_accuracy_table(
-    plan_json: Dict, beamlet_rows: Sequence[Dict], out_dir: Path
-) -> None:
-    """Deviation of each rung from pymedphys, at both scales, in one table."""
-    plan_by_comparison = {
-        record["comparison"]: record for record in plan_json["acceptance"]
-    }
-    beamlet_parity = {
-        (record["rung"], record["criterion"]): record
-        for record in parity_table(beamlet_rows)
-        if record["path"] == "array"
-    }
-
-    csv_rows: List[Dict[str, object]] = []
-    body: List[str] = []
+def accuracy_table(plan_json: Dict, sweep_rows: Sequence[Dict[str, Any]]) -> List[str]:
+    """Pass-rate agreement with PyMedPhys at both scales, matched cases only."""
+    plan_by = {r["comparison"]: r for r in plan_json["acceptance"]}
+    beamlet = summaries.summarise_sweep_pass_rates(sweep_rows) if sweep_rows else []
+    body = []
     for rung in (2, 3, 4):
-        plan_record = plan_by_comparison.get(f"rung {rung} vs rung 1") or plan_by_comparison.get(
-            f"rung {rung} vs rung 2"
-        )
+        plan_record = plan_by.get(f"rung {rung} vs rung 1") or plan_by.get(f"rung {rung} vs rung 2")
         plan_max = plan_record["max_abs_delta_pp"] if plan_record else float("nan")
-        beamlet_max = max(
-            (
-                beamlet_parity[(rung, criterion)]["max_abs_delta_pp"]
-                for criterion in SHARED_CRITERIA
-                if (rung, criterion) in beamlet_parity
-            ),
-            default=float("nan"),
-        )
-        beamlet_mean = np.mean(
-            [
-                beamlet_parity[(rung, criterion)]["mean_abs_delta_pp"]
-                for criterion in SHARED_CRITERIA
-                if (rung, criterion) in beamlet_parity
-            ]
-            or [float("nan")]
-        )
-        body.append(
-            f"{rung} & {RUNG_TEX[rung]} & {plan_max:.6f} & "
-            f"{beamlet_max:.6f} & {beamlet_mean:.6f} \\\\"
-        )
-        csv_rows.append(
-            {
-                "rung": rung,
-                "backend": RUNG_LABELS[rung],
-                "plan_max_abs_delta_pp": plan_max,
-                "beamlet_max_abs_delta_pp": beamlet_max,
-                "beamlet_mean_abs_delta_pp": float(beamlet_mean),
-            }
-        )
-
-    _write_tex(
-        out_dir / "tables" / "accuracy.tex",
-        [
-            r"\begin{tabular}{clrrr}",
-            r"\toprule",
-            r" & & \multicolumn{1}{c}{Plan scale} & \multicolumn{2}{c}{Beamlet scale} \\",
-            r"\cmidrule(lr){3-3}\cmidrule(lr){4-5}",
-            r"Rung & Backend & max $|\Delta|$ [pp] & max $|\Delta|$ [pp] & mean $|\Delta|$ [pp] \\",
-            r"\midrule",
-            *body,
-            r"\bottomrule",
-            r"\end{tabular}",
-        ],
-    )
-    _write_csv(out_dir / "data" / "accuracy.csv", csv_rows)
+        mine = [r for r in beamlet if r["rung"] == rung]
+        n_cases = sum(r["n_cases"] for r in mine)
+        beam_max = max((r["max_abs_delta_pp"] for r in mine), default=float("nan"))
+        beam_mean = float(np.mean([r["mean_abs_delta_pp"] for r in mine])) if mine else float("nan")
+        body.append(f"{latex.LABEL_TEX[summaries.RUNG_NAMES[rung]]} & 40 & {plan_max:.6f} & {n_cases} & "
+                    f"{beam_max:.6f} & {beam_mean:.6f} \\\\")
+    header = [r" & \multicolumn{2}{c}{Plan scale} & \multicolumn{3}{c}{Beamlet scale} \\",
+              r"\cmidrule(lr){2-3}\cmidrule(lr){4-6}",
+              r"Tested backend & pairs & max $|\Delta|$ [pp] & pairs & max $|\Delta|$ [pp] & mean $|\Delta|$ [pp] \\"]
+    return latex._tabular("lrrrrr", header, body)
 
 
-def write_timing_table(
-    plan_json: Dict, beamlet_rows: Sequence[Dict], out_dir: Path
-) -> None:
-    """Median time and speed-up per criterion, at both scales."""
-    plan_rows = {record["criterion"]: record for record in plan_summary(plan_json)}
-    beamlet_rows_by_criterion = {
-        record["criterion"]: record for record in beamlet_summary(beamlet_rows)
-    }
-
-    csv_rows: List[Dict[str, object]] = []
-    body: List[str] = []
-    for criterion in SHARED_CRITERIA:
-        plan = plan_rows.get(criterion, {})
-        beam = beamlet_rows_by_criterion.get(criterion, {})
-        body.append(
-            f"{_tex_criterion(criterion)} & "
-            f"{beam.get('rung1_median_s', float('nan')):.3f} & "
-            f"{beam.get('rung4_median_s', float('nan')):.3f} & "
-            f"{beam.get('rung4_speedup', float('nan')):.1f} & "
-            f"{beam.get('rung4_total_speedup', float('nan')):.1f} & "
-            f"{plan.get('rung1_median_s', float('nan')):.1f} & "
-            f"{plan.get('rung4_median_s', float('nan')):.2f} & "
-            f"{plan.get('rung4_speedup', float('nan')):.1f} \\\\"
-        )
-        csv_rows.append({"criterion": criterion, **{f"beamlet_{k}": v for k, v in beam.items() if k != "criterion"},
-                         **{f"plan_{k}": v for k, v in plan.items() if k != "criterion"}})
-
-    _write_tex(
-        out_dir / "tables" / "timing.tex",
-        [
-            r"\begin{tabular}{lrrrrrrr}",
-            r"\toprule",
-            r" & \multicolumn{4}{c}{One beamlet ($\num{144000}$ voxels)}"
-            r" & \multicolumn{3}{c}{One plan ($67$--$100$ M voxels)} \\",
-            r"\cmidrule(lr){2-5}\cmidrule(lr){6-8}",
-            r"Criterion & rung 1 & rung 4 & speed-up & pool"
-            r" & rung 1 & rung 4 & speed-up \\",
-            r" & [s] & [s] & (median) & speed-up & [s] & [s] & (median) \\",
-            r"\midrule",
-            *body,
-            r"\bottomrule",
-            r"\end{tabular}",
-        ],
-    )
-    _write_csv(out_dir / "data" / "timing.csv", csv_rows)
+def interp_table(exp7: Optional[Dict]) -> Optional[List[str]]:
+    """The EXP-0007 search-resolution sweep, unchanged."""
+    if not exp7:
+        return None
+    rows = [r for r in exp7["rows"] if r["criterion"] == "3%/3mm/10%"]
+    by: Dict[int, Dict[int, List[float]]] = defaultdict(lambda: defaultdict(list))
+    rates: Dict[int, Dict[int, List[float]]] = defaultdict(lambda: defaultdict(list))
+    ref = {(r["interp_fraction"], r["sample_id"]): r["pass_rate_pct"] for r in rows if r["rung"] == 1}
+    deltas: Dict[int, List[float]] = defaultdict(list)
+    for r in rows:
+        by[r["interp_fraction"]][r["rung"]].append(r["seconds_best"])
+        rates[r["interp_fraction"]][r["rung"]].append(r["pass_rate_pct"])
+        if r["rung"] == 4 and (r["interp_fraction"], r["sample_id"]) in ref:
+            deltas[r["interp_fraction"]].append(abs(r["pass_rate_pct"] - ref[(r["interp_fraction"], r["sample_id"])]))
+    body = []
+    for interp in sorted(by):
+        r1, r4 = float(np.median(by[interp][1])), float(np.median(by[interp][4]))
+        body.append(f"{interp} & {len(by[interp][1])} & {np.mean(rates[interp][1]):.4f} & {r1:.3f} & {r4:.4f} & "
+                    f"{r1 / r4:.1f} & {max(deltas[interp]):.6f} \\\\")
+    header = [r"$N_{\mathrm{int}}$ & $n$ & mean pass rate [\%] & PyMedPhys [s] & GPU float32 [s]"
+              r" & speed-up & max $|\Delta|$ [pp] \\"]
+    return latex._tabular("rrrrrrr", header, body)
 
 
-def write_entry_point_table(beamlet_rows: Sequence[Dict], out_dir: Path) -> None:
-    """Array versus device-resident entry point, at beamlet scale."""
-    timing = timing_table(beamlet_rows)
-    lookup = {
-        (record["path"], record["criterion"], record["rung"]): record for record in timing
-    }
-    csv_rows: List[Dict[str, object]] = []
-    body: List[str] = []
-    for criterion in SHARED_CRITERIA:
-        cells: List[str] = [_tex_criterion(criterion)]
-        record: Dict[str, object] = {"criterion": criterion}
-        for path in ("array", "tensor"):
-            for rung in (1, 4):
-                entry = lookup.get((path, criterion, rung))
-                value = entry["median_s"] if entry else float("nan")
-                cells.append(f"{value:.3f}")
-                record[f"{path}_rung{rung}_median_s"] = value
-        speedup = (
-            record["tensor_rung1_median_s"] / record["tensor_rung4_median_s"]
-            if record.get("tensor_rung4_median_s")
-            else float("nan")
-        )
-        cells.append(f"{speedup:.1f}")
-        record["tensor_speedup"] = speedup
-        body.append(" & ".join(cells) + r" \\")
-        csv_rows.append(record)
-
-    _write_tex(
-        out_dir / "tables" / "entry_points.tex",
-        [
-            r"\begin{tabular}{lrrrrr}",
-            r"\toprule",
-            r" & \multicolumn{2}{c}{Array path} & \multicolumn{2}{c}{Tensor path} & \\",
-            r"\cmidrule(lr){2-3}\cmidrule(lr){4-5}",
-            r"Criterion & rung 1 [s] & rung 4 [s] & rung 1 [s] & rung 4 [s]"
-            r" & speed-up (tensor) \\",
-            r"\midrule",
-            *body,
-            r"\bottomrule",
-            r"\end{tabular}",
-        ],
-    )
-    _write_csv(out_dir / "data" / "entry_points.csv", csv_rows)
+# ── Figures ─────────────────────────────────────────────────────────────────
 
 
-def write_interp_table(interp_rows: Sequence[Dict], out_dir: Path) -> None:
-    """Cost against the search resolution $N_i$, at beamlet scale."""
-    if not interp_rows:
-        logger.warning("No interpolation-fraction sweep given; skipping that table")
+def performance_figure(plan_rows: Sequence[Dict], matched: Sequence[Dict], out_dir: Path) -> None:
+    """Beamlet panels from the matched sweep, plan panels from the recorded ladder."""
+    array = [r for r in matched if r["path"] == "array"]
+    criteria = [c for c in CRITERIA if any(r["criterion"] == c for r in array)]
+    if not criteria:
         return
-    timing = [record for record in timing_table(interp_rows) if record["path"] == "array"]
-    parity = {
-        (record["interp_fraction"], record["rung"]): record
-        for record in parity_table(interp_rows)
-        if record["path"] == "array"
-    }
-    by_interp: Dict[int, Dict[int, Dict]] = defaultdict(dict)
-    for record in timing:
-        by_interp[record["interp_fraction"]][record["rung"]] = record
 
-    csv_rows: List[Dict[str, object]] = []
-    body: List[str] = []
-    for interp in sorted(by_interp):
-        rungs = by_interp[interp]
-        rung1 = rungs.get(1, {}).get("median_s", float("nan"))
-        rung4 = rungs.get(4, {}).get("median_s", float("nan"))
-        pass_rate = rungs.get(1, {}).get("mean_pass_rate_pct", float("nan"))
-        deviation = parity.get((interp, 4), {}).get("max_abs_delta_pp", float("nan"))
-        body.append(
-            f"{interp} & {pass_rate:.4f} & {rung1:.3f} & {rung4:.4f} & "
-            f"{rung1 / rung4:.1f} & {deviation:.6f} \\\\"
-        )
-        csv_rows.append(
-            {
-                "interp_fraction": interp,
-                "rung1_median_s": rung1,
-                "rung4_median_s": rung4,
-                "speedup": rung1 / rung4 if rung4 else float("nan"),
-                "rung4_max_abs_delta_pp": deviation,
-                "mean_pass_rate_pct": pass_rate,
-            }
-        )
+    def by(rung: int, key: str) -> List[float]:
+        return [next(r[key] for r in array if r["criterion"] == c and r["tested_rung"] == rung) for c in criteria]
 
-    _write_tex(
-        out_dir / "tables" / "interp.tex",
-        [
-            r"\begin{tabular}{rrrrrr}",
-            r"\toprule",
-            r"$N_{\mathrm{int}}$ & mean pass rate [\%] & rung 1 [s] & rung 4 [s]"
-            r" & speed-up & max $|\Delta|$ [pp] \\",
-            r"\midrule",
-            *body,
-            r"\bottomrule",
-            r"\end{tabular}",
-        ],
-    )
-    _write_csv(out_dir / "data" / "interp.csv", csv_rows)
-
-
-def write_figure(plan_json: Dict, beamlet_rows: Sequence[Dict], out_dir: Path) -> None:
-    """Render the two-scale timing and speed-up figure."""
-    plan = {record["criterion"]: record for record in plan_summary(plan_json)}
-    beam = {record["criterion"]: record for record in beamlet_summary(beamlet_rows)}
-    criteria = [criterion for criterion in SHARED_CRITERIA if criterion in beam]
-    # save_figure_as_publication_formats writes three files but creates no
-    # directory, so the destination has to exist before it is called.
+    times = {RUNG_LABELS[1]: by(4, "reference_median_s")}
+    time_spread = {RUNG_LABELS[1]: (by(4, "reference_q1_s"), by(4, "reference_q3_s"))}
+    speedups, speed_spread = {}, {}
+    for rung in (2, 3, 4):
+        if not any(r["tested_rung"] == rung for r in array):
+            continue
+        times[RUNG_LABELS[rung]] = by(rung, "tested_median_s")
+        time_spread[RUNG_LABELS[rung]] = (by(rung, "tested_q1_s"), by(rung, "tested_q3_s"))
+        speedups[RUNG_LABELS[rung]] = by(rung, "median_paired")
+        speed_spread[RUNG_LABELS[rung]] = (by(rung, "q1_paired"), by(rung, "q3_paired"))
+    plan = {r["criterion"]: r for r in plan_rows}
+    plan_times = {RUNG_LABELS[k]: [plan[c][f"rung{k}_median_s"] for c in criteria] for k in (1, 2, 3, 4)}
+    plan_speed = {RUNG_LABELS[k]: [plan[c][f"rung{k}_paired_median"] for c in criteria] for k in (2, 3, 4)}
     (out_dir / "figures").mkdir(parents=True, exist_ok=True)
-
-    def series(source: Dict[str, Dict], field: str) -> Dict[str, List[float]]:
-        out: Dict[str, List[float]] = {}
-        for rung in (1, 2, 3, 4):
-            values = [source.get(c, {}).get(f"rung{rung}_{field}") for c in criteria]
-            if all(value is not None and np.isfinite(value) for value in values):
-                out[RUNG_LABELS[rung]] = [float(value) for value in values]
-        return out
-
-    paths = gamma_backend_performance_figure(
-        criteria=[criterion.replace("/10%", "") for criterion in criteria],
-        beamlet_times_s=series(beam, "median_s"),
-        plan_times_s=series(plan, "median_s"),
-        beamlet_speedups={
-            label: values
-            for label, values in series(beam, "speedup").items()
-            if label != RUNG_LABELS[REFERENCE_RUNG]
-        },
-        plan_speedups={
-            label: values
-            for label, values in series(plan, "speedup").items()
-            if label != RUNG_LABELS[REFERENCE_RUNG]
-        },
-        figure_path=str(out_dir / "figures" / "gamma_backend_performance.svg"),
+    gamma_backend_performance_figure(
+        [c.replace("/10%", "") for c in criteria], times, plan_times, speedups, plan_speed,
+        str(out_dir / "figures" / "gamma_backend_performance.svg"),
+        beamlet_time_spread=time_spread, beamlet_speedup_spread=speed_spread,
+        beamlet_title="(a) One beamlet, 144,000 voxels (matched, N_int = 10)",
+        plan_title="(b) One plan, 67.5-100.5 million voxels (CHG-0005, N_int = 5)",
     )
-    for path in paths:
-        logger.info("Wrote %s", path)
 
 
-def _load_rows(paths: Sequence[Path]) -> List[Dict]:
-    """Concatenate the ``rows`` of several sweep JSONs."""
-    rows: List[Dict] = []
-    for path in paths:
-        rows.extend(json.loads(path.read_text())["rows"])
-    return rows
+# ── Entry point ─────────────────────────────────────────────────────────────
+
+
+def _load(path: Optional[Path]) -> Optional[Dict[str, Any]]:
+    return summaries.optional(path)
 
 
 @app.command()
 def main(
-    plan_json: Path = typer.Option(..., help="Plan-level ladder JSON from gamma_benchmark report."),
-    beamlet_sweep: List[Path] = typer.Option(..., help="Beamlet sweep JSON; repeat for several."),
-    out_dir: Path = typer.Option(..., help="Report directory to write tables/, figures/ and data/ into."),
-    interp_sweep: List[Path] = typer.Option([], help="Interpolation-fraction sweep JSON; repeat."),
+    plan_json: Path = typer.Option(..., help="CHG-0005 plan ladder JSON."),
+    out_dir: Path = typer.Option(..., help="Report directory: tables/, figures/ and data/ are written into it."),
+    exp7_json: Optional[Path] = typer.Option(None, help="EXP-0007 gamma_beamlet_results.json."),
+    evidence_dir: Optional[Path] = typer.Option(None, help="EXP-0008 run directory."),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Build every table, figure and data file the report includes."""
     logging.basicConfig(
-        level=logging.DEBUG if verbose else logging.INFO,
-        format="%(levelname)-7s %(name)s: %(message)s",
+        level=logging.DEBUG if verbose else logging.INFO, format="%(levelname)-7s %(name)s: %(message)s"
     )
+    tables, data = out_dir / "tables", out_dir / "data"
     plan = json.loads(plan_json.read_text())
-    beamlet_rows = _load_rows(beamlet_sweep)
-    interp_rows = _load_rows(interp_sweep)
+    plan_rows = plan_summary(plan)
+    latex.write_tex(tables / "plan_timing.tex", plan_timing_table(plan_rows))
+    latex.write_csv(data / "plan_timing.csv", plan_rows)
+    exp7 = _load(exp7_json)
+    interp = interp_table(exp7)
+    if interp:
+        latex.write_tex(tables / "interp.tex", interp)
 
-    write_accuracy_table(plan, beamlet_rows, out_dir)
-    write_timing_table(plan, beamlet_rows, out_dir)
-    write_entry_point_table(beamlet_rows, out_dir)
-    write_interp_table(interp_rows, out_dir)
-    write_figure(plan, beamlet_rows, out_dir)
-    typer.echo(f"Report assets written under {out_dir}")
+    evidence = evidence_dir or Path("/nonexistent")
+    matched_array = _load(evidence / "A" / "beamlet_matched_array.json")
+    matched_tensor = _load(evidence / "A" / "beamlet_matched_tensor.json")
+    matched_rows: List[Dict] = []
+    sweep_rows: List[Dict] = []
+    for payload in (matched_array, matched_tensor):
+        if payload:
+            sweep_rows.extend(payload["rows"])
+    if matched_array and matched_tensor:
+        summaries.validate_same_environment([matched_array, matched_tensor])
+    if sweep_rows:
+        matched_rows = summaries.summarise_matched(sweep_rows)
+        latex.write_csv(data / "matched.csv", matched_rows)
+        latex.write_tex(tables / "matched_array.tex", latex.matched_table(matched_rows, "array"))
+        latex.write_tex(tables / "matched_tensor.tex", latex.matched_table(matched_rows, "tensor"))
+        pass_rows = summaries.summarise_sweep_pass_rates(sweep_rows)
+        latex.write_csv(data / "pass_rate_agreement.csv", pass_rows)
+        performance_figure(plan_rows, matched_rows, out_dir)
+    latex.write_tex(tables / "accuracy.tex", accuracy_table(plan, [r for r in sweep_rows if r["path"] == "array"]))
+
+    beamlet_maps = _load(evidence / "B_beamlet" / "beamlet_maps.json")
+    beamlet_map_rows = summaries.summarise_beamlet_maps(beamlet_maps["rows"]) if beamlet_maps else []
+    if beamlet_map_rows:
+        latex.write_csv(data / "beamlet_maps.csv", beamlet_map_rows)
+        latex.write_tex(tables / "beamlet_maps.tex", latex.beamlet_maps_table(beamlet_map_rows))
+    plan_maps = _load(evidence / "B_plan" / "plan_maps.json")
+    plan_map_rows = summaries.summarise_plan_maps(plan_maps["rows"]) if plan_maps else []
+    if plan_map_rows:
+        latex.write_csv(data / "plan_maps.csv", plan_map_rows)
+        latex.write_tex(tables / "plan_maps.tex", latex.plan_maps_table(plan_map_rows))
+
+    cached = {p.stem.replace("time_", ""): summaries.load_payload(p)
+              for p in sorted((evidence / "C").glob("time_*.json"))}
+    integrated = {p.stem.replace("integrated_", ""): summaries.load_payload(p)
+                  for p in sorted((evidence / "C").glob("integrated_*.json"))}
+    pool_rows = summaries.summarise_pools(cached, integrated) if cached or integrated else []
+    if pool_rows:
+        latex.write_csv(data / "pools.csv", pool_rows)
+        latex.write_tex(tables / "pools_cached.tex", latex.pools_table(pool_rows, "cached", POOL_NAMES))
+        latex.write_tex(tables / "pools_integrated.tex", latex.pools_table(pool_rows, "integrated", POOL_NAMES))
+        if exp7:
+            medians = {(r["rung"], r["path"]): r["median_s"] for r in exp7["timing"] if r["criterion"] == "2%/2mm/10%"}
+            projections = {(r["pool"], r["rung"], r["path"]): r["n_beamlets"] * medians[(r["rung"], r["path"])]
+                           for r in pool_rows if (r["rung"], r["path"]) in medians and r["kind"] == "cached"}
+            projection_rows = summaries.projection_errors(pool_rows, projections)
+            latex.write_csv(data / "projection.csv", projection_rows)
+            latex.write_tex(tables / "projection.tex", latex.projection_table(projection_rows, POOL_NAMES))
+
+    scaling = _load(evidence / "D" / "scaling.json")
+    scaling_rows = summaries.summarise_scaling(scaling["rows"]) if scaling else []
+    if scaling_rows:
+        latex.write_csv(data / "scaling.csv", scaling_rows)
+        latex.write_csv(data / "scaling_crops.csv", scaling["crops"])
+        latex.write_tex(tables / "scaling.tex", latex.scaling_table(scaling_rows))
+        (out_dir / "figures").mkdir(parents=True, exist_ok=True)
+        gamma_scaling_figure(scaling_rows, str(out_dir / "figures" / "gamma_scaling.svg"))
+
+    profile = _load(evidence / "E" / "profile.json")
+    profile_rows = summaries.summarise_profile(profile["results"]) if profile else []
+    if profile_rows:
+        latex.write_csv(data / "profile.csv", profile_rows)
+        latex.write_tex(tables / "profile.tex", latex.profile_table(profile_rows))
+
+    values = latex.headline_values(matched_rows, beamlet_map_rows, plan_map_rows, pool_rows, scaling_rows, profile_rows)
+    for row in plan_rows:
+        suffix = {"1%/1mm/10%": "One", "2%/2mm/10%": "Two", "3%/3mm/10%": "Three"}.get(row["criterion"])
+        if suffix:
+            values[f"planPairedSingle{suffix}"] = f"{row['rung4_paired_median']:.1f}"
+            values[f"planPairedDouble{suffix}"] = f"{row['rung3_paired_median']:.1f}"
+    latex.write_tex(tables / "numbers.tex", latex.numbers_macros(values))
+    (data / "numbers.json").write_text(json.dumps(values, indent=2) + "\n")
+    typer.echo(f"Report assets written under {out_dir} ({len(values)} headline macros)")
 
 
 if __name__ == "__main__":

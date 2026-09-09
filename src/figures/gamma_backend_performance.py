@@ -14,7 +14,7 @@ below the line is a slow-down and reads as one.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import matplotlib
 
@@ -43,14 +43,23 @@ def _grouped_bars(
     ylabel: str,
     title: str,
     log: bool,
+    spread: Optional[Dict[str, Tuple[Sequence[float], Sequence[float]]]] = None,
 ) -> None:
-    """Draw one grouped bar panel, one group per criterion."""
+    """Draw one grouped bar panel, one group per criterion.
+
+    ``spread`` gives, per series, the lower and upper ends of an interval
+    around each bar (an interquartile range), drawn as asymmetric error bars.
+    """
     n_series = len(series)
     width = 0.8 / max(1, n_series)
     positions = np.arange(len(criteria), dtype=float)
     for index, (label, values) in enumerate(series.items()):
         offset = (index - (n_series - 1) / 2) * width
         heights = np.asarray(values, dtype=float)
+        errors = None
+        if spread and label in spread:
+            low, high = spread[label]
+            errors = [heights - np.asarray(low, dtype=float), np.asarray(high, dtype=float) - heights]
         ax.bar(
             positions + offset,
             heights,
@@ -59,6 +68,9 @@ def _grouped_bars(
             color=RUNG_COLOURS.get(label, f"C{index}"),
             edgecolor="black",
             linewidth=0.4,
+            yerr=errors,
+            capsize=3 if errors is not None else 0,
+            error_kw={"linewidth": 0.8},
         )
     if log:
         ax.set_yscale("log")
@@ -87,6 +99,10 @@ def gamma_backend_performance_figure(
     plan_speedups: Dict[str, Sequence[float]],
     figure_path: str,
     dpi: int = 300,
+    beamlet_time_spread: Optional[Dict[str, Tuple[Sequence[float], Sequence[float]]]] = None,
+    beamlet_speedup_spread: Optional[Dict[str, Tuple[Sequence[float], Sequence[float]]]] = None,
+    beamlet_title: str = "(a) One beamlet, 144,000 voxels",
+    plan_title: str = "(b) One plan, 67.5-100.5 million voxels",
 ) -> List[Path]:
     """Render the four-panel timing and speed-up comparison.
 
@@ -100,6 +116,11 @@ def gamma_backend_performance_figure(
         plan_speedups: The same at plan scale.
         figure_path: Output path; the extension is replaced by svg, pdf and png.
         dpi: Raster resolution of the PNG.
+        beamlet_time_spread: Optional per-series (lower, upper) interval around
+            each beamlet time, drawn as error bars.
+        beamlet_speedup_spread: The same for the beamlet speed-ups.
+        beamlet_title: Title of the beamlet time panel.
+        plan_title: Title of the plan time panel.
 
     Returns:
         The paths written.
@@ -113,15 +134,15 @@ def gamma_backend_performance_figure(
     fig, axes = plt.subplots(2, 2, figsize=(11.0, 7.6), dpi=dpi)
     _grouped_bars(
         axes[0, 0], criteria, beamlet_times_s,
-        "Time per beamlet [s]", "(a) One beamlet, 144,000 voxels", log=True,
+        "Time per beamlet [s]", beamlet_title, log=True, spread=beamlet_time_spread,
     )
     _grouped_bars(
         axes[0, 1], criteria, plan_times_s,
-        "Time per plan [s]", "(b) One plan, 67-100 million voxels", log=True,
+        "Time per plan [s]", plan_title, log=True,
     )
     _grouped_bars(
         axes[1, 0], criteria, beamlet_speedups,
-        "Speed-up over pymedphys", "(c) Beamlet speed-up", log=True,
+        "Speed-up over pymedphys", "(c) Beamlet speed-up", log=True, spread=beamlet_speedup_spread,
     )
     _grouped_bars(
         axes[1, 1], criteria, plan_speedups,

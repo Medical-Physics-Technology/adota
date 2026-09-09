@@ -30,12 +30,14 @@ import csv
 import json
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
 __all__ = [
     "REFERENCE_RUNG",
+    "MatchedSetError",
+    "paired_speedups",
     "build_report",
     "write_report",
 ]
@@ -44,6 +46,107 @@ __all__ = [
 # the published implementation, so it defines the pass rate rather than merely
 # participating in an average.
 REFERENCE_RUNG = 1
+
+
+class MatchedSetError(ValueError):
+    """Two rungs were measured on different case sets and cannot be paired."""
+
+
+def paired_speedups(
+    rows: Sequence[Dict[str, Any]],
+    tested_rung: int,
+    reference_rung: int = REFERENCE_RUNG,
+    *,
+    criterion: str,
+    path: str = "array",
+    interp_fraction: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Case-level speed-ups of one rung over another on identical cases.
+
+    Each case's ratio is formed from that case's own median time under each
+    rung, and the distribution of those ratios is what is summarised. The two
+    other conventions, the ratio of the medians and the ratio of the sums, are
+    reported beside it because they answer different questions and the three
+    can differ by a factor of two on skewed data.
+
+    Args:
+        rows: Sweep rows carrying ``seconds_median`` (or ``seconds_best`` for
+            older sweeps) and ``sample_id``.
+        tested_rung: The rung whose speed-up is wanted.
+        reference_rung: The rung it is measured against.
+        criterion: Restrict to this criterion label.
+        path: Restrict to this entry point.
+        interp_fraction: Restrict to this search resolution, if given.
+
+    Returns:
+        A dict with the per-case ratios, their median, quartiles and range, the
+        ratio of medians, the ratio of sums, the case count and the repetition
+        count.
+
+    Raises:
+        MatchedSetError: If the two rungs do not cover exactly the same cases,
+            or either has none. A speed-up from unmatched subsets is not a
+            speed-up, and this is the guard that prevents one.
+    """
+
+    def select(rung: int) -> Dict[str, Dict[str, Any]]:
+        return {
+            row["sample_id"]: row
+            for row in rows
+            if row["rung"] == rung
+            and row["criterion"] == criterion
+            and row["path"] == path
+            and (interp_fraction is None or row["interp_fraction"] == interp_fraction)
+        }
+
+    reference = select(reference_rung)
+    tested = select(tested_rung)
+    if not reference or not tested:
+        raise MatchedSetError(
+            f"no rows for rung {reference_rung} ({len(reference)}) or rung {tested_rung} ({len(tested)}) "
+            f"at {criterion} / {path}"
+        )
+    if set(reference) != set(tested):
+        missing = sorted(set(reference) ^ set(tested))
+        raise MatchedSetError(
+            f"rungs {reference_rung} and {tested_rung} at {criterion} / {path} were measured on different "
+            f"cases ({len(reference)} vs {len(tested)}); unmatched: {missing[:5]}"
+        )
+
+    def seconds(row: Dict[str, Any]) -> float:
+        return float(row.get("seconds_median", row["seconds_best"]))
+
+    ids = sorted(reference)
+    ref_times = np.array([seconds(reference[i]) for i in ids])
+    test_times = np.array([seconds(tested[i]) for i in ids])
+    ratios = ref_times / test_times
+    return {
+        "criterion": criterion,
+        "path": path,
+        "reference_rung": reference_rung,
+        "tested_rung": tested_rung,
+        "n_cases": len(ids),
+        "repeats": int(min(int(r.get("repeats", 1)) for r in list(reference.values()) + list(tested.values()))),
+        "sample_ids": ids,
+        "ratios": [float(r) for r in ratios],
+        "median_paired": float(np.median(ratios)),
+        "q1_paired": float(np.percentile(ratios, 25)),
+        "q3_paired": float(np.percentile(ratios, 75)),
+        "min_paired": float(ratios.min()),
+        "max_paired": float(ratios.max()),
+        "ratio_of_medians": float(np.median(ref_times) / np.median(test_times)),
+        "ratio_of_sums": float(ref_times.sum() / test_times.sum()),
+        "reference_median_s": float(np.median(ref_times)),
+        "reference_q1_s": float(np.percentile(ref_times, 25)),
+        "reference_q3_s": float(np.percentile(ref_times, 75)),
+        "reference_sum_s": float(ref_times.sum()),
+        "reference_max_s": float(ref_times.max()),
+        "tested_median_s": float(np.median(test_times)),
+        "tested_q1_s": float(np.percentile(test_times, 25)),
+        "tested_q3_s": float(np.percentile(test_times, 75)),
+        "tested_sum_s": float(test_times.sum()),
+        "tested_max_s": float(test_times.max()),
+    }
 
 
 def _key(row: Dict[str, Any]) -> Tuple:
@@ -158,8 +261,13 @@ def timing_table(rows: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
     for record in table:
         index = (record["criterion"], record["interp_fraction"], record["path"])
         baseline = medians.get(index + (REFERENCE_RUNG,))
+        baseline_beamlets = totals.get(index + (REFERENCE_RUNG,), (None, None))[1]
+        # A ratio of medians over different case sets is not a speed-up; the
+        # rung-2 subset of EXP-0007 was reported that way once, wrongly.
         record["speedup"] = (
-            float(baseline / record["median_s"]) if baseline and record["median_s"] > 0 else None
+            float(baseline / record["median_s"])
+            if baseline and record["median_s"] > 0 and baseline_beamlets == record["beamlets"]
+            else None
         )
         record["beamlets_per_s"] = float(1.0 / record["median_s"]) if record["median_s"] > 0 else None
         # The aggregate speed-up over the whole draw, which is a different number

@@ -22,7 +22,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -33,6 +33,9 @@ __all__ = [
     "BEAMLET_RESOLUTION_MM",
     "BeamletPair",
     "beamlet_resolution_mm",
+    "load_baseline_model",
+    "open_beamlet_dataset",
+    "pair_from_record",
     "build_pairs",
     "save_pairs",
     "load_pairs",
@@ -83,6 +86,63 @@ class BeamletPair:
 
 
 
+def load_baseline_model(run_dir: Path, device: torch.device, checkpoint_name: str = "best.pth"):
+    """Load a training snapshot's weights into a fresh model, in eval mode.
+
+    Loaded through the checkpoint manager rather than through
+    ``src.adota.utils.load_model``: the file is a *training snapshot*, which
+    keeps the weights under "model" alongside optimizer and RNG state, and only
+    the manager unwraps that form.
+
+    Raises:
+        FileNotFoundError: If the hyperparameters or checkpoint are missing.
+    """
+    from src.adota.models import DoTA3D_v3
+    from src.training.checkpoints import CheckpointManager
+
+    hyperparams_path = run_dir / "hyperparams.json"
+    model_path = run_dir / "checkpoints" / checkpoint_name
+    for path in (hyperparams_path, model_path):
+        if not path.is_file():
+            raise FileNotFoundError(f"Checkpoint artefact not found: {path}")
+    model = DoTA3D_v3(**json.loads(hyperparams_path.read_text()))
+    CheckpointManager.load_weights_only(model_path, model=model, device=device)
+    model.eval()
+    model.to(device)
+    return model
+
+
+def open_beamlet_dataset(h5_path: Path, record_ids: Sequence[str]):
+    """The evaluation-mode generator over the given records, as the scripts use it."""
+    from src.loaders.generator import H5PYGenerator
+
+    if not h5_path.is_file():
+        raise FileNotFoundError(f"Beamlet dataset not found: {h5_path}")
+    return H5PYGenerator(
+        file_path=str(h5_path),
+        indexes=list(record_ids),
+        augmentation=False,
+        cropp=True,
+        normalize=False,
+        normalize_flux_only=True,
+    )
+
+
+def pair_from_record(dataset, index: int, model, device: torch.device, scale: Dict[str, float]) -> BeamletPair:
+    """Run the model over one dataset record and return its dose pair."""
+    from src.adota.config import denormalize_energy
+
+    x, energy, y = dataset[index]
+    with torch.no_grad():
+        prediction = model(x.unsqueeze(0).to(device), energy.unsqueeze(0).to(device))[0]
+    return BeamletPair(
+        sample_id=dataset.record_ids[index],
+        energy_mev=float(denormalize_energy(float(energy.item()), scale)),
+        reference=np.ascontiguousarray(y.squeeze().numpy(), dtype=np.float32),
+        evaluation=np.ascontiguousarray(prediction.squeeze().detach().cpu().numpy(), dtype=np.float32),
+    )
+
+
 def build_pairs(
     h5_path: Path,
     run_dir: Path,
@@ -91,6 +151,7 @@ def build_pairs(
     scale: Dict[str, float],
     seed: int = 1234,
     checkpoint_name: str = "best.pth",
+    record_ids: Optional[Sequence[str]] = None,
 ) -> List[BeamletPair]:
     """Run the model over ``count`` beamlets and keep the dose pairs.
 
@@ -108,6 +169,8 @@ def build_pairs(
         scale: Training scale dict (``min_ds`` / ``max_ds`` / ...).
         seed: Seed for the record draw, so the same beamlets come back.
         checkpoint_name: File under ``run_dir/checkpoints`` to load.
+        record_ids: Explicit records to use instead of a random draw; ``count``
+            and ``seed`` are then ignored.
 
     Returns:
         The drawn pairs, in dataset order.
@@ -118,59 +181,23 @@ def build_pairs(
     """
     import h5py
 
-    from src.adota.config import denormalize_energy
-    from src.adota.models import DoTA3D_v3
-    from src.loaders.generator import H5PYGenerator
-    from src.training.checkpoints import CheckpointManager
-
     if not h5_path.is_file():
         raise FileNotFoundError(f"Beamlet dataset not found: {h5_path}")
-    hyperparams_path = run_dir / "hyperparams.json"
-    model_path = run_dir / "checkpoints" / checkpoint_name
-    for path in (hyperparams_path, model_path):
-        if not path.is_file():
-            raise FileNotFoundError(f"Checkpoint artefact not found: {path}")
-
-    with h5py.File(h5_path, "r") as handle:
-        all_ids = sorted(handle.keys())
-    rng = np.random.RandomState(seed)
-    picked = sorted(
-        all_ids[i] for i in rng.choice(len(all_ids), size=min(count, len(all_ids)), replace=False)
-    )
-    logger.info("Drew %d of %d records from %s", len(picked), len(all_ids), h5_path.name)
-
-    dataset = H5PYGenerator(
-        file_path=str(h5_path),
-        indexes=picked,
-        augmentation=False,
-        cropp=True,
-        normalize=False,
-        normalize_flux_only=True,
-    )
-    # Loaded through the checkpoint manager rather than through
-    # ``src.adota.utils.load_model``: the file here is a *training snapshot*,
-    # which keeps the weights under "model" alongside optimizer and RNG state,
-    # and only the manager unwraps that form.
-    model = DoTA3D_v3(**json.loads(hyperparams_path.read_text()))
-    CheckpointManager.load_weights_only(model_path, model=model, device=device)
-    model.eval()
-    model.to(device)
-
-    pairs: List[BeamletPair] = []
-    for index in range(len(dataset)):
-        x, energy, y = dataset[index]
-        with torch.no_grad():
-            prediction = model(x.unsqueeze(0).to(device), energy.unsqueeze(0).to(device))[0]
-        pairs.append(
-            BeamletPair(
-                sample_id=dataset.record_ids[index],
-                energy_mev=float(denormalize_energy(float(energy.item()), scale)),
-                reference=np.ascontiguousarray(y.squeeze().numpy(), dtype=np.float32),
-                evaluation=np.ascontiguousarray(
-                    prediction.squeeze().detach().cpu().numpy(), dtype=np.float32
-                ),
-            )
+    if record_ids is None:
+        with h5py.File(h5_path, "r") as handle:
+            all_ids = sorted(handle.keys())
+        rng = np.random.RandomState(seed)
+        picked = sorted(
+            all_ids[i] for i in rng.choice(len(all_ids), size=min(count, len(all_ids)), replace=False)
         )
+        logger.info("Drew %d of %d records from %s", len(picked), len(all_ids), h5_path.name)
+    else:
+        picked = list(record_ids)
+        logger.info("Using %d given records from %s", len(picked), h5_path.name)
+
+    dataset = open_beamlet_dataset(h5_path, picked)
+    model = load_baseline_model(run_dir, device, checkpoint_name)
+    pairs: List[BeamletPair] = [pair_from_record(dataset, index, model, device, scale) for index in range(len(dataset))]
     logger.info("Built %d beamlet pairs of shape %s", len(pairs), pairs[0].shape)
     return pairs
 

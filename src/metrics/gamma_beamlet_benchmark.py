@@ -38,10 +38,11 @@ Two timings are reported per case, because they answer different questions:
     the pymedphys backend it pays two full host transfers that the torch backend
     does not, and that difference is part of what is being measured.
 
-The dose pairs themselves come from :mod:`src.metrics.gamma_beamlet_pairs`,
-which is split off by role: that module builds and caches the data, this one
-times the backends against it. Its public names are re-exported here so a caller
-has a single import site.
+The dose pairs come from :mod:`src.metrics.gamma_beamlet_pairs` and the rung
+and criterion definitions from :mod:`src.metrics.gamma_beamlet_specs`, both
+split off by role: one builds the data, one names what is measured, this one
+does the measuring. Their public names are re-exported here so a caller has a
+single import site.
 
 Like :mod:`src.metrics.gamma_benchmark` this module takes no YAML config. Its
 only inputs are a cached pair file, a device and the criteria.
@@ -68,6 +69,13 @@ from src.metrics.gamma_beamlet_pairs import (
     load_pairs,
     save_pairs,
 )
+from src.metrics.gamma_beamlet_specs import (
+    RUNGS,
+    GammaCase,
+    RungSpec,
+    criterion_label,
+    default_cases,
+)
 from src.metrics.gamma_pass_rate import gamma_index, gamma_index_torch
 
 logger = logging.getLogger(__name__)
@@ -84,118 +92,11 @@ __all__ = [
     "criterion_label",
     "default_cases",
     "environment_stamp",
+    "PreparedCall",
+    "build_gamma_call",
     "time_case",
     "sweep",
 ]
-
-
-@dataclass(frozen=True)
-class RungSpec:
-    """One backend / device / precision combination under test.
-
-    Attributes:
-        rung: Ladder position, matching :mod:`src.metrics.gamma_benchmark`.
-        backend: ``"pymedphys"`` or ``"torch"``.
-        device: Device string for the torch backend; ``None`` for pymedphys.
-        dtype: ``"float32"`` or ``"float64"`` for the torch backend.
-    """
-
-    rung: int
-    backend: str
-    device: Optional[str] = None
-    dtype: Optional[str] = None
-
-    @property
-    def label(self) -> str:
-        """Short human-readable name, used as a table column."""
-        if self.backend == "pymedphys":
-            return "pymedphys cpu"
-        return f"torch {self.device} {self.dtype}"
-
-    def resolve_device(self, device: Optional[str]) -> Optional[str]:
-        """The device this rung runs on, given the CLI's ``--device``.
-
-        The override applies only to the GPU rungs. Rung 2 is the torch-CPU
-        rung by definition, so ``--device cuda:0`` must not silently move it
-        onto the GPU and make rungs 2 and 3 the same measurement.
-        """
-        if self.device is None:
-            return None
-        if self.device.startswith("cuda") and device:
-            return device
-        return self.device
-
-    def backend_options(self, device: Optional[str] = None) -> Optional[Dict[str, str]]:
-        """Options dict for :func:`src.metrics.gamma_pass_rate.gamma_index`."""
-        if self.backend == "pymedphys":
-            return None
-        return {"device": self.resolve_device(device), "dtype": self.dtype}
-
-
-# The rungs, keyed by the name the CLI accepts. ``cuda`` is a placeholder that
-# the CLI's --device argument replaces, so the same table can be produced on any
-# GPU index without editing the specs.
-RUNGS: Dict[str, RungSpec] = {
-    "rung1": RungSpec(1, "pymedphys"),
-    "rung2": RungSpec(2, "torch", "cpu", "float64"),
-    "rung3": RungSpec(3, "torch", "cuda", "float64"),
-    "rung4": RungSpec(4, "torch", "cuda", "float32"),
-}
-
-
-@dataclass(frozen=True)
-class GammaCase:
-    """One gamma recipe: a criterion plus the search parameters.
-
-    Attributes:
-        dose_percent_threshold: Dose-difference criterion, in percent.
-        distance_mm_threshold: Distance-to-agreement criterion, in millimetres.
-        lower_percent_dose_cutoff: Percent of the normalisation below which
-            gamma is not evaluated.
-        interp_fraction: Steps the distance threshold is divided into.
-        max_gamma: Largest gamma searched for.
-    """
-
-    dose_percent_threshold: float
-    distance_mm_threshold: float
-    lower_percent_dose_cutoff: float = 10.0
-    interp_fraction: int = 10
-    max_gamma: float = 2.0
-
-    def as_params(self) -> Dict[str, Any]:
-        """The dict both backends take, in ``DEFAULT_GAMMA_PARAMS`` form."""
-        return {
-            "dose_percent_threshold": self.dose_percent_threshold,
-            "distance_mm_threshold": self.distance_mm_threshold,
-            "interp_fraction": self.interp_fraction,
-            "max_gamma": self.max_gamma,
-            "lower_percent_dose_cutoff": self.lower_percent_dose_cutoff,
-            "random_subset": None,
-            "local_gamma": False,
-            "quiet": True,
-        }
-
-
-def criterion_label(case: GammaCase) -> str:
-    """``"3%/3mm/10%"``-style label, matching the plan-level tables."""
-    return (
-        f"{case.dose_percent_threshold:g}%/{case.distance_mm_threshold:g}mm/"
-        f"{case.lower_percent_dose_cutoff:g}%"
-    )
-
-
-def default_cases() -> Tuple[GammaCase, ...]:
-    """The three headline criteria, at the repository's default search settings.
-
-    3%/3mm is the reported headline; 2%/2mm is what the training configs use;
-    1%/1mm is the tightest criterion, and the most expensive, because a tighter
-    distance threshold makes the search radius grow in smaller steps.
-    """
-    return (
-        GammaCase(1.0, 1.0),
-        GammaCase(2.0, 2.0),
-        GammaCase(3.0, 3.0),
-    )
 
 
 def environment_stamp() -> Dict[str, Any]:
@@ -277,45 +178,44 @@ def _resolved_config(
     }
 
 
-def time_case(
+@dataclass
+class PreparedCall:
+    """A zero-argument gamma evaluation plus what is needed to time it.
+
+    Attributes:
+        call: Runs one evaluation and returns ``(gamma_values, pass_rate)``.
+        target: The device the torch backend runs on, or ``None`` for pymedphys.
+        on_cuda: Whether ``target`` is a CUDA device, so the caller synchronises.
+        stats: Filled by the torch backend with its search counters per call.
+    """
+
+    call: Any
+    target: Optional[str]
+    on_cuda: bool
+    stats: Dict[str, Any]
+
+
+def build_gamma_call(
     pair: BeamletPair,
     case: GammaCase,
     rung: RungSpec,
     scale: Dict[str, float],
     *,
     device: Optional[str] = None,
-    repeats: int = 3,
     path: str = "array",
-) -> Dict[str, Any]:
-    """Time one (pair, criterion, rung) case and return its pass rate.
+) -> PreparedCall:
+    """Prepare one evaluation of ``pair`` through the public entry point.
 
-    The timed region is the public entry point end to end: for the array path
-    that is de-normalisation of the cached pair, the backend's gamma
-    evaluation including any host-device transfers, and the pass-rate
-    reduction; for the tensor path it starts from volumes already resident on
-    the device. Every repetition is retained.
-
-    Args:
-        pair: The beamlet dose pair.
-        case: The gamma recipe.
-        rung: Backend, device and precision.
-        scale: Training scale dict.
-        device: Overrides ``rung.device`` (the CLI's ``--device``).
-        repeats: Timed repetitions after one untimed warm-up.
-        path: ``"array"`` for the numpy entry point, ``"tensor"`` for the
-            device-resident one.
-
-    Returns:
-        A row dict with the pass rate, every repetition's time and the summary
-        statistics over them, the resolved gamma configuration, the torch
-        backend's search counters, and peak memory where measurable.
+    The array path de-normalises the cached pair inside the call, as the
+    analysis scripts do; the tensor path uploads the normalised volumes once,
+    outside the call, and clones them per call so a mutating backend cannot
+    contaminate the next repetition.
 
     Raises:
         ValueError: If ``path`` is neither ``"array"`` nor ``"tensor"``.
     """
     if path not in ("array", "tensor"):
         raise ValueError(f"path must be 'array' or 'tensor'; got {path!r}")
-
     params = case.as_params()
     resolution = beamlet_resolution_mm()
     gamma_scale = _gamma_scale(scale)
@@ -360,6 +260,51 @@ def time_case(
                 backend=rung.backend,
                 backend_options=options,
             )
+
+    return PreparedCall(call=call, target=target, on_cuda=on_cuda, stats=stats)
+
+
+def time_case(
+    pair: BeamletPair,
+    case: GammaCase,
+    rung: RungSpec,
+    scale: Dict[str, float],
+    *,
+    device: Optional[str] = None,
+    repeats: int = 3,
+    path: str = "array",
+) -> Dict[str, Any]:
+    """Time one (pair, criterion, rung) case and return its pass rate.
+
+    The timed region is the public entry point end to end: for the array path
+    that is de-normalisation of the cached pair, the backend's gamma
+    evaluation including any host-device transfers, and the pass-rate
+    reduction; for the tensor path it starts from volumes already resident on
+    the device. Every repetition is retained.
+
+    Args:
+        pair: The beamlet dose pair.
+        case: The gamma recipe.
+        rung: Backend, device and precision.
+        scale: Training scale dict.
+        device: Overrides ``rung.device`` (the CLI's ``--device``).
+        repeats: Timed repetitions after one untimed warm-up.
+        path: ``"array"`` for the numpy entry point, ``"tensor"`` for the
+            device-resident one.
+
+    Returns:
+        A row dict with the pass rate, every repetition's time and the summary
+        statistics over them, the resolved gamma configuration, the torch
+        backend's search counters, and peak memory where measurable.
+
+    Raises:
+        ValueError: If ``path`` is neither ``"array"`` nor ``"tensor"``.
+    """
+    if path not in ("array", "tensor"):
+        raise ValueError(f"path must be 'array' or 'tensor'; got {path!r}")
+
+    prepared = build_gamma_call(pair, case, rung, scale, device=device, path=path)
+    call, target, on_cuda, stats = prepared.call, prepared.target, prepared.on_cuda, prepared.stats
 
     # One untimed call absorbs the CUDA context creation and the first kernel
     # compilation, neither of which recurs during a sweep.
