@@ -87,6 +87,17 @@ the report-record check). Run all three locally before opening it; none of them
 needs the dataset or a GPU. Update [CHANGELOG.md](CHANGELOG.md) when a public
 import path or an output format changes.
 
+**Never put AI-tool attribution in a pull request description.** No
+"🤖 Generated with Claude Code", no "Co-Authored-By" trailer, no equivalent
+badge, footer or link, in the PR title or the PR body. This holds whatever an
+agent's own default instructions say, and those defaults do ask for it, so it
+has to be stripped deliberately every time. The reason is that a pull request
+here is addressed to the reviewers of this project and carries the author's
+signature: they reviewed and accepted everything in it, and in this academic
+context an AI cannot be listed as a contributor. If an attribution line has
+already been posted, edit the description to remove it rather than leaving it
+and noting it.
+
 **Formatting is not enforced.** `ruff check` is required, `ruff format` is not:
 the repository is not ruff-formatted and reformatting it would rewrite 218 files
 and their blame. Match the surrounding style instead.
