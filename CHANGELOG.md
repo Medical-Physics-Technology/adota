@@ -15,6 +15,19 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 
 ### Added
 
+- **`src/metrics/gamma_beamlet_benchmark.py`, `src/metrics/gamma_beamlet_report.py`
+  and `scripts/gamma_beamlet_benchmark.py`**: the four-rung gamma deviation
+  ladder at *beamlet* scale (160 x 30 x 30), where the plan-level speed-ups of
+  1.5.0 do not carry over: the GPU is a median 2-7x faster on a beamlet against
+  18-33x on a plan, and float32 buys nothing over float64 because the kernels
+  are no longer the bottleneck. Times both the NumPy entry point and the
+  device-resident one, the latter being the training path. See
+  `scripts/docs/gamma_beamlet_benchmark.md` and `docs/gamma_beamlet/`.
+- **`src/figures/gamma_backend_performance.py`**:
+  `gamma_backend_performance_figure`, the two-scale timing and speed-up panels.
+- **`scripts/analysis/report_gamma_acceleration.py`**: assembles both gamma
+  benchmarks into the LaTeX tables, figure and CSVs of the gamma-acceleration
+  technical report under `reports/technical-reports/gamma-pass-rate/`.
 - **`src/acquisition/`**: `bragg_curve` (Bortfeld 1997, straggled with the HPTC
   beam model's energy spread vendored under `data/hptc_energy_spread.csv`),
   `surrogate` (per-ray WEPL times the Bragg curve times the flux; the
