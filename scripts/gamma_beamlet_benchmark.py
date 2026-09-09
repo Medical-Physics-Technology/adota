@@ -66,6 +66,13 @@ from src.metrics.gamma_beamlet_benchmark import (  # noqa: E402
     sweep,
 )
 from src.metrics.gamma_beamlet_report import build_report, write_report  # noqa: E402
+from src.metrics.gamma_map_agreement import (  # noqa: E402
+    beamlet_gamma_map,
+    check_gates,
+    compare_maps,
+    map_digest,
+    pass_rate_pct,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +116,32 @@ def _scale_from_run(run_dir: Path) -> dict:
             return {key: float(value) for key, value in scale.items()}
     logger.warning("No scale in %s; using the built-in fallback", run_dir)
     return dict(FALLBACK_SCALE)
+
+
+def _parse_rungs(rungs: str) -> list:
+    """Resolve a comma-separated rung list against :data:`RUNGS`."""
+    selected = []
+    for name in rungs.split(","):
+        name = name.strip()
+        if not name:
+            continue
+        if name not in RUNGS:
+            raise typer.BadParameter(f"Unknown rung {name!r}; known: {', '.join(RUNGS)}")
+        selected.append(RUNGS[name])
+    return selected
+
+
+def _write_provenance(out: Path, device: str, pairs_path: Path, extra: dict) -> None:
+    """Write a manifest and raw system dumps beside a result file."""
+    from src.metrics.benchmark_provenance import write_manifest
+
+    write_manifest(
+        out.parent,
+        device=device,
+        repos={"adota": PROJECT_ROOT, "reports": PROJECT_ROOT / "reports"},
+        inputs={"pairs": pairs_path},
+        extra={"result": str(out), **extra},
+    )
 
 
 def _parse_criteria(criteria: str, interp_fraction: int, cutoff: float) -> List[GammaCase]:
@@ -175,6 +208,8 @@ def sweep_command(
     entry_points: str = typer.Option("array", "--paths", help='Comma-separated: "array", "tensor".'),
     repeats: int = typer.Option(3, help="Timed repetitions per combination."),
     limit: Optional[int] = typer.Option(None, help="Use only the first N cached beamlets."),
+    rotate: bool = typer.Option(True, help="Rotate the rung execution order per beamlet."),
+    provenance: bool = typer.Option(False, help="Write manifest.json and system dumps beside --out."),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Time every (beamlet, criterion, rung, entry point) combination."""
@@ -183,32 +218,100 @@ def sweep_command(
     if limit is not None:
         loaded = loaded[:limit]
 
-    selected = []
-    for name in rungs.split(","):
-        name = name.strip()
-        if not name:
-            continue
-        if name not in RUNGS:
-            raise typer.BadParameter(f"Unknown rung {name!r}; known: {', '.join(RUNGS)}")
-        selected.append(RUNGS[name])
-
+    selected = _parse_rungs(rungs)
     cases = _parse_criteria(criteria, interp_fraction, cutoff)
     entries = tuple(token.strip() for token in entry_points.split(",") if token.strip())
-
-    rows = sweep(
-        loaded,
-        cases,
-        selected,
-        scale,
-        device=device,
-        repeats=repeats,
-        paths=entries,
-    )
     out.parent.mkdir(parents=True, exist_ok=True)
+    settings = {
+        "rungs": [rung.label for rung in selected],
+        "criteria": [case.as_params() for case in cases],
+        "paths": list(entries),
+        "repeats": repeats,
+        "rotate": rotate,
+        "device": device,
+        "pairs": str(pairs_path),
+        "n_pairs": len(loaded),
+    }
+    if provenance:
+        _write_provenance(out, device, pairs_path, settings)
+
+    rows = sweep(loaded, cases, selected, scale, device=device, repeats=repeats, paths=entries, rotate=rotate)
     out.write_text(
-        json.dumps({"environment": environment_stamp(), "rows": rows}, indent=2) + "\n"
+        json.dumps({"environment": environment_stamp(), "settings": settings, "rows": rows}, indent=2) + "\n"
     )
     typer.echo(f"Wrote {len(rows)} timing rows to {out}")
+
+
+@app.command()
+def maps(
+    pairs_path: Path = typer.Option(..., "--pairs", help="Cached .npz from the pairs command."),
+    out: Path = typer.Option(..., help="Destination JSON for the map comparisons."),
+    device: str = typer.Option("cuda:0", help="GPU device for rungs 3 and 4."),
+    rungs: str = typer.Option("rung1,rung2,rung3,rung4", help="Comma-separated rung names; rung1 is required."),
+    criteria: str = typer.Option("", help='Comma-separated "percent/mm" criteria; empty means 1/1,2/2,3/3.'),
+    cutoff: float = typer.Option(10.0, help="Lower percent dose cutoff."),
+    interp_fraction: int = typer.Option(10, help="Steps the distance threshold is divided into."),
+    limit: Optional[int] = typer.Option(None, help="Use only the first N cached beamlets."),
+    save_maps: bool = typer.Option(True, help="Save every raw map in its native dtype under <out dir>/maps."),
+    provenance: bool = typer.Option(False, help="Write manifest.json and system dumps beside --out."),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Compare raw gamma maps between rungs in memory, before any cast."""
+    import numpy as np
+
+    _configure_logging(verbose)
+    loaded, scale = load_pairs(pairs_path)
+    if limit is not None:
+        loaded = loaded[:limit]
+    selected = _parse_rungs(rungs)
+    if not selected or selected[0].rung != 1:
+        raise typer.BadParameter("rung1 must be first: it is the reference every other rung is compared against.")
+    cases = _parse_criteria(criteria, interp_fraction, cutoff)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    maps_dir = out.parent / "maps"
+    if save_maps:
+        maps_dir.mkdir(exist_ok=True)
+    settings = {"rungs": [r.label for r in selected], "criteria": [c.as_params() for c in cases], "device": device}
+    if provenance:
+        _write_provenance(out, device, pairs_path, settings)
+
+    # Every rung is compared against rung 1, and rung 3 additionally against
+    # rung 2, which is the comparison that isolates the device from the kernel.
+    comparisons = [(rung.rung, 1) for rung in selected if rung.rung != 1]
+    if any(r.rung == 3 for r in selected) and any(r.rung == 2 for r in selected):
+        comparisons.append((3, 2))
+
+    rows: List[dict] = []
+    for index, pair in enumerate(loaded):
+        for case in cases:
+            computed = {}
+            for rung in selected:
+                gamma_map = beamlet_gamma_map(pair, case, rung, scale, device)
+                computed[rung.rung] = gamma_map
+                if save_maps:
+                    label = f"{pair.sample_id}__{case.dose_percent_threshold:g}_{case.distance_mm_threshold:g}"
+                    np.save(maps_dir / f"{label}__rung{rung.rung}.npy", gamma_map)
+            for tested, baseline in comparisons:
+                comparison = compare_maps(computed[baseline], computed[tested])
+                dtype = str(computed[tested].dtype)
+                rows.append(
+                    {
+                        "sample_id": pair.sample_id,
+                        "criterion": f"{case.dose_percent_threshold:g}%/{case.distance_mm_threshold:g}mm/{cutoff:g}%",
+                        "interp_fraction": interp_fraction,
+                        "tested_rung": tested,
+                        "baseline_rung": baseline,
+                        **comparison,
+                        **check_gates(comparison, dtype),
+                        "rung_pass_rates_pct": {str(k): pass_rate_pct(v) for k, v in computed.items()},
+                        "rung_digests": {str(k): map_digest(v) for k, v in computed.items()},
+                    }
+                )
+        logger.info("pair %d/%d (%s): %d comparison rows", index + 1, len(loaded), pair.sample_id[:8], len(rows))
+
+    payload = {"environment": environment_stamp(), "settings": settings, "rows": rows}
+    out.write_text(json.dumps(payload, indent=2) + "\n")
+    typer.echo(f"Wrote {len(rows)} map comparisons to {out}")
 
 
 @app.command()

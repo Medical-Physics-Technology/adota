@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import logging
 import platform
+import resource
 import socket
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -247,6 +248,35 @@ def _gamma_scale(scale: Dict[str, float]) -> Dict[str, float]:
     return merged
 
 
+def _resolved_config(
+    pair: BeamletPair, case: GammaCase, rung: RungSpec, target: Optional[str], scale: Dict[str, float]
+) -> Dict[str, Any]:
+    """Every setting that decides the result, spelled out rather than implied.
+
+    The normalisation dose is the physical maximum of the reference volume,
+    which is what both backends use under global normalisation.
+    """
+    from src.metrics.gamma_torch import DEFAULT_TILE_ELEMENTS
+
+    span = scale["max_ds"] - scale["min_ds"]
+    return {
+        "dose_percent_threshold": case.dose_percent_threshold,
+        "distance_mm_threshold": case.distance_mm_threshold,
+        "lower_percent_dose_cutoff": case.lower_percent_dose_cutoff,
+        "local_gamma": False,
+        "global_normalisation_dose": float(pair.reference.max()) * span + scale["min_ds"],
+        "interp_fraction": case.interp_fraction,
+        "max_gamma": case.max_gamma,
+        "skip_once_passed": False,
+        "random_subset": None,
+        "spacing_mm": list(beamlet_resolution_mm()),
+        "grid_shape": list(pair.shape),
+        "dtype": rung.dtype if rung.backend == "torch" else "float64",
+        "device": target if rung.backend == "torch" else "cpu",
+        "tile_elements": DEFAULT_TILE_ELEMENTS if rung.backend == "torch" else None,
+    }
+
+
 def time_case(
     pair: BeamletPair,
     case: GammaCase,
@@ -259,20 +289,26 @@ def time_case(
 ) -> Dict[str, Any]:
     """Time one (pair, criterion, rung) case and return its pass rate.
 
+    The timed region is the public entry point end to end: for the array path
+    that is de-normalisation of the cached pair, the backend's gamma
+    evaluation including any host-device transfers, and the pass-rate
+    reduction; for the tensor path it starts from volumes already resident on
+    the device. Every repetition is retained.
+
     Args:
         pair: The beamlet dose pair.
         case: The gamma recipe.
         rung: Backend, device and precision.
         scale: Training scale dict.
         device: Overrides ``rung.device`` (the CLI's ``--device``).
-        repeats: Timed repetitions; the reported time is the minimum, which is
-            the least contaminated by other load on a shared machine.
+        repeats: Timed repetitions after one untimed warm-up.
         path: ``"array"`` for the numpy entry point, ``"tensor"`` for the
             device-resident one.
 
     Returns:
-        A row dict with the pass rate, the best and mean times, and the case
-        identification.
+        A row dict with the pass rate, every repetition's time and the summary
+        statistics over them, the resolved gamma configuration, the torch
+        backend's search counters, and peak memory where measurable.
 
     Raises:
         ValueError: If ``path`` is neither ``"array"`` nor ``"tensor"``.
@@ -283,8 +319,12 @@ def time_case(
     params = case.as_params()
     resolution = beamlet_resolution_mm()
     gamma_scale = _gamma_scale(scale)
-    options = rung.backend_options(device)
     target = rung.resolve_device(device)
+    stats: Dict[str, Any] = {}
+    options = rung.backend_options(device)
+    if options is not None:
+        options = {**options, "stats": stats}
+    on_cuda = bool(target and str(target).startswith("cuda") and rung.backend == "torch")
 
     if path == "tensor":
         # The pymedphys rung has no device of its own, but the point of the
@@ -325,14 +365,20 @@ def time_case(
     # compilation, neither of which recurs during a sweep.
     _, pass_rate = call()
     _synchronise(rung, target)
+    if on_cuda:
+        torch.cuda.reset_peak_memory_stats(torch.device(target))
+    rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
 
     times: List[float] = []
     for _ in range(max(1, repeats)):
+        _synchronise(rung, target)
         start = perf_counter()
         _, pass_rate = call()
         _synchronise(rung, target)
         times.append(perf_counter() - start)
 
+    ordered = sorted(times)
+    quartiles = np.percentile(ordered, [25, 50, 75]) if len(ordered) > 1 else [ordered[0]] * 3
     return {
         "sample_id": pair.sample_id,
         "energy_mev": pair.energy_mev,
@@ -346,9 +392,23 @@ def time_case(
         "dtype": rung.dtype,
         "path": path,
         "pass_rate_pct": float(100.0 * pass_rate[0]),
-        "seconds_best": float(min(times)),
+        "seconds_all": [float(t) for t in times],
+        "seconds_best": float(ordered[0]),
+        "seconds_median": float(quartiles[1]),
+        "seconds_q1": float(quartiles[0]),
+        "seconds_q3": float(quartiles[2]),
         "seconds_mean": float(sum(times) / len(times)),
         "repeats": len(times),
+        "iterations": stats.get("iterations"),
+        "shell_points": stats.get("shell_points"),
+        "interp_samples": stats.get("interp_samples"),
+        "peak_gpu_bytes": int(torch.cuda.max_memory_allocated(torch.device(target))) if on_cuda else None,
+        # ru_maxrss is a process-lifetime high-water mark in KiB, so a delta of
+        # zero means the case did not raise the process peak, not that it used
+        # no memory. It is recorded because nothing better is portable.
+        "host_maxrss_kib_after": int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss),
+        "host_maxrss_kib_delta": int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss - rss_before),
+        "config": _resolved_config(pair, case, rung, target, scale),
     }
 
 
@@ -361,8 +421,14 @@ def sweep(
     device: Optional[str] = None,
     repeats: int = 3,
     paths: Sequence[str] = ("array",),
+    rotate: bool = True,
 ) -> List[Dict[str, Any]]:
     """Time every (pair, case, rung, path) combination.
+
+    The outer loop is over pairs, and within a pair the rungs are executed in
+    an order rotated by the pair's index, so that no backend systematically
+    runs first (cold) or last (after the machine has warmed) across the draw.
+    The order actually used is recorded in every row.
 
     Args:
         pairs: Beamlet dose pairs.
@@ -372,36 +438,35 @@ def sweep(
         device: Overrides each rung's device.
         repeats: Timed repetitions per combination.
         paths: Which entry points to measure; see the module docstring.
+        rotate: Rotate the rung order per pair; ``False`` keeps the given order.
 
     Returns:
-        One row per combination, in sweep order.
+        One row per combination, in execution order.
     """
     rows: List[Dict[str, Any]] = []
     total = len(pairs) * len(cases) * len(rungs) * len(paths)
-    done = 0
-    for case in cases:
-        for rung in rungs:
-            for entry in paths:
-                for pair in pairs:
-                    rows.append(
-                        time_case(
-                            pair,
-                            case,
-                            rung,
-                            scale,
-                            device=device,
-                            repeats=repeats,
-                            path=entry,
-                        )
+    for pair_index, pair in enumerate(pairs):
+        shift = pair_index % len(rungs) if rotate and rungs else 0
+        ordered_rungs = list(rungs[shift:]) + list(rungs[:shift])
+        order_label = [rung.label for rung in ordered_rungs]
+        for case in cases:
+            for position, rung in enumerate(ordered_rungs):
+                for entry in paths:
+                    row = time_case(
+                        pair, case, rung, scale, device=device, repeats=repeats, path=entry
                     )
-                    done += 1
-                logger.info(
-                    "%s | %s | %s: %d/%d cases done (last %.3f s)",
-                    criterion_label(case),
-                    rung.label,
-                    entry,
-                    done,
-                    total,
-                    rows[-1]["seconds_best"],
-                )
+                    row["pair_index"] = pair_index
+                    row["rung_order"] = order_label
+                    row["order_position"] = position
+                    row["sequence"] = len(rows)
+                    rows.append(row)
+        logger.info(
+            "pair %d/%d (%s): %d/%d rows done, rung order %s",
+            pair_index + 1,
+            len(pairs),
+            pair.sample_id[:8],
+            len(rows),
+            total,
+            " > ".join(order_label),
+        )
     return rows
