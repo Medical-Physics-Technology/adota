@@ -177,8 +177,8 @@ def performance_figure(plan_rows: Sequence[Dict], matched: Sequence[Dict], out_d
         [c.replace("/10%", "") for c in criteria], times, plan_times, speedups, plan_speed,
         str(out_dir / "figures" / "gamma_backend_performance.svg"),
         beamlet_time_spread=time_spread, beamlet_speedup_spread=speed_spread,
-        beamlet_title="(a) One beamlet, 144,000 voxels (matched, N_int = 10)",
-        plan_title="(b) One plan, 67.5-100.5 million voxels (CHG-0005, N_int = 5)",
+        beamlet_title="(a) One beamlet, 144,000 voxels",
+        plan_title="(b) One plan, 67.5-100.5 million voxels",
     )
 
 

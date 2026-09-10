@@ -95,6 +95,7 @@ def gamma_scaling_figure(rows: Sequence[Dict], figure_path: str, dpi: int = 300)
 
     handles, labels = axes[0, 0].get_legend_handles_labels()
     fig.legend(handles, labels, loc="lower center", ncol=3, fontsize=_FS_LEGEND, frameon=False,
-               bbox_to_anchor=(0.5, -0.03))
-    fig.tight_layout()
+               bbox_to_anchor=(0.5, 0.0))
+    # Leave the bottom strip to the legend so it cannot overprint the axis labels.
+    fig.tight_layout(rect=(0, 0.07, 1, 1))
     return save_figure_as_publication_formats(fig, figure_path)
