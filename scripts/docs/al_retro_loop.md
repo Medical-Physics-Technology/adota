@@ -46,6 +46,13 @@ uv run python scripts/al_compare.py --config scripts/config_al_compare.yaml \
     --run <random run> --run <score_topk run> --run <stratified_score run>
 ```
 
+**Unattended:** `scripts/run_al_retro.sh` runs all four steps, queuing the
+strategies over the GPUs in `GPUS` and comparing whatever finished:
+
+```bash
+nohup bash scripts/run_al_retro.sh > /scratch/mstryja/adota_runs/al_retro/d30/pilot.out 2>&1 & echo "PID: $!"
+```
+
 **Smoke test first.** `config_al_retro_smoke.yaml` runs the identical code path on a
 400-record `D` (two cycles of two epochs, an 8-record evaluation subsample) under
 `/scratch/mstryja/adota_runs/al_retro_smoke`, in minutes:
