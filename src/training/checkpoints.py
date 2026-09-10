@@ -43,10 +43,12 @@ def _rng_state() -> Dict[str, Any]:
 
 
 def _restore_rng_state(state: Dict[str, Any]) -> None:
+    # The generator states are ByteTensors that must live on the CPU; a snapshot
+    # loaded with map_location=cuda:N arrives on the device and is moved back.
     if "torch" in state and state["torch"] is not None:
-        torch.set_rng_state(state["torch"])
+        torch.set_rng_state(state["torch"].cpu())
     if "cuda" in state and state["cuda"] is not None and torch.cuda.is_available():
-        torch.cuda.set_rng_state_all(state["cuda"])
+        torch.cuda.set_rng_state_all([s.cpu() for s in state["cuda"]])
     if "numpy" in state and state["numpy"] is not None:
         np.random.set_state(state["numpy"])
     if "python" in state and state["python"] is not None:

@@ -1,0 +1,112 @@
+# Retrospective active-learning benchmark on the training HDF5 (EXP-0009)
+# =========================================================================
+#   uv run python scripts/al_retro_loop.py splits --config scripts/config_al_retro_loop.yaml
+#   uv run python scripts/al_retro_loop.py cycle0 --config scripts/config_al_retro_loop.yaml --device-index 0
+#   uv run python scripts/al_retro_loop.py run    --config scripts/config_al_retro_loop.yaml \
+#       --strategy random --cycle0-run <cycle-0 run dir> --device-index 0
+#
+# The labels already exist; the loop hides them and reveals them only for the
+# records a strategy selects. No Monte Carlo, no candidate generation, no cost
+# axis: the question is how the sampling strategy shapes the training progress.
+# Guide: scripts/docs/al_retro_loop.md. Design: docs/active_learning_pipeline.md.
+
+experiment: EXP-0009
+
+# ── Data ──────────────────────────────────────────────────────────────────
+dataset_path: /scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5
+# Mandatory. A missing file is an error, never an unfiltered set. A copy is
+# vendored at data/excluded_indexes/ and cross-checked against this one.
+exclude_indexes_path: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
+# sample_id -> anatomy, patient_key of the difficulty study; feeds the selection
+# fingerprint. Optional: without it patient and anatomy read "unknown".
+record_provenance_csv: /scratch/mstryja/adota_runs/20260707_124010/figures/acquisition/uuid_provenance_map.csv
+
+# ── Splits (written once by the `splits` stage, read by every run) ─────────
+splits_dir: /scratch/mstryja/adota_runs/al_retro/splits
+runs_dir: /scratch/mstryja/adota_runs/al_retro
+val_fraction: 0.15        # V, drawn from D with train_val_split (train_adota's mechanism)
+initial_fraction: 0.20    # the cycle-0 set, drawn from T the same way
+split_seed: 42
+initial_seed: 20260910
+max_records: null         # smoke tests only
+
+# ── The loop ──────────────────────────────────────────────────────────────
+batch_fraction: 0.10      # N = 10 percent of |T| per cycle
+n_cycles: 5
+epochs_per_cycle: 50
+eval_every_n_epochs: 5    # full metric set on the subsample; loss every epoch on all of V
+eval_subsample_size: 1000
+eval_subsample_seed: 20260910
+strategy: random          # random | score_topk | stratified_score (override on the CLI)
+seed: 1234
+device_index: 0
+checkpoint_every_n_epochs: 10
+
+# ── Scoring (cycle 1 onward, on the fly, through the scorer interface) ────
+scorer:
+  name: difficulty
+  scorer_path: src/acquisition/data/analytic_scorer.json   # DifficultyScorer.load default
+  variant: "full (ridge)"
+  arm: null
+  n_workers: 12
+
+# ── Validation metrics ────────────────────────────────────────────────────
+# 2%/2mm with a 10 percent dose cutoff on the torch backend; named in every
+# filename and caption.
+gamma_params:
+  dose_percent_threshold: 2
+  distance_mm_threshold: 2
+  interp_fraction: 10
+  max_gamma: 2
+  lower_percent_dose_cutoff: 10
+  random_subset: null
+  local_gamma: false
+  quiet: true
+gamma_resolution_mm: [2.0, 2.0, 2.0]
+gamma_cutoff_percent: 10.0
+gamma_backend: torch
+
+# ── Training (TrainingConfig fields; the model is trained from scratch) ───
+training:
+  scale:
+    min_ds: 0.0
+    max_ds: 25277028.0
+    min_ct: -1024
+    max_ct: 3071
+    min_energy: 70.0
+    max_energy: 270.0
+  batch_size: 56
+  num_workers: 4
+  augmentation: true
+  normalize_flux_only: true
+  learning_rate: 0.0005
+  weight_decay: 0.001
+  lr_factor: 0.9
+  lr_patience: 20
+  compile: true             # both relax cuDNN determinism; turn off for a bit-exact resume check
+  compile_mode: default
+  allow_tf32: true
+  initial_weight_mse: 0.7
+  initial_weight_ps: 0.3
+  balancer_smoothing: 0.9
+  adaptive_after_epoch: 10000
+  loss_mode: mse_idd
+  lps_dx_mm: 2.0
+  lps_dy_mm: 2.0
+  input_shape: [2, 160, 30, 30]
+  num_transformers: 1
+  num_heads: 4
+  dim_feedforward: null
+  num_levels: 4
+  enc_features: 32
+  kernel_size: 3
+  convolutional_steps: 2
+  conv_hidden_channels: 64
+  dropout_rate: 0.1
+  causal: true
+  zero_padding: true
+  last_activation: false
+  num_forward: 2
+  weight_standardization: false
+  norm_layer: batch
+  weight_init: default

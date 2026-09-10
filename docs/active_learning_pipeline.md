@@ -263,6 +263,19 @@ say so; equalise the budget in seconds rather than beamlets; or drive
 `n_cts_per_cycle` low enough that both strategies pack similarly. **The first
 results must state which was used.**
 
+## 12. The retrospective benchmark (EXP-0009)
+
+Before the prospective loop above buys a single Monte Carlo label, the same cycle
+runs retrospectively on the reference HDF5 set: the labels exist, the loop hides
+them and reveals them only for the records a strategy selects, and the model is
+trained from scratch on a fixed schedule ``0.2 |T| + c N``. It answers a narrower
+question, how the sampling strategy shapes the training progress at equal record
+count, and it is a lower bound and a design filter rather than a result: the pool
+was itself drawn uniformly, so a retrospective run can only reweight what is
+present and understates what a prospective loop finds in the far tail. Code:
+``src/active_learning/retrospective/``; entry points ``scripts/al_retro_loop.py``
+and ``scripts/al_compare.py``; guide ``scripts/docs/al_retro_loop.md``.
+
 ## 11. What the first runs measured
 
 From the end-to-end smoke run of 2026-09-08 (`scripts/config_al_smoke.yaml`),

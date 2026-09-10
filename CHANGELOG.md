@@ -81,6 +81,35 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 - `src.evaluation.sources.MultiDirSource`: a `DirSource` spanning several
   directories, which is what any set assembled across patients looks like.
 
+### Fixed
+
+- `CheckpointManager.load` restored the RNG state from the loaded snapshot as
+  is, so a resume with `device=cuda:N` failed with "RNG state must be a
+  torch.ByteTensor": `map_location` had moved the generator states to the
+  device. They are moved back to the CPU before `set_rng_state`.
+
+### Added (retrospective active learning)
+
+- **`src/active_learning/retrospective/`**: the retrospective benchmark on the
+  training HDF5 (EXP-0009). `dataset` (the exclusion list, the frozen validation
+  set and the cycle-0 set through `train_val_split`, the growth schedule),
+  `scoring` (the `PoolScorer` interface and `DifficultyPoolScorer`, which reads
+  the CT, the flux and the energy of a record and never its dose), `sampling`
+  (a strategy registry with `random`, `score_topk` and `stratified_score`, and
+  the selection fingerprint), `validation` (the fixed evaluation subsample; the
+  per-sample gamma on the torch backend, MAPE, RDE and dR80 with the plateau
+  guard), `trainer` (one cycle on top of `src.training`), `loop` (the splits
+  stage, the cycle-0 baseline, the strategy runs, their manifests and resume)
+  and `compare` (reading runs back, the boundary table, epochs to quality).
+- **`scripts/al_retro_loop.py`** (`splits`, `cycle0`, `run`) and
+  **`scripts/al_compare.py`** with `config_al_retro_loop.yaml`,
+  `config_al_retro_smoke.yaml` and `config_al_compare.yaml`. Guide:
+  `scripts/docs/al_retro_loop.md`.
+- **`src/figures/al_curves.py`**: `training_curves_figure`,
+  `quality_curves_figure` and `selection_fingerprint_figure`, the multi-run
+  learning-curve and selection figures, saved through
+  `save_figure_as_publication_formats`.
+
 ## [1.5.0] - 2026-09-03
 
 A GPU gamma index. `pymedphys.gamma` dominated gamma pass rate evaluation --

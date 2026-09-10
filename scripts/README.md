@@ -24,6 +24,7 @@ options, config reference, outputs, and requirements.
 | [`train_adota.py`](train_adota.py) | `config_train_adota.yaml` | Train the per-beamlet `DoTA3D_v3` model on an HDF5 dataset (AdamW + `ReduceLROnPlateau`, deterministic resume, full reproducibility manifest). | [docs/train_adota.md](docs/train_adota.md) |
 | [`run_model.py`](run_model.py) | `config_run_model.yaml` | Single-beamlet inference + gamma evaluation on a directory of numpy samples. | [docs/run_model.md](docs/run_model.md) |
 | [`al_build_pool.py`](al_build_pool.py), [`al_build_validation_set.py`](al_build_validation_set.py), [`al_loop.py`](al_loop.py) | `config_al.yaml`, `config_al_train.yaml` | **Active-learning loop**: split held-out CTs into pool and validation roles → generate the frozen difficulty-balanced validation set → run one arm per sampling strategy (score, label with Monte Carlo, retrain, validate) against a Monte Carlo budget. Smoke config: `config_al_smoke.yaml`. | [docs/al_loop.md](docs/al_loop.md) |
+| [`al_retro_loop.py`](al_retro_loop.py), [`al_compare.py`](al_compare.py) | `config_al_retro_loop.yaml`, `config_al_compare.yaml` | **Retrospective active-learning benchmark** on the training HDF5: apply the exclusion list and freeze the splits → train the shared cycle-0 baseline → run one sampling strategy per process (score the pool input-only, select, grow, train, validate) → compare the runs. Smoke config: `config_al_retro_smoke.yaml`. | [docs/al_retro_loop.md](docs/al_retro_loop.md) |
 
 ## Analysis & benchmarks
 

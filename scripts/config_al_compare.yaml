@@ -1,0 +1,23 @@
+# Comparison of the retrospective active-learning runs (scripts/al_compare.py)
+# ===========================================================================
+#   uv run python scripts/al_compare.py --config scripts/config_al_compare.yaml
+#
+# One entry per strategy run; the script refuses runs that do not share the
+# splits, the cycle-0 checkpoint, the evaluation subsample and the training set
+# size at every cycle. Output goes to a timestamped directory under output_dir.
+runs: []
+#  - /scratch/mstryja/adota_runs/al_retro/train_<ts>_al_EXP-0009_random_seed1234
+#  - /scratch/mstryja/adota_runs/al_retro/train_<ts>_al_EXP-0009_score_topk_seed1234
+#  - /scratch/mstryja/adota_runs/al_retro/train_<ts>_al_EXP-0009_stratified_score_seed1234
+labels: []                # optional, one per run; defaults to the strategy name
+output_dir: /scratch/mstryja/adota_runs/al_retro/compare
+title: "Retrospective active learning (EXP-0009)"
+
+# Epochs-to-quality thresholds, read off the subsample metrics after the fact.
+# Metric names are the `sub_` columns of the flattened metrics log.
+thresholds:
+  sub_gpr_mean:            {value: 0.95, direction: ge}
+  sub_gpr_p05:             {value: 0.90, direction: ge}
+  sub_gpr_frac_below_95:   {value: 0.10, direction: le}
+  sub_mape_pct_mean:       {value: 5.0,  direction: le}
+  sub_abs_dr80_p95_mm:     {value: 2.0,  direction: le}
