@@ -25,7 +25,7 @@ design filter for it.
 ## Order of operations
 
 ```bash
-# 1. Splits. Exclusion list -> D; V = 15% of D (train_adota's split mechanism);
+# 1. Splits. Exclusion list -> D; data_fraction of D; V = 15% of that (train_adota's split mechanism);
 #    T = D \ V; cycle-0 set = 20% of T; pool = the rest. Written once to splits_dir.
 uv run python scripts/al_retro_loop.py splits --config scripts/config_al_retro_loop.yaml
 
@@ -86,7 +86,7 @@ validate; write the cycle manifest
 
 ## Options
 
-`splits`: `--config`, `--max-records` (smoke tests only), `--splits-dir`.
+`splits`: `--config`, `--data-fraction`, `--max-records` (smoke tests only), `--splits-dir`.
 `cycle0`: `--config`, `--device-index`, `--epochs-per-cycle`, `--seed`, `--runs-dir`,
 `--resume-dir`. `run`: the same plus `--strategy`, `--cycle0-run` (required),
 `--n-cycles`. CLI > YAML > defaults, through `merge_config`.
@@ -96,6 +96,7 @@ validate; write the cycle manifest
 | Key | Default | Meaning |
 |---|---|---|
 | `dataset_path` | the training HDF5 | Every record the loop may reveal. |
+| `data_fraction`, `data_fraction_seed` | 0.30, 20260911 | Share of D the experiment uses, drawn once before any split. The pilot runs at 0.30; scale-ups at 0.4, 0.5, 0.6, 1.0 each get their own `splits_dir` and `runs_dir`, and the run name carries `d<percent>`. |
 | `exclude_indexes_path` | the `IndexesExclude_...txt` list | Mandatory; a missing file is an error. Cross-checked against `data/excluded_indexes/`. |
 | `record_provenance_csv` | the study's `uuid_provenance_map.csv` | Patient and anatomy per record for the fingerprint; optional. |
 | `splits_dir`, `runs_dir` | under `/scratch/mstryja/adota_runs/al_retro` | Where the splits and the runs go. |

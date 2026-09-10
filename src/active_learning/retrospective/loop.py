@@ -83,8 +83,14 @@ class RetroConfig:
     record_provenance_csv: Optional[str] = PROVENANCE_CSV
     splits_dir: str = "/scratch/mstryja/adota_runs/al_retro/splits"
     runs_dir: str = "/scratch/mstryja/adota_runs/al_retro"
+    data_fraction: float = 1.0
+    """Share of ``D`` the experiment uses, drawn uniformly at random with
+    ``data_fraction_seed`` before any split; V, T, the cycle-0 set and the pool
+    all come from that subset. 0.3 is the fast pilot; 0.4, 0.5, 0.6 and 1.0 are
+    the planned scale-ups. Every value gets its own ``splits_dir``."""
+    data_fraction_seed: int = 20260911
     max_records: Optional[int] = None
-    """Subsample ``D`` before splitting; the smoke test's knob, never the real run's."""
+    """Cap on ``D`` after ``data_fraction``; the smoke test's knob, never the real run's."""
     val_fraction: float = 0.15
     initial_fraction: float = 0.20
     split_seed: int = 42
@@ -149,6 +155,16 @@ def prepare_splits(cfg: RetroConfig) -> Dict[str, Any]:
     check = cross_check_exclusions(Path(cfg.exclude_indexes_path))
     all_ids = read_record_ids(Path(cfg.dataset_path))
     kept = apply_exclusions(all_ids, excluded)
+    n_full = len(kept)
+    if not 0.0 < cfg.data_fraction <= 1.0:
+        raise ValueError(f"data_fraction must lie in (0, 1], got {cfg.data_fraction}")
+    if cfg.data_fraction < 1.0:
+        n_keep = int(round(cfg.data_fraction * len(kept)))
+        rng = np.random.RandomState(cfg.data_fraction_seed)
+        picked = sorted(rng.choice(len(kept), size=n_keep, replace=False).tolist())
+        kept = [kept[i] for i in picked]
+        logger.info("data_fraction %.2f: D reduced from %d to %d records (seed %d)",
+                    cfg.data_fraction, n_full, len(kept), cfg.data_fraction_seed)
     if cfg.max_records is not None and cfg.max_records < len(kept):
         rng = np.random.RandomState(cfg.seed)
         picked = sorted(rng.choice(len(kept), size=cfg.max_records, replace=False).tolist())
@@ -161,7 +177,8 @@ def prepare_splits(cfg: RetroConfig) -> Dict[str, Any]:
     summary_path = write_splits(splits, out, spec, extra={
         "dataset_path": cfg.dataset_path, "exclude_indexes_path": cfg.exclude_indexes_path,
         "n_records_file": len(all_ids), "n_excluded_listed": len(excluded),
-        "n_after_exclusion": len(kept) if cfg.max_records is None else len(kept),
+        "n_after_exclusion": n_full, "data_fraction": cfg.data_fraction,
+        "data_fraction_seed": cfg.data_fraction_seed, "n_after_data_fraction": len(kept),
         "max_records": cfg.max_records, "exclusion_cross_check": check})
     meta = record_metadata(Path(cfg.dataset_path), splits.training + splits.validation,
                            Path(cfg.record_provenance_csv) if cfg.record_provenance_csv else None,
@@ -185,6 +202,8 @@ class RunInputs:
         digest = hashlib.sha256("\n".join(self.subsample_ids).encode()).hexdigest()
         return {"splits_dir": self.splits_summary.get("splits_dir"),
                 "splits_fingerprint": self.splits.fingerprint(),
+                "data_fraction": self.splits_summary.get("data_fraction", 1.0),
+                "n_after_data_fraction": self.splits_summary.get("n_after_data_fraction"),
                 "n_validation": len(self.splits.validation),
                 "n_training": len(self.splits.training), "n_initial": len(self.splits.initial),
                 "n_pool_start": len(self.splits.pool), "batch_size": self.batch_size,

@@ -23,6 +23,9 @@ exclude_indexes_path: /home/mstryja/projects/dota_pytorch/auxilary_files/Indexes
 # fingerprint. Optional: without it patient and anatomy read "unknown".
 record_provenance_csv: /scratch/mstryja/adota_runs/20260707_124010/figures/acquisition/uuid_provenance_map.csv
 
+data_fraction: 1.0        # the smoke caps D with max_records instead
+data_fraction_seed: 20260911
+
 # ── Splits (written once by the `splits` stage, read by every run) ─────────
 splits_dir: /scratch/mstryja/adota_runs/al_retro_smoke/splits
 runs_dir: /scratch/mstryja/adota_runs/al_retro_smoke

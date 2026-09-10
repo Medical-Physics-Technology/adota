@@ -21,9 +21,19 @@ exclude_indexes_path: /home/mstryja/projects/dota_pytorch/auxilary_files/Indexes
 # fingerprint. Optional: without it patient and anatomy read "unknown".
 record_provenance_csv: /scratch/mstryja/adota_runs/20260707_124010/figures/acquisition/uuid_provenance_map.csv
 
+# ── Scale of the experiment ───────────────────────────────────────────────
+# data_fraction is the share of D (the set after exclusion) the experiment
+# uses, drawn once with data_fraction_seed before any split; V, T, the cycle-0
+# set and the pool all come from that subset. 0.30 is the fast pilot (gamma on
+# the full validation set at every boundary is the cost driver); 0.4, 0.5, 0.6
+# and 1.0 are the planned scale-ups. Give every fraction its own splits_dir and
+# runs_dir; the run name carries d<percent>.
+data_fraction: 0.30
+data_fraction_seed: 20260911
+
 # ── Splits (written once by the `splits` stage, read by every run) ─────────
-splits_dir: /scratch/mstryja/adota_runs/al_retro/splits
-runs_dir: /scratch/mstryja/adota_runs/al_retro
+splits_dir: /scratch/mstryja/adota_runs/al_retro/d30/splits
+runs_dir: /scratch/mstryja/adota_runs/al_retro/d30
 val_fraction: 0.15        # V, drawn from D with train_val_split (train_adota's mechanism)
 initial_fraction: 0.20    # the cycle-0 set, drawn from T the same way
 split_seed: 42

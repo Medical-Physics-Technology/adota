@@ -49,6 +49,10 @@ def _config(config: Path, **overrides) -> RetroConfig:
     return RetroConfig.from_dict(merged)
 
 
+def _run_name(cfg: RetroConfig, tail: str) -> str:
+    return f"al_{cfg.experiment}_d{int(round(100 * cfg.data_fraction))}_{tail}_seed{cfg.seed}"
+
+
 def _start_run(cfg: RetroConfig, name: str, resume_dir: Optional[Path]) -> Path:
     run_dir = Path(resume_dir) if resume_dir else setup_training_run_directory(
         Path(cfg.runs_dir), name)
@@ -62,18 +66,21 @@ def _start_run(cfg: RetroConfig, name: str, resume_dir: Optional[Path]) -> Path:
 @app.command()
 def splits(
     config: ConfigOption = DEFAULT_CONFIG,
+    data_fraction: Annotated[Optional[float], typer.Option(
+        help="Share of D the experiment uses, drawn before any split.")] = None,
     max_records: Annotated[Optional[int], typer.Option(
-        help="Subsample D before splitting. Smoke tests only.")] = None,
+        help="Cap on D after the fraction. Smoke tests only.")] = None,
     splits_dir: Annotated[Optional[Path], typer.Option()] = None,
 ) -> None:
-    """Apply the exclusion list; write V, T and the cycle-0 set to CSV."""
+    """Apply the exclusion list; take the data fraction; write V, T and the cycle-0 set."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                         force=True)
-    cfg = _config(config, max_records=max_records,
+    cfg = _config(config, data_fraction=data_fraction, max_records=max_records,
                   splits_dir=str(splits_dir) if splits_dir else None)
     summary = prepare_splits(cfg)
     typer.echo(f"|D| after exclusion: {summary['n_after_exclusion']} "
-               f"(file {summary['n_records_file']}, listed {summary['n_excluded_listed']})")
+               f"(file {summary['n_records_file']}, listed {summary['n_excluded_listed']}); "
+               f"data fraction {summary['data_fraction']:.2f} -> {summary['n_after_data_fraction']}")
     typer.echo(f"|V| = {summary['n_validation']}  |T| = {summary['n_training']}  "
                f"cycle-0 = {summary['n_initial']}  pool = {summary['n_pool']}")
     typer.echo(f"splits: {cfg.splits_dir}  fingerprint {summary['fingerprint'][:12]}")
@@ -92,7 +99,7 @@ def cycle0(
     """Train the shared cycle-0 baseline from random weights."""
     cfg = _config(config, device_index=device_index, epochs_per_cycle=epochs_per_cycle,
                   seed=seed, runs_dir=str(runs_dir) if runs_dir else None)
-    run_dir = _start_run(cfg, f"al_{cfg.experiment}_cycle0_seed{cfg.seed}", resume_dir)
+    run_dir = _start_run(cfg, _run_name(cfg, "cycle0"), resume_dir)
     checkpoint = run_cycle0(cfg, run_dir)
     typer.echo(f"cycle-0 run: {run_dir}\ncheckpoint: {checkpoint}")
 
@@ -118,7 +125,7 @@ def run(
     if cfg.strategy not in available_strategies():
         raise typer.BadParameter(f"unknown strategy {cfg.strategy!r}; "
                                  f"registered: {available_strategies()}")
-    run_dir = _start_run(cfg, f"al_{cfg.experiment}_{cfg.strategy}_seed{cfg.seed}", resume_dir)
+    run_dir = _start_run(cfg, _run_name(cfg, cfg.strategy), resume_dir)
     cycles = run_strategy(cfg, run_dir, Path(cycle0_run))
     last = cycles[-1].get("metrics_full") or {}
     typer.echo(f"strategy {cfg.strategy}: {len(cycles) - 1} cycles -> {run_dir}\n"

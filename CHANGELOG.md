@@ -101,6 +101,9 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   guard), `trainer` (one cycle on top of `src.training`), `loop` (the splits
   stage, the cycle-0 baseline, the strategy runs, their manifests and resume)
   and `compare` (reading runs back, the boundary table, epochs to quality).
+- `RetroConfig.data_fraction` (with `data_fraction_seed`): the share of the
+  post-exclusion set the experiment uses, drawn once before any split, so the
+  benchmark scales from a 30 percent pilot to the full set by one config key.
 - **`scripts/al_retro_loop.py`** (`splits`, `cycle0`, `run`) and
   **`scripts/al_compare.py`** with `config_al_retro_loop.yaml`,
   `config_al_retro_smoke.yaml` and `config_al_compare.yaml`. Guide:

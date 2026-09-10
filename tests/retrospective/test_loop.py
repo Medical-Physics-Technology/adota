@@ -1,7 +1,8 @@
 """End to end on CPU with a synthetic HDF5 set and a tiny model: the three
 stages, the schedule, the manifests, the cycle-0 restore and the resume.
 
-Marked ``slow``: the metric set runs gamma on the full crop on CPU.
+The two end-to-end tests are marked ``slow``: the metric set runs gamma on the
+full crop on CPU.
 """
 from __future__ import annotations
 
@@ -30,8 +31,6 @@ from src.active_learning.retrospective.loop import (
 
 from .conftest import write_dataset, write_exclusion_file
 
-pytestmark = pytest.mark.slow
-
 IDS = [f"rec{i:03d}" for i in range(26)]
 TINY_TRAINING = {
     "batch_size": 4, "num_workers": 0, "compile": False, "allow_tf32": False,
@@ -57,6 +56,7 @@ def make_config(tmp_path: Path, strategy: str = "random") -> RetroConfig:
         training=dict(TINY_TRAINING))
 
 
+@pytest.mark.slow
 def test_the_three_stages_end_to_end(tmp_path):
     cfg = make_config(tmp_path, "random")
     summary = prepare_splits(cfg)
@@ -112,6 +112,7 @@ def test_the_three_stages_end_to_end(tmp_path):
     assert not e2q.loc[e2q["metric"] == "sub_mape_pct_mean", "reached"].item()
 
 
+@pytest.mark.slow
 def test_a_score_strategy_scores_the_pool_each_cycle(tmp_path):
     cfg = make_config(tmp_path, "score_topk")
     prepare_splits(cfg)
@@ -127,3 +128,20 @@ def test_a_score_strategy_scores_the_pool_each_cycle(tmp_path):
     chosen = pd.read_csv(run_dir / "cycles" / "cycle_01" / "selection.csv")
     assert set(chosen["sample_id"]) == set(first.nlargest(2, "score")["sample_id"])
     assert cycles[1]["scoring_seconds"] > 0 and cycles[1]["score_distribution"]["n_scored"] == 16
+
+
+@pytest.mark.parametrize("fraction", [1.0, 0.5])
+def test_data_fraction_subsamples_d_before_any_split(tmp_path, fraction):
+    cfg = make_config(tmp_path)
+    cfg.data_fraction = fraction
+    summary = prepare_splits(cfg)
+    assert summary["n_after_exclusion"] == 24
+    assert summary["n_after_data_fraction"] == round(24 * fraction)
+    inputs = load_run_inputs(cfg)
+    total = len(inputs.splits.validation) + len(inputs.splits.training)
+    assert total == round(24 * fraction)
+    again = prepare_splits(cfg)
+    assert again["fingerprint"] == summary["fingerprint"]        # same seed, same subset
+    if fraction < 1.0:
+        cfg.data_fraction_seed += 1
+        assert prepare_splits(cfg)["fingerprint"] != summary["fingerprint"]
