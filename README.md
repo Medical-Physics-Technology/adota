@@ -1,4 +1,4 @@
-# ADoTA: Adaptive Dose Targeting with Transformers
+# ADoTA: Angle dependent dose transformer algorithm for fast proton therapy dose calculations
 
 ADoTA is a deep-learning framework for per-beamlet proton dose prediction using a 3D U-Net architecture augmented with transformer attention. Given a CT volume and an analytical flux projection for a single pencil beam, the model predicts the Monte Carlo dose distribution directly, enabling fast and accurate dose estimation for proton therapy treatment planning.
 
