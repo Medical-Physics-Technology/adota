@@ -109,7 +109,10 @@ def main(
     for r in runs:
         curves[r.label].to_csv(figures / f"F2_F3_quality_{r.label}_gamma_{gamma_label}.csv",
                                index=False)
-    quality_curves_figure(curves, x="n_train", x_label="Training records", gamma_caption=caption,
+    boundary_caption = (f"Gamma {gamma_label.replace('_', ' ')}; the full validation set at the "
+                        f"cycle boundaries.")
+    quality_curves_figure(curves, x="n_train", x_label="Training records", prefix="full_",
+                          gamma_caption=boundary_caption,
                           figure_path=str(figures / f"F2_quality_vs_n_train_gamma_{gamma_label}"),
                           title=cfg["title"])
     quality_curves_figure(curves, x="cumulative_epoch", x_label="Cumulative epoch",

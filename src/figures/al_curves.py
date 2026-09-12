@@ -106,7 +106,9 @@ def quality_curves_figure(curves: Dict[str, pd.DataFrame], *, x: str, x_label: s
     """F2 and F3: the metric panels against ``x`` (``n_train`` or ``cumulative_epoch``).
 
     Rows flagged ``cycle_boundary`` get a marker; the caption names the gamma
-    criteria, as every gamma figure must.
+    criteria, as every gamma figure must. Against ``n_train`` only the boundary
+    rows are drawn, since the training set size is constant inside a cycle and
+    the cadence rows would collapse into vertical spikes.
     """
     n = len(panels)
     n_cols = 3
@@ -120,8 +122,10 @@ def quality_curves_figure(curves: Dict[str, pd.DataFrame], *, x: str, x_label: s
             if column not in frame:
                 continue
             style = _style(label, index)
-            ax.plot(frame[x], frame[column] * factor, linewidth=1.3, alpha=0.9, **style)
             marks = frame[frame["cycle_boundary"]] if "cycle_boundary" in frame else frame.iloc[:0]
+            if x == "n_train":
+                frame = marks
+            ax.plot(frame[x], frame[column] * factor, linewidth=1.3, alpha=0.9, **style)
             ax.scatter(marks[x], marks[column] * factor, color=style["color"], s=28,
                        edgecolor="white", linewidth=0.8, zorder=5)
         style_axis(ax, xlabel=x_label, ylabel=ylabel, title=ylabel)
