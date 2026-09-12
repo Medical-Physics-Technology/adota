@@ -39,6 +39,79 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 - `src.mc_generation.robustness`: `_FieldGeometry` / `_field_geometry` are now
   public as `FieldGeometry` / `field_geometry`; the underscore names remain as
   aliases.
+- **`generate_beamlets` is the generator's beamlet entry point.**
+  `src.mc_generation.robustness._generate_energy_block` now delegates to it.
+  It takes an explicit list of beamlets and optional output stems instead of a
+  lattice, so the active-learning oracle labels an arbitrary selection through
+  exactly the MC path and QA gates the reference datasets used. Lattice sweeps
+  are unaffected: with no `stems`, filenames stay `a{ix}_{iy}`.
+- `RobustnessConfig.beamlet_block_size` caps the spots per beamlet-mode MCsquare
+  call. `None` (the default) keeps the previous behaviour of sending a whole
+  block at once, which holds `len(spots) x grid` of dense dose on scratch -- over
+  100 GB for a 324-spot thoracic field.
+- `TrainingConfig` gains `al_dir_sources`, `al_oversample_fraction`,
+  `al_steps_per_epoch`, `al_preload_dir_records` and `max_val_batches`. With
+  `al_dir_sources` set, `build_dataloaders` returns the union loaders; unset,
+  every existing run is byte-identical.
+- `CheckpointManager.load_weights_only` and `src.adota.utils.load_model` now
+  accept either checkpoint shape: a training snapshot (weights under `"model"`)
+  or the bare `state_dict` the deployed checkpoints under `models/` are stored
+  as. Warm-starting the loop from `DoTA_v3_grid_search_v11` needs the second.
+- `src.loaders.dir_based` no longer pins its own logger to `DEBUG`. A library
+  module inherits the level the application configures; pinning it leaked a
+  per-record line into every caller's log. Set the level in your entry point to
+  get the old verbosity back.
+
+### Added (active learning)
+
+- **`src/active_learning/`**: `pool` (CT roles and the leakage rule, with the
+  selection recorded in `registry/al_pool_selection.csv`), `candidates`
+  (version-0 candidate generation and content-addressed ids; scoring a pool of
+  CTs one worker per CT), `sampling` (`random`, `score`, `score_topk`,
+  `stratified_score`, with per-patient and per-energy quotas), `oracle`
+  (Monte Carlo labelling of a selected batch, and the group-cost estimate),
+  `dataset` (`DirBeamletDataset` and the oversampled union with the HDF5 set),
+  `validation` (the difficulty-balanced recipe, and GPR / MAPE / RDE / **dR80**
+  on the frozen set), `training` (the retraining step) and `loop` (the cycle,
+  its manifest and its resume).
+- **`scripts/al_build_pool.py`, `scripts/al_build_validation_set.py`,
+  `scripts/al_loop.py`** with `config_al.yaml`, `config_al_train.yaml` and the
+  `config_al_smoke.yaml` / `config_al_train_smoke.yaml` pair that runs the whole
+  pipeline in minutes. Guide: `scripts/docs/al_loop.md`.
+- `src.evaluation.sources.MultiDirSource`: a `DirSource` spanning several
+  directories, which is what any set assembled across patients looks like.
+
+### Fixed
+
+- `CheckpointManager.load` restored the RNG state from the loaded snapshot as
+  is, so a resume with `device=cuda:N` failed with "RNG state must be a
+  torch.ByteTensor": `map_location` had moved the generator states to the
+  device. They are moved back to the CPU before `set_rng_state`.
+
+### Added (retrospective active learning)
+
+- **`src/active_learning/retrospective/`**: the retrospective benchmark on the
+  training HDF5 (EXP-0009). `dataset` (the exclusion list, the frozen validation
+  set and the cycle-0 set through `train_val_split`, the growth schedule),
+  `scoring` (the `PoolScorer` interface and `DifficultyPoolScorer`, which reads
+  the CT, the flux and the energy of a record and never its dose), `sampling`
+  (a strategy registry with `random`, `score_topk` and `stratified_score`, and
+  the selection fingerprint), `validation` (the fixed evaluation subsample; the
+  per-sample gamma on the torch backend, MAPE, RDE and dR80 with the plateau
+  guard), `trainer` (one cycle on top of `src.training`), `loop` (the splits
+  stage, the cycle-0 baseline, the strategy runs, their manifests and resume)
+  and `compare` (reading runs back, the boundary table, epochs to quality).
+- `RetroConfig.data_fraction` (with `data_fraction_seed`): the share of the
+  post-exclusion set the experiment uses, drawn once before any split, so the
+  benchmark scales from a 30 percent pilot to the full set by one config key.
+- **`scripts/al_retro_loop.py`** (`splits`, `cycle0`, `run`) and
+  **`scripts/al_compare.py`** with `config_al_retro_loop.yaml`,
+  `config_al_retro_smoke.yaml` and `config_al_compare.yaml`. Guide:
+  `scripts/docs/al_retro_loop.md`.
+- **`src/figures/al_curves.py`**: `training_curves_figure`,
+  `quality_curves_figure` and `selection_fingerprint_figure`, the multi-run
+  learning-curve and selection figures, saved through
+  `save_figure_as_publication_formats`.
 
 ## [1.5.0] - 2026-09-03
 

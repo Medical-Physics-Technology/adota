@@ -23,6 +23,8 @@ options, config reference, outputs, and requirements.
 | [`run_plan_opentps.py`](run_plan_opentps.py) | `config_run_plan_opentps.yaml` | **End-to-end plan-level dose pipeline**: plan directory → per-spot inputs → inference → accumulated plan dose → validation (DVH, gamma) vs Monte-Carlo. Staged or fused (`stream`), optional 2 mm field grid (`grid_factor`). | [docs/run_plan_opentps.md](docs/run_plan_opentps.md) |
 | [`train_adota.py`](train_adota.py) | `config_train_adota.yaml` | Train the per-beamlet `DoTA3D_v3` model on an HDF5 dataset (AdamW + `ReduceLROnPlateau`, deterministic resume, full reproducibility manifest). | [docs/train_adota.md](docs/train_adota.md) |
 | [`run_model.py`](run_model.py) | `config_run_model.yaml` | Single-beamlet inference + gamma evaluation on a directory of numpy samples. | [docs/run_model.md](docs/run_model.md) |
+| [`al_build_pool.py`](al_build_pool.py), [`al_build_validation_set.py`](al_build_validation_set.py), [`al_loop.py`](al_loop.py) | `config_al.yaml`, `config_al_train.yaml` | **Active-learning loop**: split held-out CTs into pool and validation roles → generate the frozen difficulty-balanced validation set → run one arm per sampling strategy (score, label with Monte Carlo, retrain, validate) against a Monte Carlo budget. Smoke config: `config_al_smoke.yaml`. | [docs/al_loop.md](docs/al_loop.md) |
+| [`al_retro_loop.py`](al_retro_loop.py), [`al_compare.py`](al_compare.py) | `config_al_retro_loop.yaml`, `config_al_compare.yaml` | **Retrospective active-learning benchmark** on the training HDF5: apply the exclusion list and freeze the splits → train the shared cycle-0 baseline → run one sampling strategy per process (score the pool input-only, select, grow, train, validate) → compare the runs. Smoke config: `config_al_retro_smoke.yaml`. | [docs/al_retro_loop.md](docs/al_retro_loop.md) |
 
 ## Analysis & benchmarks
 
@@ -55,6 +57,7 @@ uv run python scripts/run-tests.py unit --fast   # skips the slow perf suite
 | [`summarize_publication_timing.py`](summarize_publication_timing.py) | Collect those plans' `pipeline_timing.json` into per-plan and per-step tables + `run_logs/publication_timing_summary.json`. |
 | [`run_grid_factor_ab.sh`](run_grid_factor_ab.sh) | A/B harness: `grid_factor` 1 vs 2 per plan, archived for a go/no-go comparison. |
 | [`run_ablation.sh`](run_ablation.sh) | Launch the 2×2 training ablation study (see [`ablation/`](ablation/)). |
+| [`run_al_retro.sh`](run_al_retro.sh) | Run the retrospective active-learning benchmark unattended: splits, cycle 0, the three strategies queued over the free GPUs, then the comparison. Knobs via `CONFIG`, `GPUS`, `STRATEGIES`, `CYCLE0_RUN`, `SKIP_SPLITS`. |
 
 Both plan runners are documented in the [plan-pipeline guide](docs/run_plan_opentps.md#batch--reproducibility-helpers);
 **edit their `PLANS=( ... )` array to your own plan directories before running.**

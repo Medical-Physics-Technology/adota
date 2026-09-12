@@ -1,0 +1,148 @@
+# Active-learning loop: pool, candidates, validation set, Monte Carlo, cycles
+# =============================================================================
+#   uv run python scripts/al_build_pool.py            --config scripts/config_al.yaml
+#   uv run python scripts/al_build_validation_set.py  --config scripts/config_al.yaml --dry-run
+#   uv run python scripts/al_build_validation_set.py  --config scripts/config_al.yaml --num-threads 48
+#   uv run python scripts/al_loop.py --config scripts/config_al.yaml --strategy random --device-index 1
+#   uv run python scripts/al_loop.py --config scripts/config_al.yaml --strategy score  --device-index 2
+#
+# One config for all three stages, so the beamlets the loop is judged on and the
+# beamlets it buys come from the same candidate space and the same MC settings.
+# Design: docs/active_learning_pipeline.md.
+
+name: al
+
+# --- The CT pool -------------------------------------------------------------
+# Training consumed the first ~50 patients of each sorted collection, so only the
+# tail is safe. Of the last 30, the patients already claimed by the robustness
+# experiment are excluded, five per anatomy become validation CTs and the rest the
+# pool. Head-and-neck and brain plug in as further entries when they arrive.
+datasets:
+  - name: Lung-PET-CT-Dx
+    anatomy: thoracic
+    root: /data/lung_cancer_dataset/manifest-1608669183333
+    collection: Lung-PET-CT-Dx
+    qc: {min_slices: 70, max_spacing_xy: 1.5, max_spacing_z: 2.0, min_z_extent_mm: 260.0}
+  - name: StageII-Colorectal
+    anatomy: abdominal
+    root: /scratch/mstryja/manifest-1646429317311
+    qc: {min_z_extent_mm: 260.0}
+
+pool:
+  pool_csv: registry/al_pool_selection.csv
+  n_holdout: 30           # patients from the tail of each collection
+  n_validation: 5         # of those, per anatomy; the rest is the pool
+  exclude_files:
+    - registry/robustness_clean_selection.csv
+    - registry/robustness_multipatient_selection.csv
+
+# --- Candidate space (version 0) ---------------------------------------------
+# Random gantry (the CT is rotated to the canonical beam's-eye frame, so gantry is
+# metadata), isocenter at the grid centre, energy from a discrete layer set, steering
+# uniform on the generator's lattice. The steering window is +/-1.5 deg, not 2.0: at
+# 2 deg the corner beamlets walk out of thin thoracic anatomy (EXP-0005 screening).
+# The energy layers span the training distribution, which runs 70-270 MeV with its
+# mass between 70 and 190.
+candidates:
+  n_gantry_per_ct: 2      # one CT rotation each; the cost driver of scoring
+  n_per_field: 420        # 2 x 420 = 840 candidates per CT
+  energies: [80.0, 105.0, 130.0, 155.0, 180.0]
+  theta_half_range_deg: 1.5
+  lattice_n: 18
+  gantry_min_deg: 0.0
+  gantry_max_deg: 360.0
+  seed: 20260908
+
+# --- The frozen validation set ------------------------------------------------
+# Generated once, before cycle 1, and never changed: equal counts per score decile,
+# stratified by anatomy and energy layer. Roughly 4 h of Monte Carlo at these
+# settings; --dry-run reports the exact estimate before anything is simulated.
+validation_set:
+  n_beamlets: 4000
+  manifest: registry/al_validation_set.csv
+  beamlet_prefix: al_val
+  beamlet_version: 1
+  seed: 20260909
+
+# --- MCsquare engine ----------------------------------------------------------
+engine:
+  mcsquare_install: /home/mstryja/tools/mcsquare
+  mc_work_dir: /scratch/mstryja/mc_work/al
+  bdl_file: hptc_beam_model_rsnone.txt
+  scanner: default
+
+# --- Monte Carlo settings (the generator's own block, reused verbatim) --------
+# num_primaries 1e6 and beamlet mode are what the reference energy-gantry dataset
+# used: 3.3 s per beamlet measured. min_deposition_ratio 0.95 is the training-set
+# gate, not the robustness gate, because these beamlets become training data.
+# num_threads 24 so the two arms can run side by side on the 48 cores; the
+# validation build runs alone and takes --num-threads 48.
+# beamlet_block_size bounds the transient dense dose grids MCsquare writes before
+# Python crops them: 40 spots is about 16 GB on a thoracic grid.
+robustness:
+  energies: [80.0, 105.0, 130.0, 155.0, 180.0]   # candidates override this per beamlet
+  theta_x_range: [-1.5, 1.5]
+  theta_y_range: [-1.5, 1.5]
+  grid_n: 18
+  rotate_to_canonical: true
+  isocenter_mode: grid_center
+  beam_entrance_standoff_mm: 20.0
+  roi_size: [60, 60, 320]
+  iso_spacing_mm: 1.0
+  num_primaries: 1.0e6
+  num_threads: 24
+  beamlet_mode: true
+  beamlet_block_size: 40
+  rng_seed: 0
+  min_deposition_ratio: 0.95
+  output_root: /scratch/mstryja/DoTA_dataset_v2
+  experiment_prefix: al
+  experiment_version: 1
+  make_figures: false
+  overwrite: false        # resumable: beamlets already simulated are skipped
+
+# --- The cycle ----------------------------------------------------------------
+# One process is one arm. 12 CTs per cycle keeps the Monte Carlo groups fat
+# (2500 beamlets / (12 CTs x 2 gantries x 5 energies) = ~21 per group), which matters
+# because each group pays a ~12 s MCsquare setup whatever it holds.
+loop:
+  arm: warm
+  n_cycles: 2
+  beamlets_per_cycle: 2500
+  n_cts_per_cycle: 12
+  score_column: score_full
+  score_alpha: 2.0
+  max_per_patient_frac: 0.20
+  n_score_workers: 12
+  seed: 20260908
+  device_index: 1
+  beamlet_prefix: al
+  beamlet_version: 1
+  init_checkpoint: models/DoTA_v3_grid_search_v11/best_model.pth
+  hyperparams: models/DoTA_v3_grid_search_v11/hyperparams.json
+  train_config: scripts/config_al_train.yaml
+  checkpoint_selection: last
+  evaluate_initial: true
+
+runs_dir: /scratch/mstryja/adota_runs
+
+# --- Metrics ------------------------------------------------------------------
+# 3%/3mm with a 10% dose cutoff is the headline criterion; the training configs
+# default to 2%/2mm, which stays available by overriding this block.
+gamma_params:
+  dose_percent_threshold: 3
+  distance_mm_threshold: 3
+  interp_fraction: 10
+  max_gamma: 2
+  lower_percent_dose_cutoff: 10
+  random_subset: null
+  local_gamma: false
+  quiet: true
+
+scale:
+  min_ds: 0.0
+  max_ds: 25277028.0
+  min_ct: -1024
+  max_ct: 3071
+  min_energy: 70.0
+  max_energy: 270.0

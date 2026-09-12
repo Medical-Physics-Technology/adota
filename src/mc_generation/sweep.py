@@ -57,6 +57,11 @@ class RobustnessConfig:
     call instead of one call per beamlet: ~3x faster (measured), same dose, but no
     per-beamlet ``stat_uncertainty`` and the block's dense dose grids sit on disk
     together until they are cropped (see :func:`_generate_energy_block`)."""
+    beamlet_block_size: Optional[int] = None
+    """Spots per beamlet-mode MCsquare call. ``None`` sends the whole block at once,
+    which is fastest but holds ``len(spots) x grid`` of dense dose on scratch (over
+    100 GB for a 324-spot thoracic field). Set it when scratch is tight or two
+    generators run side by side; the cost is one setup (~12 s) per chunk."""
     rng_seed: int = 0
     min_deposition_ratio: float = 0.5
     output_root: str = "/scratch/mstryja/DoTA_dataset_v2"
@@ -101,6 +106,8 @@ def robustness_config_from_dict(
         num_threads=int(r.get("num_threads", 0)),
         beamlet_mode=bool(beamlet_mode if beamlet_mode is not None
                           else r.get("beamlet_mode", False)),
+        beamlet_block_size=(int(r["beamlet_block_size"])
+                            if r.get("beamlet_block_size") else None),
         rng_seed=int(r.get("rng_seed", 0)),
         min_deposition_ratio=float(r.get("min_deposition_ratio", 0.5)),
         output_root=r.get("output_root", "/scratch/mstryja/DoTA_dataset_v2"),

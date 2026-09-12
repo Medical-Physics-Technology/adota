@@ -24,8 +24,7 @@ import torch.nn.functional as F
 
 from src.utils.scallers import inverse_minmax
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger = logging.getLogger(__name__)  # no setLevel: inherit the application's level
 
 # Default scale corresponds to the low-range model, trained on the lung dataset.
 DEFAULT_SCALE = {
@@ -47,7 +46,7 @@ def get_single_record(
     beamlet_angle: float = False,
 ) -> Tuple[torch.Tensor]:
     scale = DEFAULT_SCALE if scale is None else scale
-    print("Using scale: ", scale)
+    logger.debug("Using scale: %s", scale)
 
     x = np.load(os.path.join(storage_path, f"{id}_ct.npy"))
     flux = np.load(os.path.join(storage_path, f"{id}_flux.npy"))
@@ -80,7 +79,7 @@ def get_single_record(
     if normalize_flux:
         flux_grid = (flux_grid - flux_grid.min()) / (flux_grid.max() - flux_grid.min())
 
-    logger.info(
+    logger.debug(
         f"Loaded data for ID: {id}. Shapes - CT: {ct_grid.shape}, Dose: {dose_grid.shape}, Flux: {flux_grid.shape}"
     )
     # Perform Avarage Pooling on dimension physical dimensions

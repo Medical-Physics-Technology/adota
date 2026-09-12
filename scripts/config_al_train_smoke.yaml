@@ -1,0 +1,123 @@
+# Training config for one active-learning cycle (scripts/al_loop.py)
+# ==================================================================
+# Not run by hand: the loop copies this file, adds `al_dir_sources` pointing at the
+# beamlets bought so far, and runs scripts/train_adota.py against it once per cycle.
+#
+# A cycle is a fixed budget of optimizer steps, not a pass over the union. A cycle
+# buys a few thousand beamlets against a training split of 56k, so under uniform
+# sampling a new beamlet would be seen once every several epochs and the cycle would
+# measure nothing. Instead `al_oversample_fraction` of every batch is new material
+# and `al_steps_per_epoch` fixes the budget. This is a deliberate departure from
+# docs/active_learning_pipeline.md's "continue on the full union": the arms stay
+# comparable to each other, but neither is comparable to a plain-union baseline.
+#
+# The model block MUST match models/DoTA_v3_grid_search_v11/hyperparams.json, or the
+# warm start cannot load its weights. Note convolutional_steps: 1, which is where
+# v11 differs from scripts/config_train_adota.yaml.
+
+config_name: al_cycle_smoke
+
+# ── Data ────────────────────────────────────────────────────
+dataset_path: /scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5
+excluded_indexes_file: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
+# Identical to the split v11 trained under, so a cycle never trains on a record
+# that was in v11's validation set.
+train_test_split: 0.2
+split_random_state: 42
+
+scale:
+  min_ds: 0.0
+  max_ds: 25277028.0
+  min_ct: -1024
+  max_ct: 3071
+  min_energy: 70.0
+  max_energy: 270.0
+
+# ── Union sampling (set by the loop, defaults here) ─────────
+al_oversample_fraction: 0.25   # share of every batch drawn from bought beamlets
+al_steps_per_epoch: 20        # smoke: 1 epoch x 20 steps
+al_preload_dir_records: true   # decode the bought beamlets into RAM once (~1.7 MB each)
+
+# ── DataLoader ──────────────────────────────────────────────
+batch_size: 8
+num_workers: 2
+augmentation: true
+normalize_flux_only: true
+
+# ── Optimization ────────────────────────────────────────────
+# Fine-tuning a good model on a small amount of new material: low LR, no early
+# stopping inside a cycle (the cycle IS the budget), no plateau schedule to speak of.
+num_epochs: 1
+learning_rate: 0.0001
+weight_decay: 0.003
+patience: 100
+seed: 1234
+device_index: 1
+lr_factor: 0.5
+lr_patience: 8
+
+compile: false        # smoke: warm-up would dominate the run
+compile_mode: default
+allow_tf32: true
+
+# ── Loss balancing ──────────────────────────────────────────
+initial_weight_mse: 0.7
+initial_weight_ps: 0.3
+balancer_smoothing: 0.9
+adaptive_after_epoch: 10000
+loss_mode: mse_idd
+lps_dx_mm: 2.0
+lps_dy_mm: 2.0
+
+# ── Validation ──────────────────────────────────────────────
+# The HDF5 split here only tracks overfitting and forgetting; the yardstick that
+# decides anything is the frozen active-learning set, scored by the loop between
+# cycles. Capping it at 40 batches keeps a cycle's validation to a couple of minutes.
+max_val_batches: 4
+gpr_every_n_epochs: 1000   # smoke: no gamma during training
+gpr_subset_size: 20
+gpr_comparable_size: 10
+gpr_samples_file: ""
+
+gamma_params:
+  dose_percent_threshold: 2
+  distance_mm_threshold: 2
+  interp_fraction: 10
+  max_gamma: 2
+  lower_percent_dose_cutoff: 10
+  random_subset: null
+  local_gamma: false
+  quiet: true
+
+gpr_resolution_mm: [2.0, 2.0, 2.0]
+energy_bins_fixed: [70.0, 90.0, 110.0, 130.0, 150.0, 170.0, 190.0, 210.0, 230.0, 250.0, 270.0]
+energy_bins_quantile_n: 10
+worst_k_samples: 10
+
+checkpoint_every_n_epochs: 1
+attention_every_n_epochs: 100
+
+# ── Run control ─────────────────────────────────────────────
+max_hours: 0.5
+smoke_test: false
+
+# ── Model (must match v11's hyperparams.json) ───────────────
+input_shape: [2, 160, 30, 30]
+num_transformers: 1
+num_heads: 4
+dim_feedforward: null
+num_levels: 4
+enc_features: 32
+kernel_size: 3
+convolutional_steps: 1
+conv_hidden_channels: 64
+dropout_rate: 0.1
+causal: true
+zero_padding: true
+last_activation: false
+num_forward: 2
+weight_standardization: false
+norm_layer: batch
+weight_init: default
+
+comment: "Active-learning cycle SMOKE: 1 epoch, 20 steps, no compile"
