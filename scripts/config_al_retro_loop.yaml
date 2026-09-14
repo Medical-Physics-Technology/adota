@@ -1,4 +1,4 @@
-# Retrospective active-learning benchmark on the training HDF5 (EXP-0009)
+# Retrospective active-learning benchmark on the training HDF5 (EXP-0010)
 # =========================================================================
 #   uv run python scripts/al_retro_loop.py splits --config scripts/config_al_retro_loop.yaml
 #   uv run python scripts/al_retro_loop.py cycle0 --config scripts/config_al_retro_loop.yaml --device-index 0
@@ -7,12 +7,16 @@
 #   Any key can be overridden on the command line with --set KEY=VALUE (dotted for
 #   nested blocks); the smoke test is this file plus the --set list in the guide.
 #
+# EXP-0010 is EXP-0009 with `score_topk_mixed` in place of `stratified_score` and
+# a fixed learning-rate schedule in place of `ReduceLROnPlateau`, run on the same
+# d30 splits and from the same cycle 0.
+#
 # The labels already exist; the loop hides them and reveals them only for the
 # records a strategy selects. No Monte Carlo, no candidate generation, no cost
 # axis: the question is how the sampling strategy shapes the training progress.
 # Guide: scripts/docs/al_retro_loop.md. Design: docs/active_learning_pipeline.md.
 
-experiment: EXP-0009
+experiment: EXP-0010
 
 # ── Data ──────────────────────────────────────────────────────────────────
 dataset_path: /scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5
@@ -34,8 +38,12 @@ data_fraction: 0.30
 data_fraction_seed: 20260911
 
 # ── Splits (written once by the `splits` stage, read by every run) ─────────
+# splits_dir is unchanged from EXP-0009: same d30 splits. The cycle-0 run is
+# also reused from EXP-0009 rather than retrained, via --cycle0-run on `run`
+# (or CYCLE0_RUN for scripts/run_al_retro.sh); runs_dir below only collects the
+# new strategy runs.
 splits_dir: /scratch/mstryja/adota_runs/al_retro/d30/splits
-runs_dir: /scratch/mstryja/adota_runs/al_retro/d30
+runs_dir: /scratch/mstryja/adota_runs/al_retro/d30/exp0010
 val_fraction: 0.15        # V, drawn from D with train_val_split (train_adota's mechanism)
 initial_fraction: 0.20    # the cycle-0 set, drawn from T the same way
 split_seed: 42
@@ -49,10 +57,22 @@ epochs_per_cycle: 50
 eval_every_n_epochs: 5    # full metric set on the subsample; loss every epoch on all of V
 eval_subsample_size: 1000
 eval_subsample_seed: 20260910
-strategy: random          # random | score_topk | stratified_score (override on the CLI)
+strategy: random          # random | score_topk | score_topk_mixed (override on the CLI)
+strategy_params: {}       # forwarded to the strategy as keyword args; score_topk_mixed's
+                           # default is {top_fraction: 0.5}, random and score_topk take none
 seed: 1234
 device_index: 0
 checkpoint_every_n_epochs: 10
+
+# lr_schedule: plateau (ReduceLROnPlateau on the validation loss, state carried
+# across cycles; what EXP-0009 ran), constant (training.learning_rate held fixed
+# every epoch), or cosine_per_cycle (cosine decay from training.learning_rate to
+# lr_min over each cycle, warm-restarting every cycle). EXP-0010 uses `constant`:
+# the strategy is the only difference the runs should show, and the shared
+# cycle-0 checkpoint never left 5e-4, so a plateau scheduler would otherwise
+# couple the learning rate to whichever run's validation loss stalls first.
+lr_schedule: constant
+lr_min: 0.0
 
 # ── Scoring (cycle 1 onward, on the fly, through the scorer interface) ────
 scorer:
@@ -93,8 +113,8 @@ training:
   normalize_flux_only: true
   learning_rate: 0.0005
   weight_decay: 0.001
-  lr_factor: 0.9
-  lr_patience: 20
+  lr_factor: 0.9          # only used under lr_schedule: plateau
+  lr_patience: 20         # only used under lr_schedule: plateau
   compile: true             # both relax cuDNN determinism; turn off for a bit-exact resume check
   compile_mode: default
   allow_tf32: true

@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import torch
 from torch.utils.data import DataLoader
 
+from src.active_learning.retrospective.lr_schedule import fixed_lr
 from src.active_learning.retrospective.validation import (
     MetricSettings,
     evaluate_loss,
@@ -62,29 +63,53 @@ class TrainState:
     balancer: TwoObjectiveBalancer
     loss_mse_fn: LMSE
     loss_ps_fn: LPS
+    lr_schedule: str = "plateau"
+    """``"plateau"``, ``"constant"`` or ``"cosine_per_cycle"``; see
+    :data:`src.active_learning.retrospective.lr_schedule.ALL_LR_SCHEDULES`."""
+    lr_min: float = 0.0
+    lr0: float = 0.0
     best_val_loss: float = float("inf")
     patience_counter: int = 0
     prev_val: Optional[Dict[str, float]] = None
 
 
-def build_train_state(config: TrainingConfig, device: torch.device) -> TrainState:
-    """Fresh weights, fresh optimizer, seeded RNGs: the cycle-0 starting point."""
+def build_train_state(config: TrainingConfig, device: torch.device, *,
+                      lr_schedule: str = "plateau", lr_min: float = 0.0) -> TrainState:
+    """Fresh weights, fresh optimizer, seeded RNGs: the cycle-0 starting point.
+
+    ``lr_schedule`` selects how the learning rate evolves within a cycle. For
+    ``"plateau"`` the scheduler returned by :func:`build_optimizer_scheduler`
+    (a ``ReduceLROnPlateau``) is kept and stepped by :func:`train_cycle`. For
+    the fixed modes (``"constant"``, ``"cosine_per_cycle"``) no scheduler is
+    kept: :func:`train_cycle` sets the optimizer's ``lr`` directly from
+    :func:`src.active_learning.retrospective.lr_schedule.fixed_lr` at the
+    start of every epoch, so there is no scheduler state to checkpoint.
+    """
     set_determinism(config.seed)
     configure_backends(config)
     base_model = build_adota_model(config, device)
     optimizer, scheduler = build_optimizer_scheduler(base_model, config)
+    if lr_schedule != "plateau":
+        scheduler = None
     model = maybe_compile_model(base_model, config)
     return TrainState(config=config, device=device, base_model=base_model, model=model,
                       optimizer=optimizer, scheduler=scheduler,
                       balancer=TwoObjectiveBalancer(smoothing=config.balancer_smoothing),
-                      loss_mse_fn=LMSE(), loss_ps_fn=LPS(dx=config.lps_dx_mm, dy=config.lps_dy_mm))
+                      loss_mse_fn=LMSE(), loss_ps_fn=LPS(dx=config.lps_dx_mm, dy=config.lps_dy_mm),
+                      lr_schedule=lr_schedule, lr_min=lr_min, lr0=config.learning_rate)
 
 
 def restore_train_state(state: TrainState, checkpoint: Path) -> Dict[str, Any]:
-    """Full resume: weights, optimizer, scheduler, balancer, RNG and bookkeeping."""
+    """Full resume: weights, optimizer, balancer, RNG and bookkeeping.
+
+    The scheduler state resumes too, but only in ``"plateau"`` mode: a fixed
+    schedule needs none, since the epoch index alone determines the learning
+    rate, and the checkpoint it resumes from may not even carry one (for
+    instance the shared cycle-0 checkpoint, trained under ``"plateau"``)."""
+    scheduler = state.scheduler if state.lr_schedule == "plateau" else None
     bookkeeping = CheckpointManager.load(
         Path(checkpoint), model=state.model, optimizer=state.optimizer,
-        scheduler=state.scheduler, balancer=state.balancer, device=state.device)
+        scheduler=scheduler, balancer=state.balancer, device=state.device)
     state.best_val_loss = float(bookkeeping["best_val_loss"])
     state.patience_counter = int(bookkeeping["patience_counter"])
     return bookkeeping
@@ -188,6 +213,10 @@ def train_cycle(state: TrainState, train_loader: DataLoader, validation: Validat
         cumulative = spec.cumulative_epoch_start + epoch
         epoch_started = perf_counter()
         w_mse, w_ps = resolve_weights(config, cumulative, state.balancer, state.prev_val, device)
+        if state.lr_schedule != "plateau":
+            lr = fixed_lr(state.lr_schedule, state.lr0, state.lr_min, epoch, spec.epochs)
+            for group in state.optimizer.param_groups:
+                group["lr"] = lr
         log_phase("EPOCH", f"cycle {spec.cycle} epoch {epoch}/{spec.epochs - 1} "
                            f"(cumulative {cumulative}) | n_train={spec.n_train} "
                            f"lr={get_lr(state.optimizer):.2e}")
@@ -231,7 +260,8 @@ def train_cycle(state: TrainState, train_loader: DataLoader, validation: Validat
         validation_seconds += perf_counter() - t_val
 
         # ── Schedule, bookkeeping, checkpoint ─────────────────────────────
-        state.scheduler.step(val_loss["loss_combined_mean"])
+        if state.lr_schedule == "plateau" and state.scheduler is not None:
+            state.scheduler.step(val_loss["loss_combined_mean"])
         is_best = val_loss["loss_combined_mean"] < state.best_val_loss
         if is_best:
             state.best_val_loss = val_loss["loss_combined_mean"]
@@ -244,7 +274,7 @@ def train_cycle(state: TrainState, train_loader: DataLoader, validation: Validat
             "cycle": spec.cycle, "epoch_in_cycle": epoch, "cumulative_epoch": cumulative,
             "n_train": spec.n_train, "strategy": spec.strategy,
             "cycle_boundary": boundary, "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "lr": get_lr(state.optimizer),
+            "lr": get_lr(state.optimizer), "lr_schedule": state.lr_schedule,
             "weights": {"w_mse": float(w_mse.item()), "w_ps": float(w_ps.item())},
             "train": train_stats, "val_loss": val_loss,
             "metrics_subsample": metrics_sub, "metrics_full": metrics_full,

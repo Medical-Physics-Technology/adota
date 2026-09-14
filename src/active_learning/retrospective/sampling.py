@@ -10,12 +10,18 @@ The three strategies:
 - ``random``: uniform over the remaining pool. The control, not a straw man; it
   ignores the scores entirely.
 - ``score_topk``: the ``N`` highest-scoring records. Pure exploitation.
-- ``stratified_score``: equal counts per score decile over the remaining pool.
-  Exploitation plus coverage.
+- ``score_topk_mixed``: a ``top_fraction`` share of the batch is the top-scoring
+  prefix of ``score_topk``, the rest is drawn uniformly from everything else
+  (scored or not). Exploitation plus coverage.
+
+``stratified_score`` (equal counts per score decile, uniform inside a decile)
+was dropped after EXP-0009 showed it is uniform sampling over the score
+distribution, i.e. a second ``random`` run rather than a coverage strategy.
 
 Records without a score (the reference study could not score records above
-250 MeV or without flux) remain in the pool: ``random`` can draw them, the two
-score-based strategies cannot. The selection fingerprint counts them.
+250 MeV or without flux) remain in the pool: ``random`` and the remainder half
+of ``score_topk_mixed`` can draw them, ``score_topk`` cannot. The selection
+fingerprint counts them.
 """
 from __future__ import annotations
 
@@ -27,7 +33,9 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-Strategy = Callable[[pd.DataFrame, int, np.random.Generator], List[str]]
+# A strategy takes the pool, the batch size and a random generator, plus any
+# strategy-specific keyword parameters forwarded by ``select``.
+Strategy = Callable[..., List[str]]
 STRATEGIES: Dict[str, Strategy] = {}
 
 N_DECILES = 10
@@ -84,11 +92,11 @@ def random_strategy(pool: pd.DataFrame, n: int, rng: np.random.Generator) -> Lis
     return pool["sample_id"].to_numpy()[np.sort(picked)].tolist()
 
 
-@register_strategy("score_topk")
-def score_topk_strategy(pool: pd.DataFrame, n: int, rng: np.random.Generator) -> List[str]:
-    """The ``n`` highest scores. Ties are broken by a random permutation so the
-    draw stays a function of the seed rather than of the file order."""
-    _check(pool, n)
+def _top_scored(pool: pd.DataFrame, n: int, rng: np.random.Generator) -> np.ndarray:
+    """The pool row indices of the ``n`` highest finite scores. Ties are broken
+    by a random permutation so the draw stays a function of the seed rather
+    than of the file order. Shared by ``score_topk`` and ``score_topk_mixed``
+    so their ranking cannot drift apart."""
     scores = pool["score"].to_numpy(dtype=float)
     finite = np.isfinite(scores)
     if int(finite.sum()) < n:
@@ -96,41 +104,45 @@ def score_topk_strategy(pool: pd.DataFrame, n: int, rng: np.random.Generator) ->
     shuffled = rng.permutation(len(pool))
     ranked = shuffled[np.argsort(-scores[shuffled], kind="stable")]
     top = [i for i in ranked if finite[i]][:n]
+    return np.asarray(top, dtype=int)
+
+
+@register_strategy("score_topk")
+def score_topk_strategy(pool: pd.DataFrame, n: int, rng: np.random.Generator) -> List[str]:
+    """The ``n`` highest scores. Ties are broken by a random permutation so the
+    draw stays a function of the seed rather than of the file order."""
+    _check(pool, n)
+    top = _top_scored(pool, n, rng)
     return pool["sample_id"].to_numpy()[sorted(top)].tolist()
 
 
-@register_strategy("stratified_score")
-def stratified_score_strategy(pool: pd.DataFrame, n: int,
-                              rng: np.random.Generator) -> List[str]:
-    """Equal counts per score decile of the remaining pool, uniform inside a
-    decile. A decile too thin to supply its share hands the shortfall to the
-    other deciles, uniformly over what is left."""
+@register_strategy("score_topk_mixed")
+def score_topk_mixed_strategy(pool: pd.DataFrame, n: int, rng: np.random.Generator,
+                               top_fraction: float = 0.5) -> List[str]:
+    """``top_fraction`` of the batch is the top-scoring prefix of ``score_topk``,
+    the rest is drawn uniformly without replacement from everything else in the
+    pool (scored or not), exactly as ``random`` draws. Exploitation plus
+    coverage, and a direct test of whether pure top-k overshoots on cycle one."""
     _check(pool, n)
-    deciles = score_deciles(pool["score"].to_numpy(dtype=float))
-    scored = np.where(deciles >= 0)[0]
-    if scored.size < n:
-        raise ValueError(f"only {scored.size} scored records for a batch of {n}")
-    base, remainder = divmod(n, N_DECILES)
-    chosen: List[int] = []
-    for decile in range(N_DECILES):
-        members = np.where(deciles == decile)[0]
-        want = base + (1 if decile < remainder else 0)
-        take = min(want, members.size)
-        if take:
-            chosen.extend(rng.choice(members, size=take, replace=False).tolist())
-    shortfall = n - len(chosen)
-    if shortfall > 0:
-        rest = np.setdiff1d(scored, np.asarray(chosen, dtype=int))
-        chosen.extend(rng.choice(rest, size=shortfall, replace=False).tolist())
+    if not (0.0 <= top_fraction <= 1.0):
+        raise ValueError(f"top_fraction must be in [0, 1], got {top_fraction}")
+    n_top = int(round(top_fraction * n))
+    top = _top_scored(pool, n_top, rng) if n_top else np.asarray([], dtype=int)
+    remaining = np.setdiff1d(np.arange(len(pool)), top, assume_unique=True)
+    n_rest = n - n_top
+    rest = remaining[rng.choice(len(remaining), size=n_rest, replace=False)] if n_rest else np.asarray([], dtype=int)
+    chosen = np.concatenate([top, rest]).astype(int)
     return pool["sample_id"].to_numpy()[sorted(chosen)].tolist()
 
 
-def select(pool: pd.DataFrame, n: int, strategy: str, rng: np.random.Generator) -> List[str]:
+def select(pool: pd.DataFrame, n: int, strategy: str, rng: np.random.Generator, **params) -> List[str]:
     """Run the named strategy and check its answer: exactly ``n`` distinct ids,
-    all from the pool."""
+    all from the pool. Extra keyword ``params`` are forwarded to the strategy;
+    ``random`` and ``score_topk`` take none, so an unknown one simply raises
+    ``TypeError`` from the call below."""
     if strategy not in STRATEGIES:
         raise ValueError(f"unknown strategy {strategy!r}; registered: {available_strategies()}")
-    ids = list(STRATEGIES[strategy](pool, n, rng))
+    ids = list(STRATEGIES[strategy](pool, n, rng, **params))
     if len(ids) != n or len(set(ids)) != n:
         raise AssertionError(f"strategy {strategy} returned {len(ids)} ids "
                              f"({len(set(ids))} distinct) for a batch of {n}")

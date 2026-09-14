@@ -144,6 +144,35 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   learning-curve and selection figures, saved through
   `save_figure_as_publication_formats`.
 
+### Changed (retrospective active learning)
+
+- **`src/active_learning/retrospective/sampling.py`**: `stratified_score`
+  (`stratified_score_strategy`) is removed from the retrospective registry.
+  EXP-0009 found that equal counts per score decile, uniform inside a decile, is
+  uniform sampling over the score distribution, i.e. a second `random` run
+  rather than the intended exploitation-plus-coverage strategy. `score_topk_mixed`
+  (`score_topk_mixed_strategy`) replaces it: a `top_fraction` share of the batch
+  is the top-scoring prefix of `score_topk`, the rest drawn uniformly from
+  everything else in the pool, scored or not. `select(pool, n, strategy, rng,
+  **params)` now forwards keyword parameters to the strategy.
+- **`RetroConfig` moved** from `src/active_learning/retrospective/loop.py` to
+  `src/active_learning/retrospective/config.py`, still importable as `from
+  src.active_learning.retrospective.loop import RetroConfig`. New fields:
+  `lr_schedule` (`plateau`, `constant` or `cosine_per_cycle`; default `plateau`
+  keeps old runs byte-for-byte reproducible), `lr_min` (the floor of
+  `cosine_per_cycle`) and `strategy_params` (keyword parameters forwarded to
+  the strategy, for example `{top_fraction: 0.5}` for `score_topk_mixed`).
+- **New module `src/active_learning/retrospective/lr_schedule.py`**: `fixed_lr`,
+  `FIXED_LR_SCHEDULES` and `ALL_LR_SCHEDULES`. `ReduceLROnPlateau` (`plateau`)
+  couples the learning rate to the validation loss, which couples it to the
+  active-learning strategy (EXP-0009: a run whose loss stalls gets its LR cut
+  and trains slower thereafter, so the scheduler amplifies whatever difference
+  the data made). `constant` and `cosine_per_cycle` are pure functions of the
+  epoch within the cycle, so they carry no scheduler state and a mid-cycle
+  resume is exact.
+- Output format: `metrics.jsonl` rows gain `lr_schedule` beside the existing
+  `lr`; run `manifest.json` files gain `lr_schedule` and `lr_min`.
+
 ## [1.5.0] - 2026-09-03
 
 A GPU gamma index. `pymedphys.gamma` dominated gamma pass rate evaluation --
