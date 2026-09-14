@@ -106,6 +106,18 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   is, so a resume with `device=cuda:N` failed with "RNG state must be a
   torch.ByteTensor": `map_location` had moved the generator states to the
   device. They are moved back to the CPU before `set_rng_state`.
+- `src.metrics.gamma_pass_rate`: the second entry of the pass-rate pair
+  returned by `gamma_index` and `gamma_index_torch` (`gpr[1]`) counted every
+  voxel the kernel had not evaluated as passing. The kernel marks those voxels
+  NaN; `nan_to_num` turned them into 0, and 0 satisfies `gamma <= 1`, so the
+  number rose with the fraction of low-dose voxels in the volume rather than with
+  agreement (on 100 random beamlets of the `energy_gantry_full` sweeps it was
+  inflated by 3.5 pp at 2%/2mm/10% and 10.2 pp at 1%/3mm/0.1%, up to 22 pp on a
+  single beamlet). `gpr[1]` is now passing over evaluated voxels, the pymedphys
+  definition. `gpr[0]`, which every consumer in this repository reads and which
+  the published robustness grids were scored with, is **unchanged**; it agrees
+  with the corrected `gpr[1]` to within 1e-4 pp except on voxels with gamma
+  exactly 0.
 
 ### Added (retrospective active learning)
 
