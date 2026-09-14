@@ -5,6 +5,8 @@
 #   uv run python scripts/al_build_validation_set.py  --config scripts/config_al.yaml --num-threads 48
 #   uv run python scripts/al_loop.py --config scripts/config_al.yaml --strategy random --device-index 1
 #   uv run python scripts/al_loop.py --config scripts/config_al.yaml --strategy score  --device-index 2
+#   Any key can be overridden on the command line with --set KEY=VALUE (dotted for
+#   nested blocks); the smoke test is this file plus the --set list in the guide.
 #
 # One config for all three stages, so the beamlets the loop is judged on and the
 # beamlets it buys come from the same candidate space and the same MC settings.

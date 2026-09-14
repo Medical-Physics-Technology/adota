@@ -4,6 +4,8 @@
 #   uv run python scripts/al_retro_loop.py cycle0 --config scripts/config_al_retro_loop.yaml --device-index 0
 #   uv run python scripts/al_retro_loop.py run    --config scripts/config_al_retro_loop.yaml \
 #       --strategy random --cycle0-run <cycle-0 run dir> --device-index 0
+#   Any key can be overridden on the command line with --set KEY=VALUE (dotted for
+#   nested blocks); the smoke test is this file plus the --set list in the guide.
 #
 # The labels already exist; the loop hides them and reveals them only for the
 # records a strategy selects. No Monte Carlo, no candidate generation, no cost

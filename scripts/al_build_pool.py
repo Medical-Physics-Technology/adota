@@ -15,12 +15,12 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, List, Optional
 
 import typer
 
 from src.active_learning.pool import build_pool, write_pool
-from src.adota.config import load_yaml_config
+from src.evaluation.cli import SET_OVERRIDE_HELP, apply_set_overrides, load_yaml_config
 from src.training.logging_utils import silence_pymedphys
 
 # force=True: importing pymedphys configures the root logger, which would make a
@@ -43,8 +43,12 @@ def main(
     n_validation: Annotated[Optional[int], typer.Option(
         help="Validation CTs per anatomy; the rest of the tail becomes the pool.")] = None,
     overwrite: Annotated[bool, typer.Option(help="Overwrite an existing CSV.")] = False,
+    set_: Annotated[Optional[List[str]], typer.Option("--set", help=SET_OVERRIDE_HELP)] = None,
 ) -> None:
-    cfg = load_yaml_config(config)
+    try:
+        cfg = apply_set_overrides(load_yaml_config(config), set_ or [])
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     pool_cfg = cfg.get("pool", {})
     target = Path(out or pool_cfg.get("pool_csv", "registry/al_pool_selection.csv"))
     if target.exists() and not overwrite:

@@ -13,12 +13,20 @@ with ``num_threads`` in the config set so the two Monte Carlo phases share the c
 Everything is resumable: a rerun with the same run directory skips the cycles whose
 manifest is already written, and the Monte Carlo underneath skips the beamlets already
 simulated.
+
+Any config key can be overridden with the repeatable ``--set KEY=VALUE`` (dotted keys
+for nested blocks: ``--set loop.n_cycles=1 --set robustness.num_threads=8``); a
+per-field option beats ``--set`` for the same key, and ``--set`` beats the YAML. The
+training config of a cycle is a separate file (``loop.train_config``), and its keys
+are overridden through the ``loop.train_overrides`` block the loop already applies on
+top of it: ``--set loop.train_overrides.num_epochs=1``. That is how the smoke test is
+run from the main config; see ``scripts/docs/al_loop.md``.
 """
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, List, Optional
 
 import numpy as np
 import typer
@@ -34,7 +42,7 @@ from src.active_learning.loop import LoopConfig, run_loop
 from src.active_learning.oracle import batch_cost_estimate
 from src.active_learning.pool import read_pool
 from src.active_learning.sampling import STRATEGIES, select, selection_fingerprint
-from src.adota.config import load_yaml_config
+from src.evaluation.cli import SET_OVERRIDE_HELP, apply_set_overrides, load_yaml_config
 from src.training.logging_utils import silence_pymedphys
 
 # force=True: importing pymedphys configures the root logger, which would make a
@@ -73,8 +81,12 @@ def main(
         help="Base directory for the run.")] = None,
     dry_run: Annotated[bool, typer.Option(
         help="Score and select one cycle, report the cost, simulate nothing.")] = False,
+    set_: Annotated[Optional[List[str]], typer.Option("--set", help=SET_OVERRIDE_HELP)] = None,
 ) -> None:
-    cfg = load_yaml_config(config)
+    try:
+        cfg = apply_set_overrides(load_yaml_config(config), set_ or [])
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     loop_cfg = _loop_config(cfg, strategy=strategy, device_index=device_index,
                             n_cycles=n_cycles, beamlets_per_cycle=beamlets_per_cycle,
                             name=run_name)

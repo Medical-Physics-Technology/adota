@@ -53,14 +53,25 @@ strategies over the GPUs in `GPUS` and comparing whatever finished:
 nohup bash scripts/run_al_retro.sh > /scratch/mstryja/adota_runs/al_retro/d30/pilot.out 2>&1 & echo "PID: $!"
 ```
 
-**Smoke test first.** `config_al_retro_smoke.yaml` runs the identical code path on a
-400-record `D` (two cycles of two epochs, an 8-record evaluation subsample) under
-`/scratch/mstryja/adota_runs/al_retro_smoke`, in minutes:
+**Smoke test first.** There is no smoke YAML: the smoke test is the main config plus
+the repeatable `--set KEY=VALUE` option, which overrides any key (dotted for nested
+blocks) before the config is validated. The list below runs the identical code path
+on a 400-record `D` (two cycles of two epochs, an 8-record evaluation subsample,
+compile and TF32 off so a resume is bit-exact) under
+`/scratch/mstryja/adota_runs/al_retro_smoke`, in minutes. Every stage takes the same
+list, so put it in a variable:
 
 ```bash
-uv run python scripts/al_retro_loop.py splits --config scripts/config_al_retro_smoke.yaml
-uv run python scripts/al_retro_loop.py cycle0 --config scripts/config_al_retro_smoke.yaml
-uv run python scripts/al_retro_loop.py run    --config scripts/config_al_retro_smoke.yaml \
+SMOKE="--set data_fraction=1.0 --set max_records=400 \
+  --set splits_dir=/scratch/mstryja/adota_runs/al_retro_smoke/splits \
+  --set runs_dir=/scratch/mstryja/adota_runs/al_retro_smoke \
+  --set n_cycles=2 --set epochs_per_cycle=2 --set eval_every_n_epochs=1 \
+  --set eval_subsample_size=8 --set checkpoint_every_n_epochs=1 --set scorer.n_workers=8 \
+  --set training.compile=false --set training.allow_tf32=false"
+
+uv run python scripts/al_retro_loop.py splits --config scripts/config_al_retro_loop.yaml $SMOKE
+uv run python scripts/al_retro_loop.py cycle0 --config scripts/config_al_retro_loop.yaml $SMOKE
+uv run python scripts/al_retro_loop.py run    --config scripts/config_al_retro_loop.yaml $SMOKE \
     --strategy stratified_score --cycle0-run <smoke cycle-0 run>
 ```
 
@@ -96,7 +107,10 @@ validate; write the cycle manifest
 `splits`: `--config`, `--data-fraction`, `--max-records` (smoke tests only), `--splits-dir`.
 `cycle0`: `--config`, `--device-index`, `--epochs-per-cycle`, `--seed`, `--runs-dir`,
 `--resume-dir`. `run`: the same plus `--strategy`, `--cycle0-run` (required),
-`--n-cycles`. CLI > YAML > defaults, through `merge_config`.
+`--n-cycles`. Every stage also takes `--set KEY=VALUE`, repeatable, for any config key
+(`--set training.compile=false`, `--set scorer.n_workers=8`; the value is parsed as
+YAML). Precedence: per-field option > `--set` > YAML > defaults, through
+`apply_set_overrides` and `merge_config`.
 
 ## Config reference (`config_al_retro_loop.yaml`)
 

@@ -11,14 +11,17 @@ layer. The selection is written first and the Monte Carlo runs against it, so th
 is defined before it is paid for and an interrupted run resumes into the same set.
 
 Run this once. The loop refuses to start without it, and every arm is measured on the
-same beamlets.
+same beamlets. Any config key can be overridden with the repeatable ``--set KEY=VALUE``
+(``--set validation_set.n_beamlets=8``); a per-field option beats ``--set`` for the
+same key, and ``--set`` beats the YAML. The smoke test is the main config plus
+``--set`` entries; see ``scripts/docs/al_loop.md``.
 """
 from __future__ import annotations
 
 import json
 import logging
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, List, Optional
 
 import numpy as np
 import typer
@@ -28,7 +31,7 @@ from src.active_learning.config import candidate_config_from_dict, mc_from_confi
 from src.active_learning.oracle import batch_cost_estimate, label_batch, labelled_records
 from src.active_learning.pool import RecordResolver, read_pool
 from src.active_learning.validation import select_balanced
-from src.adota.config import load_yaml_config
+from src.evaluation.cli import SET_OVERRIDE_HELP, apply_set_overrides, load_yaml_config
 from src.training.logging_utils import silence_pymedphys
 
 # force=True: importing pymedphys configures the root logger, which would make a
@@ -54,8 +57,12 @@ def main(
              "loop arms can run side by side; this build runs alone.")] = None,
     dry_run: Annotated[bool, typer.Option(
         help="Score, select and report the cost; simulate nothing.")] = False,
+    set_: Annotated[Optional[List[str]], typer.Option("--set", help=SET_OVERRIDE_HELP)] = None,
 ) -> None:
-    cfg = load_yaml_config(config)
+    try:
+        cfg = apply_set_overrides(load_yaml_config(config), set_ or [])
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     val_cfg = cfg.get("validation_set", {})
     n = int(n_beamlets or val_cfg.get("n_beamlets", 4000))
     manifest_path = Path(val_cfg.get("manifest", "registry/al_validation_set.csv"))

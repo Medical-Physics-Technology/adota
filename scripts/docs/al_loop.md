@@ -32,16 +32,42 @@ uv run python scripts/al_loop.py --config scripts/config_al.yaml --strategy rand
 uv run python scripts/al_loop.py --config scripts/config_al.yaml --strategy score  --device-index 2 &
 ```
 
-**Smoke test first**, as for any long Monte Carlo job. `config_al_smoke.yaml` runs the
-identical code path with every dimension cut to the smallest value that still
-exercises it (two CTs, one gantry, two energies, eight beamlets, one cycle, twenty
-optimizer steps) and writes everything to `/scratch/mstryja/al_smoke`, so it cannot
-touch the dataset root:
+**Smoke test first**, as for any long Monte Carlo job. There is no smoke YAML: the
+smoke test is the main config plus the repeatable `--set KEY=VALUE` option, which
+overrides any key (dotted for nested blocks; the value is parsed as YAML) before the
+config is read. Precedence is per-field option > `--set` > YAML > defaults. The list
+below runs the identical code path with every dimension cut to the smallest value
+that still exercises it (two CTs, one gantry, two energies, eight beamlets, one cycle,
+twenty optimizer steps) and writes everything to `/scratch/mstryja/al_smoke`, so it
+cannot touch the dataset root. The cycle's training config stays
+`config_al_train.yaml`; its smoke values travel in the `loop.train_overrides` block,
+which the loop applies on top of that file:
 
 ```bash
-uv run python scripts/al_build_validation_set.py --config scripts/config_al_smoke.yaml --n-cts 2
-uv run python scripts/al_loop.py --config scripts/config_al_smoke.yaml --strategy score
+SMOKE="--set name=al_smoke --set runs_dir=/scratch/mstryja/al_smoke/runs \
+  --set engine.mc_work_dir=/scratch/mstryja/mc_work/al_smoke \
+  --set candidates.n_gantry_per_ct=1 --set candidates.n_per_field=40 \
+  --set candidates.energies=[80.0,105.0] --set robustness.energies=[80.0,105.0] \
+  --set robustness.num_threads=8 --set robustness.beamlet_block_size=8 \
+  --set robustness.output_root=/scratch/mstryja/al_smoke/beamlets \
+  --set robustness.experiment_prefix=alsmoke \
+  --set validation_set.n_beamlets=8 --set validation_set.beamlet_prefix=alsmoke_val \
+  --set validation_set.manifest=/scratch/mstryja/al_smoke/validation_set.csv \
+  --set loop.n_cycles=1 --set loop.beamlets_per_cycle=8 --set loop.n_cts_per_cycle=2 \
+  --set loop.max_per_patient_frac=1.0 --set loop.n_score_workers=2 --set loop.device_index=2 \
+  --set loop.beamlet_prefix=alsmoke"
+TRAIN_SMOKE="--set loop.train_overrides.num_epochs=1 --set loop.train_overrides.al_steps_per_epoch=20 \
+  --set loop.train_overrides.batch_size=8 --set loop.train_overrides.num_workers=2 \
+  --set loop.train_overrides.compile=false --set loop.train_overrides.max_val_batches=4 \
+  --set loop.train_overrides.gpr_every_n_epochs=1000 \
+  --set loop.train_overrides.checkpoint_every_n_epochs=1 --set loop.train_overrides.max_hours=0.5"
+
+uv run python scripts/al_build_validation_set.py --config scripts/config_al.yaml $SMOKE --n-cts 2
+uv run python scripts/al_loop.py --config scripts/config_al.yaml $SMOKE $TRAIN_SMOKE --strategy score
 ```
+
+`max_per_patient_frac=1.0` because eight beamlets over two patients would starve under
+the 20 percent cap; `num_threads=8` because the machine is shared.
 
 ## What one cycle does
 

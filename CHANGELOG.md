@@ -32,6 +32,25 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 
 ### Changed
 
+- **The smoke configs are gone**: `scripts/config_al_retro_smoke.yaml`,
+  `scripts/config_al_smoke.yaml` and `scripts/config_al_train_smoke.yaml` are
+  removed. A smoke test is the main config plus the new repeatable
+  `--set KEY=VALUE` option (`src.evaluation.cli.apply_set_overrides`), which
+  overrides any key, dotted for nested blocks, with the value parsed as YAML,
+  before the config is validated; precedence is per-field option > `--set` >
+  YAML > defaults. `al_retro_loop.py` (`splits`, `cycle0`, `run`), `al_loop.py`,
+  `al_build_validation_set.py` and `al_build_pool.py` take it. The cycle
+  training config of `al_loop.py` is overridden through the existing
+  `loop.train_overrides` block (`--set loop.train_overrides.num_epochs=1`). The
+  retrospective smoke test is now
+  `al_retro_loop.py <stage> --config scripts/config_al_retro_loop.yaml --set
+  data_fraction=1.0 --set max_records=400 --set
+  splits_dir=/scratch/mstryja/adota_runs/al_retro_smoke/splits --set
+  runs_dir=/scratch/mstryja/adota_runs/al_retro_smoke --set n_cycles=2 --set
+  epochs_per_cycle=2 --set eval_every_n_epochs=1 --set eval_subsample_size=8
+  --set checkpoint_every_n_epochs=1 --set scorer.n_workers=8 --set
+  training.compile=false --set training.allow_tf32=false`; the full lists for
+  both loops are in `scripts/docs/al_retro_loop.md` and `scripts/docs/al_loop.md`.
 - **`analyse_density_regions` and `compute_advanced_metrics` moved** from
   `scripts/training_set_analysis_advanced_metrics.py` to
   `src.acquisition.features`, verbatim; the script imports them. Import from

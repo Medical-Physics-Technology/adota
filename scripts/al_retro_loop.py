@@ -15,9 +15,14 @@ trains ``epochs_per_cycle`` epochs and validates. One process is one strategy;
 the three strategies are three independent runs, compared afterwards by
 ``scripts/al_compare.py``.
 
-Precedence is CLI > YAML > built-in defaults through ``merge_config``. A run
-directory passed as ``--resume-dir`` continues where it stopped: completed cycles
-are skipped and an interrupted one restarts from its ``last.pth``.
+Precedence is CLI > YAML > built-in defaults through ``merge_config``. Any config
+key, nested ones included, can be overridden with the repeatable ``--set KEY=VALUE``
+(``--set training.compile=false``); a per-field option such as ``--n-cycles`` beats
+``--set`` for the same key, and ``--set`` beats the YAML. That is how the smoke test
+is run: the main config plus a handful of ``--set`` entries, see
+``scripts/docs/al_retro_loop.md``. A run directory passed as ``--resume-dir``
+continues where it stopped: completed cycles are skipped and an interrupted one
+restarts from its ``last.pth``.
 """
 from __future__ import annotations
 
@@ -25,13 +30,13 @@ import logging
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, List, Optional
 
 import typer
 
 from src.active_learning.retrospective.loop import RetroConfig, prepare_splits, run_cycle0, run_strategy
 from src.active_learning.retrospective.sampling import available_strategies
-from src.evaluation.cli import load_yaml_config, merge_config
+from src.evaluation.cli import SET_OVERRIDE_HELP, apply_set_overrides, load_yaml_config, merge_config
 from src.training.logging_utils import log_banner, setup_training_logging, silence_pymedphys
 from src.training.run_dir import setup_training_run_directory
 
@@ -40,11 +45,16 @@ app = typer.Typer(help="Retrospective active-learning benchmark: splits, cycle 0
 logger = logging.getLogger("al_retro_loop")
 
 ConfigOption = Annotated[Path, typer.Option(help="Retrospective benchmark YAML config.")]
+SetOption = Annotated[Optional[List[str]], typer.Option("--set", help=SET_OVERRIDE_HELP)]
 DEFAULT_CONFIG = Path("scripts/config_al_retro_loop.yaml")
 
 
-def _config(config: Path, **overrides) -> RetroConfig:
-    raw = load_yaml_config(config)
+def _config(config: Path, set_: Optional[List[str]] = None, **overrides) -> RetroConfig:
+    """Per-field option > ``--set`` > YAML > ``RetroConfig`` defaults."""
+    try:
+        raw = apply_set_overrides(load_yaml_config(config), set_ or [])
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     merged = merge_config(overrides, raw, defaults=asdict(RetroConfig()))
     return RetroConfig.from_dict(merged)
 
@@ -71,11 +81,12 @@ def splits(
     max_records: Annotated[Optional[int], typer.Option(
         help="Cap on D after the fraction. Smoke tests only.")] = None,
     splits_dir: Annotated[Optional[Path], typer.Option()] = None,
+    set_: SetOption = None,
 ) -> None:
     """Apply the exclusion list; take the data fraction; write V, T and the cycle-0 set."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
                         force=True)
-    cfg = _config(config, data_fraction=data_fraction, max_records=max_records,
+    cfg = _config(config, set_, data_fraction=data_fraction, max_records=max_records,
                   splits_dir=str(splits_dir) if splits_dir else None)
     summary = prepare_splits(cfg)
     typer.echo(f"|D| after exclusion: {summary['n_after_exclusion']} "
@@ -95,9 +106,10 @@ def cycle0(
     runs_dir: Annotated[Optional[Path], typer.Option()] = None,
     resume_dir: Annotated[Optional[Path], typer.Option(
         help="An existing cycle-0 run directory to continue.")] = None,
+    set_: SetOption = None,
 ) -> None:
     """Train the shared cycle-0 baseline from random weights."""
-    cfg = _config(config, device_index=device_index, epochs_per_cycle=epochs_per_cycle,
+    cfg = _config(config, set_, device_index=device_index, epochs_per_cycle=epochs_per_cycle,
                   seed=seed, runs_dir=str(runs_dir) if runs_dir else None)
     run_dir = _start_run(cfg, _run_name(cfg, "cycle0"), resume_dir)
     checkpoint = run_cycle0(cfg, run_dir)
@@ -117,9 +129,10 @@ def run(
     runs_dir: Annotated[Optional[Path], typer.Option()] = None,
     resume_dir: Annotated[Optional[Path], typer.Option(
         help="An existing strategy run directory to continue.")] = None,
+    set_: SetOption = None,
 ) -> None:
     """Run one strategy from the cycle-0 checkpoint."""
-    cfg = _config(config, strategy=strategy, device_index=device_index, n_cycles=n_cycles,
+    cfg = _config(config, set_, strategy=strategy, device_index=device_index, n_cycles=n_cycles,
                   epochs_per_cycle=epochs_per_cycle, seed=seed,
                   runs_dir=str(runs_dir) if runs_dir else None)
     if cfg.strategy not in available_strategies():
