@@ -101,7 +101,19 @@ def build_dataloaders(
     train_indexes: List[str],
     val_indexes: List[str],
 ) -> Tuple[DataLoader, DataLoader]:
-    """Build train / val dataloaders from the resolved training config."""
+    """Build train / val dataloaders from the resolved training config.
+
+    With ``al_dir_sources`` set, the training split is the H5 set concatenated with
+    the beamlets an active-learning cycle bought, sampled so a fixed share of every
+    batch is new material; validation stays the plain H5 split either way. The import
+    is local so training does not depend on the active-learning package unless a run
+    actually asks for it.
+    """
+    if config.al_dir_sources:
+        from src.active_learning.dataset import build_union_dataloaders
+
+        return build_union_dataloaders(config, train_indexes, val_indexes)
+
     train_ds = H5PYGenerator(
         file_path=config.dataset_path,
         indexes=train_indexes,

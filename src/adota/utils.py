@@ -67,7 +67,11 @@ def load_model(
         hyperparams = json.load(f)
 
     model = DoTA3D_v3(**hyperparams)
-    checkpoint = torch.load(model_path, map_location="cpu")
+    checkpoint = torch.load(model_path, map_location="cpu", weights_only=False)
+    # A deployed checkpoint under models/ is a bare state_dict; a training snapshot
+    # keeps the weights under "model" alongside optimizer / RNG state. Both load.
+    if isinstance(checkpoint, dict) and "model" in checkpoint:
+        checkpoint = checkpoint["model"]
     model.load_state_dict(checkpoint)
     model.eval()
     model.to(device)

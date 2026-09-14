@@ -408,7 +408,7 @@ def main(
     run_start = perf_counter()
     prev_val: Optional[Dict[str, float]] = None
     smoke_train_batches = 4 if cfg.smoke_test else None
-    smoke_val_batches = 4 if cfg.smoke_test else None
+    smoke_val_batches = 4 if cfg.smoke_test else cfg.max_val_batches
     stop_reason: str = "completed"
     epochs_completed = 0
 

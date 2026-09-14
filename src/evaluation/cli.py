@@ -8,15 +8,20 @@ site. The genuinely new helpers are:
   available, falls back to CPU when CUDA is absent or the requested index is out
   of range, and logs the choice; and
 * :func:`merge_config` -- the generic ``CLI > YAML > default`` merge that
-  replaces the hand-wired per-field merge blocks in every ``main``.
+  replaces the hand-wired per-field merge blocks in every ``main``; and
+* :func:`apply_set_overrides` -- the generic, repeatable ``--set key=value``
+  option, so a variant of a config (a smoke test, a scale-up) is a command line
+  rather than another YAML file.
 """
 
 from __future__ import annotations
 
+import copy
 import logging
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 import torch
+import yaml
 
 # Re-exported so scripts import logging / run-dir / YAML helpers from one place.
 from src.adota.config import (  # noqa: F401
@@ -102,3 +107,61 @@ def merge_config(
         else:
             merged[key] = defaults.get(key)
     return merged
+
+
+SET_OVERRIDE_HELP = (
+    "Override one config key: KEY=VALUE, repeatable. Dotted keys reach nested "
+    "blocks (training.compile=false, scorer.n_workers=8); the value is parsed as "
+    "YAML (false, null, 8, 0.3, [80.0,105.0], quoted strings). Applied to the YAML "
+    "before validation, so precedence is per-field option > --set > YAML > default."
+)
+
+
+def apply_set_overrides(config: Mapping[str, Any], overrides: Sequence[str]) -> dict[str, Any]:
+    """Apply ``--set KEY=VALUE`` overrides to a parsed YAML config.
+
+    The command line is where a config variant belongs (a smoke test, a scale-up),
+    not a second YAML file that repeats the first one. Each entry is ``key=value``:
+    ``key`` may be dotted to reach a nested mapping (``training.compile``), and
+    intermediate mappings that do not exist yet are created. ``value`` is parsed
+    as a YAML scalar (``yaml.safe_load``), so ``false``, ``null``, ``8``, ``0.3``,
+    flow lists such as ``[80.0,105.0]`` and quoted strings all become what they
+    would be in the file; an empty value means ``null``.
+
+    Args:
+        config: The parsed YAML mapping. It is not modified.
+        overrides: ``KEY=VALUE`` strings, applied in order.
+
+    Returns:
+        A deep copy of ``config`` with the overrides applied.
+
+    Raises:
+        ValueError: On an entry without ``=``, an empty key or key segment, or a
+            dotted path that walks through an existing non-mapping value.
+    """
+    result: dict[str, Any] = copy.deepcopy(dict(config))
+    for entry in overrides:
+        key, sep, raw_value = entry.partition("=")
+        key = key.strip()
+        if not sep or not key:
+            raise ValueError(f"--set expects KEY=VALUE, got {entry!r}")
+        segments = key.split(".")
+        if any(not segment for segment in segments):
+            raise ValueError(f"--set key {key!r} has an empty segment")
+        try:
+            value = yaml.safe_load(raw_value)
+        except yaml.YAMLError as exc:
+            raise ValueError(f"--set {key}: cannot parse value {raw_value!r} as YAML: {exc}") from exc
+
+        node: dict[str, Any] = result
+        for depth, segment in enumerate(segments[:-1]):
+            child = node.get(segment)
+            if child is None:
+                child = node[segment] = {}
+            elif not isinstance(child, dict):
+                path = ".".join(segments[: depth + 1])
+                raise ValueError(
+                    f"--set {key}: {path!r} is a {type(child).__name__}, not a mapping")
+            node = child
+        node[segments[-1]] = value
+    return result
