@@ -29,7 +29,7 @@ def make_pool(n: int = 500, n_unscored: int = 20, seed: int = 0) -> pd.DataFrame
     return pool
 
 
-@pytest.mark.parametrize("strategy", ["random", "score_topk", "stratified_score"])
+@pytest.mark.parametrize("strategy", ["random", "score_topk", "score_topk_mixed"])
 def test_every_strategy_spends_exactly_its_budget_from_the_pool(strategy):
     pool = make_pool()
     chosen = select(pool, 120, strategy, np.random.default_rng(1))
@@ -37,7 +37,7 @@ def test_every_strategy_spends_exactly_its_budget_from_the_pool(strategy):
     assert set(chosen) <= set(pool["sample_id"])
 
 
-@pytest.mark.parametrize("strategy", ["random", "score_topk", "stratified_score"])
+@pytest.mark.parametrize("strategy", ["random", "score_topk", "score_topk_mixed"])
 def test_selection_is_a_function_of_the_seed(strategy):
     pool = make_pool()
     a = select(pool, 50, strategy, np.random.default_rng([3, 1]))
@@ -59,28 +59,55 @@ def test_score_topk_takes_the_highest_scores():
     assert set(chosen) == set(expected)
 
 
-def test_stratified_score_draws_equal_counts_per_decile():
-    pool = make_pool(n=520, n_unscored=20)
-    chosen = select(pool, 100, "stratified_score", np.random.default_rng(0))
-    deciles = pd.Series(score_deciles(pool["score"]), index=pool["sample_id"])
-    counts = deciles.loc[chosen].value_counts()
-    assert sorted(counts.index) == list(range(10)) and counts.max() == counts.min() == 10
-
-
-def test_stratified_score_tops_up_thin_deciles():
-    pool = make_pool(n=15, n_unscored=0)
-    chosen = select(pool, 12, "stratified_score", np.random.default_rng(0))
-    assert len(chosen) == 12 and len(set(chosen)) == 12
-
-
-def test_unscored_records_reach_random_but_never_the_score_strategies():
+def test_unscored_records_reach_random_but_never_score_topk():
     pool = make_pool(n=60, n_unscored=50)
     unscored = set(pool.loc[pool["score"].isna(), "sample_id"])
     assert set(select(pool, 55, "random", np.random.default_rng(0))) & unscored
-    for strategy in ("score_topk", "stratified_score"):
-        assert not set(select(pool, 10, strategy, np.random.default_rng(0))) & unscored
-        with pytest.raises(ValueError, match="scored records"):
-            select(pool, 11, strategy, np.random.default_rng(0))
+    assert not set(select(pool, 10, "score_topk", np.random.default_rng(0))) & unscored
+    with pytest.raises(ValueError, match="scored records"):
+        select(pool, 11, "score_topk", np.random.default_rng(0))
+
+
+def test_score_topk_mixed_top_half_is_the_topk_prefix():
+    pool = make_pool(n=520, n_unscored=20)
+    n = 100
+    mixed = select(pool, n, "score_topk_mixed", np.random.default_rng(0))
+    top_half = select(pool, n // 2, "score_topk", np.random.default_rng(0))
+    assert set(mixed) & set(top_half) == set(top_half)
+
+
+def test_score_topk_mixed_remainder_is_not_score_biased():
+    pool = make_pool(n=2000, n_unscored=0, seed=7)
+    n = 400
+    chosen = select(pool, n, "score_topk_mixed", np.random.default_rng(0))
+    top_half = set(select(pool, n // 2, "score_topk", np.random.default_rng(0)))
+    remainder_ids = [sample_id for sample_id in chosen if sample_id not in top_half]
+    deciles = pd.Series(score_deciles(pool["score"]), index=pool["sample_id"]).astype(float)
+    remainder_mean = deciles.loc[remainder_ids].mean()
+    pool_mean = deciles[deciles >= 0].mean()
+    assert abs(remainder_mean - pool_mean) < 1.0
+
+
+def test_score_topk_mixed_can_draw_unscored_in_the_remainder():
+    # 10 finite scores, exactly n_top for n=20 at the default top_fraction=0.5,
+    # so the 10-record remainder can only come from the 20 unscored rows.
+    pool = make_pool(n=30, n_unscored=20, seed=3)
+    chosen = select(pool, 20, "score_topk_mixed", np.random.default_rng(0))
+    assert len(chosen) == 20 and len(set(chosen)) == 20
+
+
+def test_score_topk_mixed_top_fraction_bounds():
+    pool = make_pool()
+    n = 30
+    full_top = select(pool, n, "score_topk_mixed", np.random.default_rng(0), top_fraction=1.0)
+    expected = select(pool, n, "score_topk", np.random.default_rng(0))
+    assert full_top == expected
+
+    none_top = select(pool, n, "score_topk_mixed", np.random.default_rng(0), top_fraction=0.0)
+    assert len(none_top) == n and len(set(none_top)) == n
+
+    with pytest.raises(ValueError, match="top_fraction"):
+        select(pool, n, "score_topk_mixed", np.random.default_rng(0), top_fraction=1.5)
 
 
 def test_registry_rejects_unknown_and_duplicate_names():
@@ -88,6 +115,11 @@ def test_registry_rejects_unknown_and_duplicate_names():
         select(make_pool(), 5, "greedy", np.random.default_rng(0))
     with pytest.raises(ValueError, match="already registered"):
         register_strategy("random")(lambda pool, n, rng: [])
+
+
+def test_registry_no_longer_has_stratified_score():
+    assert "stratified_score" not in available_strategies()
+    assert "score_topk_mixed" in available_strategies()
 
 
 def test_a_new_strategy_is_one_registered_function():

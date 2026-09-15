@@ -3,12 +3,12 @@
 # cycle 0 once, then the three strategies over the free GPUs, then the comparison.
 #
 # Usage (from the repository root):
-#   nohup bash scripts/run_al_retro.sh > /scratch/mstryja/adota_runs/al_retro/d30/pilot.out 2>&1 & echo "PID: $!"
+#   nohup bash scripts/run_al_retro.sh > /scratch/mstryja/adota_runs/al_retro/d30/exp0010/launch.out 2>&1 & echo "PID: $!"
 #
 # Knobs, all environment variables:
 #   CONFIG      the loop config            (default scripts/config_al_retro_loop.yaml)
-#   GPUS        space-separated device ids  (default "0 2"); strategies queue over them
-#   STRATEGIES  space-separated strategies  (default "random score_topk stratified_score")
+#   GPUS        space-separated device ids  (default "0 1 2"); strategies queue over them
+#   STRATEGIES  space-separated strategies  (default "random score_topk score_topk_mixed")
 #   CYCLE0_RUN  an existing cycle-0 run directory, to skip training it again
 #   SKIP_SPLITS set to 1 when the splits are already written
 #
@@ -19,8 +19,8 @@
 set -uo pipefail
 
 CONFIG=${CONFIG:-scripts/config_al_retro_loop.yaml}
-GPUS=${GPUS:-"0 2"}
-STRATEGIES=${STRATEGIES:-"random score_topk stratified_score"}
+GPUS=${GPUS:-"0 1 2"}
+STRATEGIES=${STRATEGIES:-"random score_topk score_topk_mixed"}
 CYCLE0_RUN=${CYCLE0_RUN:-}
 SKIP_SPLITS=${SKIP_SPLITS:-0}
 

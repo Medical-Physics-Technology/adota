@@ -6,12 +6,12 @@
 # splits, the cycle-0 checkpoint, the evaluation subsample and the training set
 # size at every cycle. Output goes to a timestamped directory under output_dir.
 runs: []
-#  - /scratch/mstryja/adota_runs/al_retro/train_<ts>_al_EXP-0009_random_seed1234
-#  - /scratch/mstryja/adota_runs/al_retro/train_<ts>_al_EXP-0009_score_topk_seed1234
-#  - /scratch/mstryja/adota_runs/al_retro/train_<ts>_al_EXP-0009_stratified_score_seed1234
+#  - /scratch/mstryja/adota_runs/al_retro/d30/exp0010/train_<ts>_al_EXP-0010_random_seed1234
+#  - /scratch/mstryja/adota_runs/al_retro/d30/exp0010/train_<ts>_al_EXP-0010_score_topk_seed1234
+#  - /scratch/mstryja/adota_runs/al_retro/d30/exp0010/train_<ts>_al_EXP-0010_score_topk_mixed_seed1234
 labels: []                # optional, one per run; defaults to the strategy name
 output_dir: /scratch/mstryja/adota_runs/al_retro/compare
-title: "Retrospective active learning (EXP-0009)"
+title: "Retrospective active learning (EXP-0010)"
 
 # Epochs-to-quality thresholds, read off the subsample metrics after the fact.
 # Metric names are the `sub_` columns of the flattened metrics log.
