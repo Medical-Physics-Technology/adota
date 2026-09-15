@@ -46,14 +46,18 @@ uv run python scripts/al_compare.py --config scripts/config_al_compare.yaml \
     --run <random run> --run <score_topk run> --run <score_topk_mixed run>
 ```
 
-**Unattended:** `scripts/run_al_retro.sh` runs all four steps, queuing the
-strategies over the GPUs in `GPUS` and comparing whatever finished. EXP-0010
-reuses the EXP-0009 splits and cycle-0 checkpoint, so it skips both:
+**Unattended:** `scripts/run_al_retro.sh` runs all four steps, queuing every
+(seed, strategy) pair over the GPUs in `GPUS` seed by seed and comparing
+whatever finished. `SEEDS` defaults to the config's `seed`; with three GPUs and
+three strategies each seed is one round, so the first round can be compared by
+hand while the rest run. Every seed resumes from the one `CYCLE0_RUN`: the seed
+changes the selection draws and the mini-batch order, not the starting weights.
+EXP-0011 reuses the EXP-0009 splits and cycle-0 checkpoint, so it skips both:
 
 ```bash
-GPUS="0 1 2" STRATEGIES="random score_topk score_topk_mixed" SKIP_SPLITS=1 \
+GPUS="0 1 2" STRATEGIES="random score_topk score_topk_mixed" SEEDS="1234 1235 1236" SKIP_SPLITS=1 \
 CYCLE0_RUN=/scratch/mstryja/adota_runs/al_retro/d30/train_20260910_192628_al_EXP-0009_d30_cycle0_seed1234 \
-nohup bash scripts/run_al_retro.sh > /scratch/mstryja/adota_runs/al_retro/d30/exp0010/launch.out 2>&1 & echo "PID: $!"
+nohup bash scripts/run_al_retro.sh > /scratch/mstryja/adota_runs/al_retro/d30/exp0011/launch.out 2>&1 & echo "PID: $!"
 ```
 
 **Smoke test first.** There is no smoke YAML: the smoke test is the main config plus
@@ -157,8 +161,16 @@ the next one.
 EXP-0009 found that `plateau` couples the learning rate to the strategy: a run
 whose validation loss stalls gets its LR cut and trains slower thereafter, so
 the scheduler amplifies whatever difference the training data made rather than
-leaving that difference to speak for itself. EXP-0010 uses `constant` so the
-strategy is the only thing that differs between runs.
+leaving that difference to speak for itself. EXP-0010 used `constant` so the
+strategy is the only thing that differs between runs, and found the next
+problem: under a constant 5e-4 the validation loss swings several-fold inside
+a cycle, so the boundary row is one epoch of an oscillating trajectory (two
+same-data replicates differed by 1 to 2 points of mean pass rate at the
+boundary), the mini-batch order pins that trajectory so same-seed runs are not
+independent samples of it, and one run in three diverged mid-cycle (a ten-fold
+rise of the training loss in one epoch). EXP-0011 uses `cosine_per_cycle`, 5e-4
+to `lr_min` 5e-5, so the model is at a low learning rate when it is measured,
+and runs three seeds per strategy.
 
 A fixed schedule (`constant` or `cosine_per_cycle`) carries no scheduler
 object, so a strategy run under one may resume from a cycle-0 checkpoint that
@@ -187,6 +199,19 @@ run reads on its own.
 `F4_fingerprint_energy` (SVG, PDF and PNG, with a CSV of the numbers beside each),
 `summary_boundaries_gamma_<criteria>.csv`, `epochs_to_quality.csv` and
 `consistency.json`. The figure functions are in `src/figures/al_curves.py`.
+
+Two readers added after EXP-0010 sit beside those: `divergences.csv` gives, per
+run and cycle, the largest epoch-to-epoch rise of the training loss and flags it
+above `divergence_ratio` (a flagged cycle, and everything after it, measures the
+recovery rather than the data; `consistency.json` lists the flagged cycles under
+`diverged` and the script warns); `summary_trajectory_last<k>_gamma_<criteria>.csv`
+gives the median of the last `trajectory_last_k` subsample evaluations of every
+cycle, a boundary estimate that does not depend on which epoch the cycle
+happened to end on (on the subsample, so not interchangeable with the full-V
+boundary numbers). When a strategy was run under several seeds, its runs are
+labelled `<strategy>_seed<seed>` and the boundary and trajectory summaries, F2
+and F3 are written a second time `_by_strategy`: mean across seeds with a
+min-max band (`aggregate_over_seeds` in `compare.py`).
 
 ## Resume
 

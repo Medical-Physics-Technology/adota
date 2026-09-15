@@ -172,6 +172,23 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   resume is exact.
 - Output format: `metrics.jsonl` rows gain `lr_schedule` beside the existing
   `lr`; run `manifest.json` files gain `lr_schedule` and `lr_min`.
+- **`src/active_learning/retrospective/compare.py`** reads three things off the
+  log that EXP-0010 had to read by hand: `divergence_table` (per run and cycle,
+  the largest epoch-to-epoch rise of the training loss, flagged above a ratio;
+  EXP-0009 and EXP-0010 each had one run diverge ten-fold mid-cycle),
+  `trajectory_table` (the median of the last k subsample evaluations of a
+  cycle, a boundary estimate independent of the boundary epoch) and
+  `aggregate_over_seeds` (mean with min-max range across the runs of one
+  strategy). `RunData` gains `seed`; `unique_labels` suffixes repeated labels
+  with the seed. `quality_curves_figure` in `src/figures/al_curves.py` draws a
+  band when a frame carries `<column>_min` / `<column>_max`.
+- Output format of `scripts/al_compare.py`: new `divergences.csv`,
+  `summary_trajectory_last<k>_gamma_<criteria>.csv`, and, when a strategy has
+  several runs, the `*_by_strategy` boundary and trajectory summaries and the
+  `F2`/`F3` `_by_strategy` figures; `consistency.json` gains `strategies`,
+  `seeds` and `diverged`. Config keys `divergence_ratio` (2.0) and
+  `trajectory_last_k` (3). `scripts/run_al_retro.sh` gains `SEEDS` and queues
+  (seed, strategy) jobs seed-major; its logs are named `<strategy>_seed<seed>.log`.
 
 ## [1.5.0] - 2026-09-03
 
