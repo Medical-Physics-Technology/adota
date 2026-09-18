@@ -96,6 +96,9 @@ PUBLIC_API: dict[str, tuple[str, ...]] = {
     ),
     "src.figures.beamlet_input": (
         "beamlet_input_figure",
+        "beamlet_dose_figure",
+        "entrance_profile_figure",
+        "entrance_profile_overlay_figure",
     ),
     # The Bragg-peak diagnostic moved to its own module.
     "src.figures.ct_visualizations": (
