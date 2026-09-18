@@ -108,7 +108,10 @@ def quality_curves_figure(curves: Dict[str, pd.DataFrame], *, x: str, x_label: s
     Rows flagged ``cycle_boundary`` get a marker; the caption names the gamma
     criteria, as every gamma figure must. Against ``n_train`` only the boundary
     rows are drawn, since the training set size is constant inside a cycle and
-    the cadence rows would collapse into vertical spikes.
+    the cadence rows would collapse into vertical spikes. A frame that carries
+    ``<column>_min`` and ``<column>_max`` beside a metric column (the output of
+    :func:`src.active_learning.retrospective.compare.aggregate_over_seeds`)
+    gets that range drawn as a band around the line.
     """
     n = len(panels)
     n_cols = 3
@@ -125,6 +128,10 @@ def quality_curves_figure(curves: Dict[str, pd.DataFrame], *, x: str, x_label: s
             marks = frame[frame["cycle_boundary"]] if "cycle_boundary" in frame else frame.iloc[:0]
             if x == "n_train":
                 frame = marks
+            if f"{column}_min" in frame and f"{column}_max" in frame:
+                ax.fill_between(frame[x], frame[f"{column}_min"] * factor,
+                                frame[f"{column}_max"] * factor, color=style["color"],
+                                alpha=0.18, linewidth=0)
             ax.plot(frame[x], frame[column] * factor, linewidth=1.3, alpha=0.9, **style)
             ax.scatter(marks[x], marks[column] * factor, color=style["color"], s=28,
                        edgecolor="white", linewidth=0.8, zorder=5)

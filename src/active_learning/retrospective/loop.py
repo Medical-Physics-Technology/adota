@@ -23,16 +23,16 @@ import hashlib
 import json
 import logging
 import shutil
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import numpy as np
 import pandas as pd
 
+from src.active_learning.retrospective.config import RetroConfig
 from src.active_learning.retrospective.dataset import (
-    DEFAULT_EXCLUDE_PATH,
     Splits,
     SplitSpec,
     apply_exclusions,
@@ -50,7 +50,6 @@ from src.active_learning.retrospective.sampling import select, selection_fingerp
 from src.active_learning.retrospective.scoring import build_scorer, score_distribution
 from src.active_learning.retrospective.trainer import (
     CycleSpec,
-    MetricSettings,
     TrainState,
     build_train_state,
     build_validation_bundle,
@@ -60,89 +59,12 @@ from src.active_learning.retrospective.trainer import (
     verify_state_matches_checkpoint,
 )
 from src.active_learning.retrospective.validation import draw_eval_subsample
-from src.adota.config import DEFAULT_GAMMA_PARAMS, DEFAULT_SCALE
 from src.evaluation.cli import resolve_device
-from src.schemas.configs import TrainingConfig
 from src.training.logging_utils import log_phase
 from src.training.run_dir import MetricsLog, save_resolved_config, write_manifest
 from src.utils.serialization import NumpyEncoder
 
 logger = logging.getLogger(__name__)
-
-PROVENANCE_CSV = ("/scratch/mstryja/adota_runs/20260707_124010/figures/acquisition/"
-                  "uuid_provenance_map.csv")
-
-
-@dataclass
-class RetroConfig:
-    """Everything one run of the retrospective benchmark needs."""
-
-    experiment: str = "EXP-0009"
-    dataset_path: str = ""
-    exclude_indexes_path: str = DEFAULT_EXCLUDE_PATH
-    record_provenance_csv: Optional[str] = PROVENANCE_CSV
-    splits_dir: str = "/scratch/mstryja/adota_runs/al_retro/splits"
-    runs_dir: str = "/scratch/mstryja/adota_runs/al_retro"
-    data_fraction: float = 1.0
-    """Share of ``D`` the experiment uses, drawn uniformly at random with
-    ``data_fraction_seed`` before any split; V, T, the cycle-0 set and the pool
-    all come from that subset. 0.3 is the fast pilot; 0.4, 0.5, 0.6 and 1.0 are
-    the planned scale-ups. Every value gets its own ``splits_dir``."""
-    data_fraction_seed: int = 20260911
-    max_records: Optional[int] = None
-    """Cap on ``D`` after ``data_fraction``; the smoke test's knob, never the real run's."""
-    val_fraction: float = 0.15
-    initial_fraction: float = 0.20
-    split_seed: int = 42
-    initial_seed: int = 20260910
-    batch_fraction: float = 0.10
-    n_cycles: int = 5
-    epochs_per_cycle: int = 50
-    eval_every_n_epochs: int = 5
-    eval_subsample_size: int = 1000
-    eval_subsample_seed: int = 20260910
-    strategy: str = "random"
-    seed: int = 1234
-    device_index: Optional[int] = None
-    checkpoint_every_n_epochs: int = 10
-    scorer: Dict[str, Any] = field(default_factory=lambda: {"name": "difficulty"})
-    gamma_params: Dict[str, Any] = field(default_factory=lambda: dict(DEFAULT_GAMMA_PARAMS))
-    gamma_resolution_mm: List[float] = field(default_factory=lambda: [2.0, 2.0, 2.0])
-    gamma_cutoff_percent: float = 10.0
-    gamma_backend: str = "torch"
-    training: Dict[str, Any] = field(default_factory=dict)
-    """The :class:`TrainingConfig` block: model, optimizer, loader, scale."""
-
-    @classmethod
-    def from_dict(cls, raw: Dict[str, Any]) -> "RetroConfig":
-        known = {f.name for f in fields(cls)}
-        unknown = sorted(set(raw) - known)
-        if unknown:
-            raise ValueError(f"unknown retrospective config keys {unknown}")
-        return cls(**raw)
-
-    def training_config(self) -> TrainingConfig:
-        valid = {f.name for f in fields(TrainingConfig)}
-        block = {k: v for k, v in self.training.items() if k in valid}
-        block.update(dataset_path=self.dataset_path,
-                     excluded_indexes_file=self.exclude_indexes_path,
-                     seed=self.seed, runs_dir=self.runs_dir,
-                     device_index=self.device_index if self.device_index is not None else 0,
-                     gamma_params=dict(self.gamma_params),
-                     checkpoint_every_n_epochs=self.checkpoint_every_n_epochs,
-                     gpr_resolution_mm=tuple(self.gamma_resolution_mm))
-        block.setdefault("scale", dict(DEFAULT_SCALE))
-        if "input_shape" in block:
-            block["input_shape"] = tuple(block["input_shape"])
-        return TrainingConfig(**block)
-
-    def metric_settings(self) -> MetricSettings:
-        cfg = self.training_config()
-        return MetricSettings(scale=dict(cfg.scale), gamma_params=dict(self.gamma_params),
-                              resolution_mm=tuple(self.gamma_resolution_mm),
-                              gamma_cutoff_percent=self.gamma_cutoff_percent,
-                              gamma_backend=self.gamma_backend,
-                              lps_dx_mm=cfg.lps_dx_mm, lps_dy_mm=cfg.lps_dy_mm)
 
 
 # ── Stage 1: splits ─────────────────────────────────────────────────────────
@@ -253,7 +175,7 @@ def _write_run_manifest(run_dir: Path, cfg: RetroConfig, inputs: RunInputs, **ex
 def _build_state(cfg: RetroConfig) -> TrainState:
     device = resolve_device(cfg.device_index)
     train_cfg = cfg.training_config()
-    state = build_train_state(train_cfg, device)
+    state = build_train_state(train_cfg, device, lr_schedule=cfg.lr_schedule, lr_min=cfg.lr_min)
     n_params = sum(p.numel() for p in state.base_model.parameters())
     log_phase("INIT", f"Device {device} | DoTA3D_v3 {n_params / 1e6:.2f} M params | "
                       f"compile={'on' if train_cfg.compile else 'off'} "
@@ -279,7 +201,8 @@ def _copy_metrics(source_log: Path, target: MetricsLog, source_run: str) -> int:
 def run_cycle0(cfg: RetroConfig, run_dir: Path) -> Path:
     """Train the shared baseline; returns the checkpoint every strategy resumes from."""
     inputs = load_run_inputs(cfg)
-    _write_run_manifest(run_dir, cfg, inputs, strategy="cycle0", role="cycle0_baseline")
+    _write_run_manifest(run_dir, cfg, inputs, strategy="cycle0", role="cycle0_baseline",
+                        lr_schedule=cfg.lr_schedule, lr_min=cfg.lr_min)
     train_cfg = cfg.training_config()
     state = _build_state(cfg)
     validation = build_validation_bundle(train_cfg, inputs.splits.validation,
@@ -350,7 +273,7 @@ def _score_and_select(cfg: RetroConfig, scorer, pool: pd.DataFrame, n: int, cycl
     scoring_seconds = perf_counter() - started
     scored.to_csv(cycle_dir / "pool_scores.csv", index=False)
     rng = np.random.default_rng([cfg.seed, cycle])
-    selected = select(scored, n, cfg.strategy, rng)
+    selected = select(scored, n, cfg.strategy, rng, **cfg.strategy_params)
     fingerprint = selection_fingerprint(scored, selected)
     chosen = scored[scored["sample_id"].isin(set(selected))]
     chosen[["sample_id", "score"] + [c for c in ("energy_mev", "patient", "anatomy",
@@ -363,6 +286,23 @@ def _score_and_select(cfg: RetroConfig, scorer, pool: pd.DataFrame, n: int, cycl
               "selection_csv": str(selection_csv), "pool_scores_csv": str(cycle_dir / "pool_scores.csv")}
     (cycle_dir / "selection.json").write_text(json.dumps(record, indent=2, cls=NumpyEncoder))
     return {**record, "selected_ids": selected, "reused": False}
+
+
+def _log_cycle0_lr(cycle0_run: Path, cycle0_manifest: Dict[str, Any], cfg: RetroConfig) -> None:
+    """Log what LR schedule and values the shared cycle-0 run actually used,
+    and warn (never raise) when this strategy trains at a fixed LR on top of a
+    cycle-0 baseline that was not itself trained at a constant LR."""
+    cycle0_schedule = cycle0_manifest.get("config", {}).get("lr_schedule", "plateau")
+    rows = [json.loads(line) for line in
+            (cycle0_run / "metrics.jsonl").read_text().splitlines() if line.strip()]
+    lrs = sorted({row["lr"] for row in rows if "lr" in row})
+    log_phase("INIT", f"cycle-0 run {cycle0_run} trained under lr_schedule={cycle0_schedule!r}, "
+                      f"lr values seen: {lrs}")
+    if cfg.lr_schedule != "plateau" and len(lrs) > 1:
+        logger.warning("this strategy run uses lr_schedule=%r but the shared cycle-0 baseline "
+                       "%s was not trained at a constant LR (values %s); the fixed schedule "
+                       "restarts from lr0=%.3e regardless", cfg.lr_schedule, cycle0_run, lrs,
+                       cfg.training_config().learning_rate)
 
 
 def run_strategy(cfg: RetroConfig, run_dir: Path, cycle0_run: Path) -> List[Dict[str, Any]]:
@@ -383,7 +323,8 @@ def run_strategy(cfg: RetroConfig, run_dir: Path, cycle0_run: Path) -> List[Dict
     if not resuming:
         _write_run_manifest(run_dir, cfg, inputs, strategy=cfg.strategy, role="strategy",
                             cycle0_run=str(cycle0_run), cycle0_checkpoint=str(checkpoint),
-                            cycle0_checkpoint_sha256=checkpoint_sha, status="running")
+                            cycle0_checkpoint_sha256=checkpoint_sha, status="running",
+                            lr_schedule=cfg.lr_schedule, lr_min=cfg.lr_min)
         shutil.copy2(cycle0_run / "metrics.jsonl", run_dir / "cycle0_metrics.jsonl")
     metrics_log = MetricsLog(metrics_path)
     if not resuming:
@@ -398,6 +339,7 @@ def run_strategy(cfg: RetroConfig, run_dir: Path, cycle0_run: Path) -> List[Dict
     n_tensors = verify_state_matches_checkpoint(state, checkpoint)
     log_phase("INIT", f"resumed cycle-0 state from {checkpoint} ({n_tensors} tensors verified "
                       f"bit for bit, sha256 {checkpoint_sha[:12]})")
+    _log_cycle0_lr(cycle0_run, cycle0_manifest, cfg)
     validation = build_validation_bundle(train_cfg, inputs.splits.validation,
                                          inputs.subsample_ids, cfg.metric_settings())
     scorer = (build_scorer(dataset_path=cfg.dataset_path, **dict(cfg.scorer))

@@ -6,18 +6,32 @@
 # splits, the cycle-0 checkpoint, the evaluation subsample and the training set
 # size at every cycle. Output goes to a timestamped directory under output_dir.
 runs: []
-#  - /scratch/mstryja/adota_runs/al_retro/train_<ts>_al_EXP-0009_random_seed1234
-#  - /scratch/mstryja/adota_runs/al_retro/train_<ts>_al_EXP-0009_score_topk_seed1234
-#  - /scratch/mstryja/adota_runs/al_retro/train_<ts>_al_EXP-0009_stratified_score_seed1234
+#  - /scratch/mstryja/adota_runs/al_retro/d30/exp0011/train_<ts>_al_EXP-0011_d30_random_seed1234
+#  - /scratch/mstryja/adota_runs/al_retro/d30/exp0011/train_<ts>_al_EXP-0011_d30_random_seed1235
+#  - /scratch/mstryja/adota_runs/al_retro/d30/exp0011/train_<ts>_al_EXP-0011_d30_score_topk_seed1234
+#  ...
+# Several runs of one strategy (its seeds) are labelled <strategy>_seed<seed> and
+# also folded into a mean with a min-max band (the *_by_strategy outputs).
 labels: []                # optional, one per run; defaults to the strategy name
 output_dir: /scratch/mstryja/adota_runs/al_retro/compare
-title: "Retrospective active learning (EXP-0009)"
+title: "Retrospective active learning (EXP-0011)"
+
+# A cycle whose training loss rises more than divergence_ratio-fold between two
+# consecutive epochs is flagged in divergences.csv and consistency.json (EXP-0009
+# and EXP-0010 each had one such run, at x11 and x10). trajectory_last_k is how
+# many of the last subsample evaluations of a cycle the trajectory summary takes
+# the median of, as a boundary estimate independent of the boundary epoch.
+divergence_ratio: 2.0
+trajectory_last_k: 3
 
 # Epochs-to-quality thresholds, read off the subsample metrics after the fact.
-# Metric names are the `sub_` columns of the flattened metrics log.
+# Metric names are the `sub_` columns of the flattened metrics log. The pass-rate
+# levels were raised after EXP-0009 (0.95 mean pass rate was reached by every
+# strategy inside cycles 3 to 5); 0.975 and 10 percent below-95 are where the d30
+# curves separate, if they do.
 thresholds:
-  sub_gpr_mean:            {value: 0.95, direction: ge}
-  sub_gpr_p05:             {value: 0.90, direction: ge}
-  sub_gpr_frac_below_95:   {value: 0.10, direction: le}
-  sub_mape_pct_mean:       {value: 5.0,  direction: le}
-  sub_abs_dr80_p95_mm:     {value: 2.0,  direction: le}
+  sub_gpr_mean:            {value: 0.975, direction: ge}
+  sub_gpr_p05:             {value: 0.90,  direction: ge}
+  sub_gpr_frac_below_95:   {value: 0.10,  direction: le}
+  sub_mape_pct_mean:       {value: 5.0,   direction: le}
+  sub_abs_dr80_p95_mm:     {value: 2.0,   direction: le}
