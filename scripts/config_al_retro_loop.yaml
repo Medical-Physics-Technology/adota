@@ -1,4 +1,4 @@
-# Retrospective active-learning benchmark on the training HDF5 (EXP-0011)
+# Retrospective active-learning benchmark on the training HDF5 (EXP-0012)
 # =========================================================================
 #   uv run python scripts/al_retro_loop.py splits --config scripts/config_al_retro_loop.yaml
 #   uv run python scripts/al_retro_loop.py cycle0 --config scripts/config_al_retro_loop.yaml --device-index 0
@@ -7,28 +7,42 @@
 #   Any key can be overridden on the command line with --set KEY=VALUE (dotted for
 #   nested blocks); the smoke test is this file plus the --set list in the guide.
 #
-# EXP-0011 is EXP-0010 (score_topk_mixed in place of stratified_score, a fixed
-# learning-rate schedule in place of ReduceLROnPlateau) with the schedule changed
-# from constant to a per-cycle cosine and three seeds per strategy, run on the
-# same d30 splits and from the same EXP-0009 cycle 0. EXP-0010 found that under
-# a constant 5e-4 the boundary row is one epoch of a validation loss that swings
-# several-fold inside a cycle, that the mini-batch order pins that trajectory so
-# same-seed runs are not independent, and that one run in three diverged
-# mid-cycle; the cosine settles the model before it is measured and the seeds
-# change the selection draws and the mini-batch order. Seeds are passed on the
-# command line (`--seed`, or SEEDS for scripts/run_al_retro.sh).
+# EXP-0012 is EXP-0011 with two changes.
+#   1. A 5-epoch linear warmup at the start of every cycle: the learning rate
+#      rises from lr_min to 5e-4 over epochs 0 to 4, then decays by cosine back
+#      to lr_min by epoch 49. EXP-0011's warm restart (lr_min straight back to
+#      5e-4 at epoch 0) was itself a divergence: the training loss jumped 40-fold
+#      (random), 67-fold (score_topk) and 50-fold (score_topk_mixed) into cycle 2,
+#      and the strategy ranking followed that shock. restart_ratios.csv of
+#      al_compare.py checks that the jump is removed and not only delayed.
+#   2. A patient-held-out validation set on the v3 HDF5. EXP-0009 to EXP-0011
+#      drew V record by record, so V shared 55 of its 55 CT scans with T and
+#      measured new beamlets of seen patients only. Here 12 whole CT scans (9
+#      thorax, 3 pelvis, about 20 percent) are held out by `patient_key`, the
+#      per-record scan id v3 carries; a patient scanned twice would count as two.
+# New splits mean a new cycle 0: it is trained fresh on these splits at the
+# constant 5e-4 for 50 epochs that EXP-0009's cycle 0 ran, via
+#   CYCLE0_ARGS="--set lr_schedule=constant --set warmup_epochs=0"
+# on scripts/run_al_retro.sh; the strategy runs use the schedule below. Same
+# three strategies (random, score_topk, score_topk_mixed) and three seeds, 1234,
+# 1235 and 1236 (`--seed`, or SEEDS for scripts/run_al_retro.sh). The absolute
+# numbers are not comparable with EXP-0009 to EXP-0011 (different V).
 #
 # The labels already exist; the loop hides them and reveals them only for the
 # records a strategy selects. No Monte Carlo, no candidate generation, no cost
 # axis: the question is how the sampling strategy shapes the training progress.
 # Guide: scripts/docs/al_retro_loop.md. Design: docs/active_learning_pipeline.md.
 
-experiment: EXP-0011
+experiment: EXP-0012
 
 # ── Data ──────────────────────────────────────────────────────────────────
-dataset_path: /scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5
+# v3 (CHG-0011): the v2 records byte for byte plus per-record provenance
+# (patient_key, source_dataset, ...), read from the index CSV beside the file.
+dataset_path: /scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5
 # Mandatory. A missing file is an error, never an unfiltered set. A copy is
-# vendored at data/excluded_indexes/ and cross-checked against this one.
+# vendored at data/excluded_indexes/ and cross-checked against this one. v3 was
+# built with this list applied, so on v3 it drops nothing; it stays for the
+# manifest fingerprint and because the loader opens it.
 exclude_indexes_path: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
 # sample_id -> anatomy, patient_key of the difficulty study; feeds the selection
 # fingerprint. Optional: without it patient and anatomy read "unknown".
@@ -45,13 +59,19 @@ data_fraction: 0.30
 data_fraction_seed: 20260911
 
 # ── Splits (written once by the `splits` stage, read by every run) ─────────
-# splits_dir is unchanged from EXP-0009: same d30 splits. The cycle-0 run is
-# also reused from EXP-0009 rather than retrained, via --cycle0-run on `run`
-# (or CYCLE0_RUN for scripts/run_al_retro.sh); runs_dir below only collects the
-# new strategy runs.
-splits_dir: /scratch/mstryja/adota_runs/al_retro/d30/splits
-runs_dir: /scratch/mstryja/adota_runs/al_retro/d30/exp0011
-val_fraction: 0.15        # V, drawn from D with train_val_split (train_adota's mechanism)
+# New patient-held-out splits of v3 at d30. The d30 subset is drawn record by
+# record first (data_fraction_seed), then V = every d30 record of the 12
+# held-out scans (split_seed), T = the rest, the cycle-0 set from T record by
+# record (initial_seed). The `splits` stage refuses to overwrite them.
+splits_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/splits
+runs_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/exp0012
+val_split: patient        # record (EXP-0009 to EXP-0011) | patient
+val_group_column: patient_key
+val_stratify_column: source_dataset
+val_groups_per_stratum:   # 12 of 56 scans; V and T share none
+  initial_test_one_ct: 9  # of 40 thorax scans
+  trainset_pelvis: 3      # of 16 pelvis scans
+val_fraction: 0.15        # unused under val_split: patient
 initial_fraction: 0.20    # the cycle-0 set, drawn from T the same way
 split_seed: 42
 initial_seed: 20260910
@@ -67,7 +87,7 @@ eval_subsample_seed: 20260910
 strategy: random          # random | score_topk | score_topk_mixed (override on the CLI)
 strategy_params: {}       # forwarded to the strategy as keyword args; score_topk_mixed's
                            # default is {top_fraction: 0.5}, random and score_topk take none
-seed: 1234               # EXP-0011 runs 1234, 1235 and 1236 (SEEDS="1234 1235 1236")
+seed: 1234               # EXP-0012 runs 1234, 1235 and 1236 (SEEDS="1234 1235 1236")
 device_index: 0
 checkpoint_every_n_epochs: 10
 
@@ -75,20 +95,37 @@ checkpoint_every_n_epochs: 10
 # across cycles; what EXP-0009 ran), constant (training.learning_rate held fixed
 # every epoch; what EXP-0010 ran), or cosine_per_cycle (cosine decay from
 # training.learning_rate to lr_min over each cycle, warm-restarting every cycle).
-# EXP-0011 uses `cosine_per_cycle`, 5e-4 to 5e-5: still a pure function of the
-# epoch, so identical for every strategy, but the model is at a low learning
-# rate when the boundary is measured, which is where EXP-0010's within-cycle
-# oscillation and both mid-cycle divergences lived. The shared cycle 0 stays the
-# constant-LR endpoint of EXP-0009; it is common to every run and cancels.
+# EXP-0011 used `cosine_per_cycle`, 5e-4 to 5e-5: a pure function of the epoch,
+# so identical for every strategy, with the model at a low learning rate when
+# the boundary is measured, which is where EXP-0010's within-cycle oscillation
+# and both mid-cycle divergences lived. Its warm restart was a 40 to 67-fold
+# shock to the training loss, so EXP-0012 keeps the cosine and adds
+# warmup_epochs: 5, a linear rise from lr_min (epoch 0, exactly where the
+# previous cycle ended) to training.learning_rate (epoch 5), after which the
+# cosine decays to lr_min at the last epoch. Still a pure function of the epoch,
+# so mid-cycle resume stays exact. warmup_epochs must be smaller than
+# epochs_per_cycle and is rejected under plateau; 0 is no warmup. The shared
+# cycle 0 stays the constant-LR endpoint of EXP-0009; it is common to every run
+# and cancels (cycle 1 now starts from lr_min instead of 5e-4, a drop, not a
+# shock).
 lr_schedule: cosine_per_cycle
 lr_min: 0.00005
+warmup_epochs: 5
 
 # ── Scoring (cycle 1 onward, on the fly, through the scorer interface) ────
+# The deployed EXP-0006 scorer was fitted on 11 of EXP-0012's 12 held-out scans,
+# so V patients' labels shaped the selection function. EXP-0012 uses the same
+# protocol refitted without them (scripts/analysis/acquisition_input_only_refit.py
+# --exclude-patients <splits_dir>/scorer_excluded_patients.txt): 14,585 records of
+# the 12 scans dropped, frozen-test Pearson 0.871 against the deployed 0.879, and
+# its scores agree with the deployed one at Pearson 1.000 (top-10 percent overlap
+# 0.98), so the leak was negligible; it is removed anyway so V is clean for every
+# strategy.
 scorer:
   name: difficulty
-  scorer_path: src/acquisition/data/analytic_scorer.json   # DifficultyScorer.load default
+  scorer_path: src/acquisition/data/analytic_scorer_exp0012_train_patients.json
   variant: "full (ridge)"
-  arm: null
+  arm: analytic/both_inside_crop
   n_workers: 12
 
 # ── Validation metrics ────────────────────────────────────────────────────

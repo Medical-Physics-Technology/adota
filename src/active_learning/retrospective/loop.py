@@ -46,6 +46,7 @@ from src.active_learning.retrospective.dataset import (
     record_metadata,
     write_splits,
 )
+from src.active_learning.retrospective.patient_split import assert_groups_disjoint, build_patient_splits
 from src.active_learning.retrospective.sampling import select, selection_fingerprint
 from src.active_learning.retrospective.scoring import build_scorer, score_distribution
 from src.active_learning.retrospective.trainer import (
@@ -70,9 +71,19 @@ logger = logging.getLogger(__name__)
 # ── Stage 1: splits ─────────────────────────────────────────────────────────
 
 
-def prepare_splits(cfg: RetroConfig) -> Dict[str, Any]:
+def prepare_splits(cfg: RetroConfig, overwrite: bool = False) -> Dict[str, Any]:
     """Apply the exclusion list, draw ``V`` and the cycle-0 set, write them, and
-    write the per-record metadata the fingerprints need."""
+    write the per-record metadata the fingerprints need.
+
+    Refuses to write into a ``splits_dir`` that already holds a ``splits.json``
+    unless ``overwrite`` is set: the splits are frozen once drawn, every run
+    manifest pins their fingerprint, and some (the v3 d30 splits) are the v2
+    ids materialised by hand rather than a draw this function would reproduce.
+    """
+    existing = Path(cfg.splits_dir) / "splits.json"
+    if existing.exists() and not overwrite:
+        raise FileExistsError(f"{existing} exists; the splits are frozen. Pass overwrite "
+                              "(--overwrite on the CLI) to redraw them deliberately.")
     excluded = read_exclusion_list(Path(cfg.exclude_indexes_path))
     check = cross_check_exclusions(Path(cfg.exclude_indexes_path))
     all_ids = read_record_ids(Path(cfg.dataset_path))
@@ -94,17 +105,37 @@ def prepare_splits(cfg: RetroConfig) -> Dict[str, Any]:
         logger.warning("max_records: subsampled D to %d records (smoke test only)", len(kept))
     spec = SplitSpec(val_fraction=cfg.val_fraction, initial_fraction=cfg.initial_fraction,
                      val_seed=cfg.split_seed, initial_seed=cfg.initial_seed)
-    splits = build_splits(kept, spec)
+    provenance = Path(cfg.record_provenance_csv) if cfg.record_provenance_csv else None
+    split_extra: Dict[str, Any] = {"val_split": cfg.val_split}
+    meta = None
+    if cfg.val_split == "patient":
+        # A patient split needs every record's group before V is drawn.
+        meta = record_metadata(Path(cfg.dataset_path), kept, provenance,
+                               scale=cfg.training_config().scale)
+        splits, held_out = build_patient_splits(
+            kept, meta, cfg.val_group_column, cfg.val_stratify_column,
+            cfg.val_groups_per_stratum, cfg.split_seed, cfg.initial_fraction, cfg.initial_seed)
+        groups = meta.set_index("sample_id")[cfg.val_group_column].astype(str)
+        split_extra.update(val_group_column=cfg.val_group_column,
+                           val_stratify_column=cfg.val_stratify_column,
+                           val_groups_per_stratum=dict(cfg.val_groups_per_stratum),
+                           held_out_groups=held_out,
+                           n_groups_validation=int(groups.loc[splits.validation].nunique()),
+                           n_groups_training=int(groups.loc[splits.training].nunique()))
+    else:
+        splits = build_splits(kept, spec)
     out = Path(cfg.splits_dir)
-    summary_path = write_splits(splits, out, spec, extra={
+    summary_path = write_splits(splits, out, spec, extra={**split_extra,
         "dataset_path": cfg.dataset_path, "exclude_indexes_path": cfg.exclude_indexes_path,
         "n_records_file": len(all_ids), "n_excluded_listed": len(excluded),
         "n_after_exclusion": n_full, "data_fraction": cfg.data_fraction,
         "data_fraction_seed": cfg.data_fraction_seed, "n_after_data_fraction": len(kept),
         "max_records": cfg.max_records, "exclusion_cross_check": check})
-    meta = record_metadata(Path(cfg.dataset_path), splits.training + splits.validation,
-                           Path(cfg.record_provenance_csv) if cfg.record_provenance_csv else None,
-                           scale=cfg.training_config().scale)
+    if meta is None:
+        meta = record_metadata(Path(cfg.dataset_path), splits.training + splits.validation,
+                               provenance, scale=cfg.training_config().scale)
+    else:
+        meta = meta.set_index("sample_id").loc[splits.training + splits.validation].reset_index()
     meta.to_csv(out / "record_metadata.csv", index=False)
     logger.info("splits written to %s (fingerprint %s)", summary_path, splits.fingerprint()[:12])
     return json.loads(summary_path.read_text())
@@ -139,6 +170,8 @@ def load_run_inputs(cfg: RetroConfig) -> RunInputs:
     metadata["sample_id"] = metadata["sample_id"].astype(str)
     summary = json.loads((directory / "splits.json").read_text())
     summary["splits_dir"] = str(directory)
+    if summary.get("val_split") == "patient":
+        assert_groups_disjoint(splits, metadata, summary["val_group_column"])
     subsample = draw_eval_subsample(splits.validation, cfg.eval_subsample_size,
                                     cfg.eval_subsample_seed)
     return RunInputs(splits=splits, metadata=metadata, subsample_ids=subsample,
@@ -175,7 +208,8 @@ def _write_run_manifest(run_dir: Path, cfg: RetroConfig, inputs: RunInputs, **ex
 def _build_state(cfg: RetroConfig) -> TrainState:
     device = resolve_device(cfg.device_index)
     train_cfg = cfg.training_config()
-    state = build_train_state(train_cfg, device, lr_schedule=cfg.lr_schedule, lr_min=cfg.lr_min)
+    state = build_train_state(train_cfg, device, lr_schedule=cfg.lr_schedule, lr_min=cfg.lr_min,
+                              warmup_epochs=cfg.warmup_epochs)
     n_params = sum(p.numel() for p in state.base_model.parameters())
     log_phase("INIT", f"Device {device} | DoTA3D_v3 {n_params / 1e6:.2f} M params | "
                       f"compile={'on' if train_cfg.compile else 'off'} "
@@ -202,7 +236,8 @@ def run_cycle0(cfg: RetroConfig, run_dir: Path) -> Path:
     """Train the shared baseline; returns the checkpoint every strategy resumes from."""
     inputs = load_run_inputs(cfg)
     _write_run_manifest(run_dir, cfg, inputs, strategy="cycle0", role="cycle0_baseline",
-                        lr_schedule=cfg.lr_schedule, lr_min=cfg.lr_min)
+                        lr_schedule=cfg.lr_schedule, lr_min=cfg.lr_min,
+                        warmup_epochs=cfg.warmup_epochs)
     train_cfg = cfg.training_config()
     state = _build_state(cfg)
     validation = build_validation_bundle(train_cfg, inputs.splits.validation,
@@ -301,8 +336,10 @@ def _log_cycle0_lr(cycle0_run: Path, cycle0_manifest: Dict[str, Any], cfg: Retro
     if cfg.lr_schedule != "plateau" and len(lrs) > 1:
         logger.warning("this strategy run uses lr_schedule=%r but the shared cycle-0 baseline "
                        "%s was not trained at a constant LR (values %s); the fixed schedule "
-                       "restarts from lr0=%.3e regardless", cfg.lr_schedule, cycle0_run, lrs,
-                       cfg.training_config().learning_rate)
+                       "starts cycle 1 from %.3e regardless (lr0, or lr_min under a warmup of "
+                       "%d epochs)", cfg.lr_schedule, cycle0_run, lrs,
+                       cfg.lr_min if cfg.warmup_epochs else cfg.training_config().learning_rate,
+                       cfg.warmup_epochs)
 
 
 def run_strategy(cfg: RetroConfig, run_dir: Path, cycle0_run: Path) -> List[Dict[str, Any]]:
@@ -324,7 +361,8 @@ def run_strategy(cfg: RetroConfig, run_dir: Path, cycle0_run: Path) -> List[Dict
         _write_run_manifest(run_dir, cfg, inputs, strategy=cfg.strategy, role="strategy",
                             cycle0_run=str(cycle0_run), cycle0_checkpoint=str(checkpoint),
                             cycle0_checkpoint_sha256=checkpoint_sha, status="running",
-                            lr_schedule=cfg.lr_schedule, lr_min=cfg.lr_min)
+                            lr_schedule=cfg.lr_schedule, lr_min=cfg.lr_min,
+                            warmup_epochs=cfg.warmup_epochs)
         shutil.copy2(cycle0_run / "metrics.jsonl", run_dir / "cycle0_metrics.jsonl")
     metrics_log = MetricsLog(metrics_path)
     if not resuming:

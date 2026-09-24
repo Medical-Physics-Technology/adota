@@ -81,6 +81,8 @@ def splits(
     max_records: Annotated[Optional[int], typer.Option(
         help="Cap on D after the fraction. Smoke tests only.")] = None,
     splits_dir: Annotated[Optional[Path], typer.Option()] = None,
+    overwrite: Annotated[bool, typer.Option(
+        help="Redraw even though splits_dir already holds frozen splits.")] = False,
     set_: SetOption = None,
 ) -> None:
     """Apply the exclusion list; take the data fraction; write V, T and the cycle-0 set."""
@@ -88,7 +90,7 @@ def splits(
                         force=True)
     cfg = _config(config, set_, data_fraction=data_fraction, max_records=max_records,
                   splits_dir=str(splits_dir) if splits_dir else None)
-    summary = prepare_splits(cfg)
+    summary = prepare_splits(cfg, overwrite=overwrite)
     typer.echo(f"|D| after exclusion: {summary['n_after_exclusion']} "
                f"(file {summary['n_records_file']}, listed {summary['n_excluded_listed']}); "
                f"data fraction {summary['data_fraction']:.2f} -> {summary['n_after_data_fraction']}")

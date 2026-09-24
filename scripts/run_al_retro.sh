@@ -16,6 +16,10 @@
 #   CYCLE0_RUN  an existing cycle-0 run directory, to skip training it again; every
 #               seed resumes from this one checkpoint (the seed changes the selection
 #               draws and the mini-batch order, not the starting weights)
+#   CYCLE0_ARGS extra arguments for the cycle-0 stage only, e.g.
+#               "--set lr_schedule=constant --set warmup_epochs=0" to train cycle 0 at
+#               the constant 5e-4 of EXP-0009's cycle 0 while the strategy runs use
+#               the config's schedule (EXP-0012)
 #   SKIP_SPLITS set to 1 when the splits are already written
 #
 # Every stage writes its own log next to the runs (see `runs_dir` in the config);
@@ -28,6 +32,7 @@ CONFIG=${CONFIG:-scripts/config_al_retro_loop.yaml}
 GPUS=${GPUS:-"0 1 2"}
 STRATEGIES=${STRATEGIES:-"random score_topk score_topk_mixed"}
 CYCLE0_RUN=${CYCLE0_RUN:-}
+CYCLE0_ARGS=${CYCLE0_ARGS:-}
 SKIP_SPLITS=${SKIP_SPLITS:-0}
 
 RUNS_DIR=$(grep -E '^runs_dir:' "$CONFIG" | awk '{print $2}')
@@ -51,9 +56,10 @@ fi
 # ── 2. Cycle 0 ───────────────────────────────────────────────────────────────
 read -r -a GPU_LIST <<< "$GPUS"
 if [ -z "$CYCLE0_RUN" ]; then
-    stamp "=== cycle 0 on GPU ${GPU_LIST[0]}"
+    stamp "=== cycle 0 on GPU ${GPU_LIST[0]} ${CYCLE0_ARGS:+(extra: $CYCLE0_ARGS)}"
+    read -r -a CYCLE0_EXTRA <<< "$CYCLE0_ARGS"
     uv run python scripts/al_retro_loop.py cycle0 --config "$CONFIG" --device-index "${GPU_LIST[0]}" \
-        > "$LOG_DIR/cycle0.log" 2>&1 || { stamp "cycle 0 FAILED, see $LOG_DIR/cycle0.log"; exit 1; }
+        "${CYCLE0_EXTRA[@]}" > "$LOG_DIR/cycle0.log" 2>&1 || { stamp "cycle 0 FAILED, see $LOG_DIR/cycle0.log"; exit 1; }
     CYCLE0_RUN=$(grep '^cycle-0 run:' "$LOG_DIR/cycle0.log" | tail -1 | sed 's/^cycle-0 run: //')
 fi
 [ -d "$CYCLE0_RUN" ] || { stamp "no cycle-0 run directory ($CYCLE0_RUN)"; exit 1; }
