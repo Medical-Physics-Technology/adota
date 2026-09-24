@@ -283,6 +283,17 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 - **`scripts/config_al_retro_loop.yaml`** is EXP-0012 on the v3 HDF5 with 12
   held-out CT scans (9 thorax, 3 pelvis) at d30, splits and runs under
   `/scratch/mstryja/adota_runs/al_retro_v3/d30_patient/`.
+- **`scripts/analysis/acquisition_input_only_refit.py`** gains
+  `--exclude-patients` (provenance-map `patient_key` values whose records are
+  dropped from development and frozen test before fitting) and `--output-dir`
+  (defaults to `--features-dir`, the old behaviour); `analytic_scorer.json`
+  gains `excluded_patients`.
+- **New vendored scorer
+  `src/acquisition/data/analytic_scorer_exp0012_train_patients.json`**: the
+  EXP-0006 protocol refitted without EXP-0012's 12 held-out scans (the deployed
+  scorer was fitted on 11 of them). EXP-0012 loads it with `arm:
+  analytic/both_inside_crop`, `variant: full (ridge)`; the deployed
+  `analytic_scorer.json` is unchanged.
 
 ## [1.5.0] - 2026-09-03
 

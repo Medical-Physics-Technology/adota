@@ -113,11 +113,19 @@ lr_min: 0.00005
 warmup_epochs: 5
 
 # ── Scoring (cycle 1 onward, on the fly, through the scorer interface) ────
+# The deployed EXP-0006 scorer was fitted on 11 of EXP-0012's 12 held-out scans,
+# so V patients' labels shaped the selection function. EXP-0012 uses the same
+# protocol refitted without them (scripts/analysis/acquisition_input_only_refit.py
+# --exclude-patients <splits_dir>/scorer_excluded_patients.txt): 14,585 records of
+# the 12 scans dropped, frozen-test Pearson 0.871 against the deployed 0.879, and
+# its scores agree with the deployed one at Pearson 1.000 (top-10 percent overlap
+# 0.98), so the leak was negligible; it is removed anyway so V is clean for every
+# strategy.
 scorer:
   name: difficulty
-  scorer_path: src/acquisition/data/analytic_scorer.json   # DifficultyScorer.load default
+  scorer_path: src/acquisition/data/analytic_scorer_exp0012_train_patients.json
   variant: "full (ridge)"
-  arm: null
+  arm: analytic/both_inside_crop
   n_workers: 12
 
 # ── Validation metrics ────────────────────────────────────────────────────
