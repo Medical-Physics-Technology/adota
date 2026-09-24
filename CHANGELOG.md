@@ -241,7 +241,7 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   straight back to `lr0`) was itself a 40 to 67-fold jump of the training loss
   at cycle 2; the warmup removes the jump while staying a pure function of the
   epoch. `scripts/config_al_retro_loop.yaml` is now EXP-0012 (EXP-0011 plus
-  `warmup_epochs: 5`, runs under `d30/exp0012`).
+  `warmup_epochs: 5`, on v3 with a patient-held-out V; see below).
 - Output format: run `manifest.json` files gain `warmup_epochs` beside
   `lr_schedule` and `lr_min`.
 - **`divergence_table` semantics changed**: the epoch-to-epoch rise is now taken
@@ -264,15 +264,25 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   `overwrite: bool = False` and raises `FileExistsError` when `splits_dir`
   already holds a `splits.json`; the `splits` stage of
   `scripts/al_retro_loop.py` gains `--overwrite`. Frozen splits (the d30 splits
-  of EXP-0009 to EXP-0012, and the v3 d30 splits, which are the v2 ids
-  materialised by hand) can no longer be redrawn by a stray `splits` run or a
-  launcher started without `SKIP_SPLITS=1`.
-- **New config `scripts/config_al_retro_loop_v3.yaml`**: the EXP-0012 setup on
-  the v3 HDF5, prepared for EXP-0013 and not yet run. Its `splits_dir` holds the
-  v2 d30 split ids (fingerprint 18ddcc5cf28d, identical to v2's) with
-  `record_metadata.csv` rebuilt from the v3 index; cycle 0 is to be trained
-  fresh on v3 at a constant 5e-4 (`--set lr_schedule=constant --set
-  warmup_epochs=0`), the schedule EXP-0009's cycle 0 actually ran.
+  of EXP-0009 to EXP-0011 and the patient-held-out splits of EXP-0012) can no
+  longer be redrawn by a stray `splits` run or a launcher started without
+  `SKIP_SPLITS=1`.
+- **Patient-held-out validation split.** New module
+  `src/active_learning/retrospective/patient_split.py` (`select_held_out_groups`,
+  `build_patient_splits`, `assert_groups_disjoint`) and new `RetroConfig` keys
+  `val_split` (`record`, the default and unchanged, or `patient`),
+  `val_group_column` (`patient_key`), `val_stratify_column` (`source_dataset`)
+  and `val_groups_per_stratum`. Under `patient`, V is every record of a fixed
+  number of held-out groups per stratum, drawn with `split_seed`; `load_run_inputs`
+  re-checks that no group is in both V and T. Output format: `splits.json`
+  gains `val_split` and, under `patient`, `held_out_groups`,
+  `n_groups_validation` and `n_groups_training`.
+- **`scripts/run_al_retro.sh`** gains `CYCLE0_ARGS`, extra arguments for the
+  cycle-0 stage only (EXP-0012 trains cycle 0 at a constant 5e-4 while the
+  strategy runs use the warmed-up cosine).
+- **`scripts/config_al_retro_loop.yaml`** is EXP-0012 on the v3 HDF5 with 12
+  held-out CT scans (9 thorax, 3 pelvis) at d30, splits and runs under
+  `/scratch/mstryja/adota_runs/al_retro_v3/d30_patient/`.
 
 ## [1.5.0] - 2026-09-03
 

@@ -46,6 +46,7 @@ from src.active_learning.retrospective.dataset import (
     record_metadata,
     write_splits,
 )
+from src.active_learning.retrospective.patient_split import assert_groups_disjoint, build_patient_splits
 from src.active_learning.retrospective.sampling import select, selection_fingerprint
 from src.active_learning.retrospective.scoring import build_scorer, score_distribution
 from src.active_learning.retrospective.trainer import (
@@ -104,17 +105,37 @@ def prepare_splits(cfg: RetroConfig, overwrite: bool = False) -> Dict[str, Any]:
         logger.warning("max_records: subsampled D to %d records (smoke test only)", len(kept))
     spec = SplitSpec(val_fraction=cfg.val_fraction, initial_fraction=cfg.initial_fraction,
                      val_seed=cfg.split_seed, initial_seed=cfg.initial_seed)
-    splits = build_splits(kept, spec)
+    provenance = Path(cfg.record_provenance_csv) if cfg.record_provenance_csv else None
+    split_extra: Dict[str, Any] = {"val_split": cfg.val_split}
+    meta = None
+    if cfg.val_split == "patient":
+        # A patient split needs every record's group before V is drawn.
+        meta = record_metadata(Path(cfg.dataset_path), kept, provenance,
+                               scale=cfg.training_config().scale)
+        splits, held_out = build_patient_splits(
+            kept, meta, cfg.val_group_column, cfg.val_stratify_column,
+            cfg.val_groups_per_stratum, cfg.split_seed, cfg.initial_fraction, cfg.initial_seed)
+        groups = meta.set_index("sample_id")[cfg.val_group_column].astype(str)
+        split_extra.update(val_group_column=cfg.val_group_column,
+                           val_stratify_column=cfg.val_stratify_column,
+                           val_groups_per_stratum=dict(cfg.val_groups_per_stratum),
+                           held_out_groups=held_out,
+                           n_groups_validation=int(groups.loc[splits.validation].nunique()),
+                           n_groups_training=int(groups.loc[splits.training].nunique()))
+    else:
+        splits = build_splits(kept, spec)
     out = Path(cfg.splits_dir)
-    summary_path = write_splits(splits, out, spec, extra={
+    summary_path = write_splits(splits, out, spec, extra={**split_extra,
         "dataset_path": cfg.dataset_path, "exclude_indexes_path": cfg.exclude_indexes_path,
         "n_records_file": len(all_ids), "n_excluded_listed": len(excluded),
         "n_after_exclusion": n_full, "data_fraction": cfg.data_fraction,
         "data_fraction_seed": cfg.data_fraction_seed, "n_after_data_fraction": len(kept),
         "max_records": cfg.max_records, "exclusion_cross_check": check})
-    meta = record_metadata(Path(cfg.dataset_path), splits.training + splits.validation,
-                           Path(cfg.record_provenance_csv) if cfg.record_provenance_csv else None,
-                           scale=cfg.training_config().scale)
+    if meta is None:
+        meta = record_metadata(Path(cfg.dataset_path), splits.training + splits.validation,
+                               provenance, scale=cfg.training_config().scale)
+    else:
+        meta = meta.set_index("sample_id").loc[splits.training + splits.validation].reset_index()
     meta.to_csv(out / "record_metadata.csv", index=False)
     logger.info("splits written to %s (fingerprint %s)", summary_path, splits.fingerprint()[:12])
     return json.loads(summary_path.read_text())
@@ -149,6 +170,8 @@ def load_run_inputs(cfg: RetroConfig) -> RunInputs:
     metadata["sample_id"] = metadata["sample_id"].astype(str)
     summary = json.loads((directory / "splits.json").read_text())
     summary["splits_dir"] = str(directory)
+    if summary.get("val_split") == "patient":
+        assert_groups_disjoint(splits, metadata, summary["val_group_column"])
     subsample = draw_eval_subsample(splits.validation, cfg.eval_subsample_size,
                                     cfg.eval_subsample_seed)
     return RunInputs(splits=splits, metadata=metadata, subsample_ids=subsample,

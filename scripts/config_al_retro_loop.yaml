@@ -7,18 +7,26 @@
 #   Any key can be overridden on the command line with --set KEY=VALUE (dotted for
 #   nested blocks); the smoke test is this file plus the --set list in the guide.
 #
-# EXP-0012 is EXP-0011 with a 5-epoch linear warmup at the start of every
-# cycle: the learning rate rises from lr_min to 5e-4 over epochs 0 to 4, then
-# decays by cosine back to lr_min by epoch 49. EXP-0011's warm restart (lr_min
-# straight back to 5e-4 at epoch 0 of every cycle) was itself a divergence: the
-# training loss jumped 40-fold (random), 67-fold (score_topk) and 50-fold
-# (score_topk_mixed) into cycle 2, and the strategy ranking followed the size of
-# that shock. The warmup removes the jump; restart_ratios.csv of al_compare.py
-# checks that it is removed and not only delayed. Everything else is identical
-# to EXP-0011: the same v2 dataset, the same d30 splits, the same EXP-0009
-# cycle 0, the same three strategies (random, score_topk, score_topk_mixed) and
-# the same three seeds, 1234, 1235 and 1236, passed on the command line
-# (`--seed`, or SEEDS for scripts/run_al_retro.sh).
+# EXP-0012 is EXP-0011 with two changes.
+#   1. A 5-epoch linear warmup at the start of every cycle: the learning rate
+#      rises from lr_min to 5e-4 over epochs 0 to 4, then decays by cosine back
+#      to lr_min by epoch 49. EXP-0011's warm restart (lr_min straight back to
+#      5e-4 at epoch 0) was itself a divergence: the training loss jumped 40-fold
+#      (random), 67-fold (score_topk) and 50-fold (score_topk_mixed) into cycle 2,
+#      and the strategy ranking followed that shock. restart_ratios.csv of
+#      al_compare.py checks that the jump is removed and not only delayed.
+#   2. A patient-held-out validation set on the v3 HDF5. EXP-0009 to EXP-0011
+#      drew V record by record, so V shared 55 of its 55 CT scans with T and
+#      measured new beamlets of seen patients only. Here 12 whole CT scans (9
+#      thorax, 3 pelvis, about 20 percent) are held out by `patient_key`, the
+#      per-record scan id v3 carries; a patient scanned twice would count as two.
+# New splits mean a new cycle 0: it is trained fresh on these splits at the
+# constant 5e-4 for 50 epochs that EXP-0009's cycle 0 ran, via
+#   CYCLE0_ARGS="--set lr_schedule=constant --set warmup_epochs=0"
+# on scripts/run_al_retro.sh; the strategy runs use the schedule below. Same
+# three strategies (random, score_topk, score_topk_mixed) and three seeds, 1234,
+# 1235 and 1236 (`--seed`, or SEEDS for scripts/run_al_retro.sh). The absolute
+# numbers are not comparable with EXP-0009 to EXP-0011 (different V).
 #
 # The labels already exist; the loop hides them and reveals them only for the
 # records a strategy selects. No Monte Carlo, no candidate generation, no cost
@@ -28,9 +36,13 @@
 experiment: EXP-0012
 
 # ── Data ──────────────────────────────────────────────────────────────────
-dataset_path: /scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5
+# v3 (CHG-0011): the v2 records byte for byte plus per-record provenance
+# (patient_key, source_dataset, ...), read from the index CSV beside the file.
+dataset_path: /scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5
 # Mandatory. A missing file is an error, never an unfiltered set. A copy is
-# vendored at data/excluded_indexes/ and cross-checked against this one.
+# vendored at data/excluded_indexes/ and cross-checked against this one. v3 was
+# built with this list applied, so on v3 it drops nothing; it stays for the
+# manifest fingerprint and because the loader opens it.
 exclude_indexes_path: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
 # sample_id -> anatomy, patient_key of the difficulty study; feeds the selection
 # fingerprint. Optional: without it patient and anatomy read "unknown".
@@ -47,13 +59,19 @@ data_fraction: 0.30
 data_fraction_seed: 20260911
 
 # ── Splits (written once by the `splits` stage, read by every run) ─────────
-# splits_dir is unchanged from EXP-0009: same d30 splits. The cycle-0 run is
-# also reused from EXP-0009 rather than retrained, via --cycle0-run on `run`
-# (or CYCLE0_RUN for scripts/run_al_retro.sh); runs_dir below only collects the
-# new strategy runs.
-splits_dir: /scratch/mstryja/adota_runs/al_retro/d30/splits
-runs_dir: /scratch/mstryja/adota_runs/al_retro/d30/exp0012
-val_fraction: 0.15        # V, drawn from D with train_val_split (train_adota's mechanism)
+# New patient-held-out splits of v3 at d30. The d30 subset is drawn record by
+# record first (data_fraction_seed), then V = every d30 record of the 12
+# held-out scans (split_seed), T = the rest, the cycle-0 set from T record by
+# record (initial_seed). The `splits` stage refuses to overwrite them.
+splits_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/splits
+runs_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/exp0012
+val_split: patient        # record (EXP-0009 to EXP-0011) | patient
+val_group_column: patient_key
+val_stratify_column: source_dataset
+val_groups_per_stratum:   # 12 of 56 scans; V and T share none
+  initial_test_one_ct: 9  # of 40 thorax scans
+  trainset_pelvis: 3      # of 16 pelvis scans
+val_fraction: 0.15        # unused under val_split: patient
 initial_fraction: 0.20    # the cycle-0 set, drawn from T the same way
 split_seed: 42
 initial_seed: 20260910

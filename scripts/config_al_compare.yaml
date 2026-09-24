@@ -6,14 +6,14 @@
 # splits, the cycle-0 checkpoint, the evaluation subsample and the training set
 # size at every cycle. Output goes to a timestamped directory under output_dir.
 runs: []
-#  - /scratch/mstryja/adota_runs/al_retro/d30/exp0012/train_<ts>_al_EXP-0012_d30_random_seed1234
-#  - /scratch/mstryja/adota_runs/al_retro/d30/exp0012/train_<ts>_al_EXP-0012_d30_random_seed1235
-#  - /scratch/mstryja/adota_runs/al_retro/d30/exp0012/train_<ts>_al_EXP-0012_d30_score_topk_seed1234
+#  - /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/exp0012/train_<ts>_al_EXP-0012_d30_random_seed1234
+#  - /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/exp0012/train_<ts>_al_EXP-0012_d30_random_seed1235
+#  - /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/exp0012/train_<ts>_al_EXP-0012_d30_score_topk_seed1234
 #  ...
 # Several runs of one strategy (its seeds) are labelled <strategy>_seed<seed> and
 # also folded into a mean with a min-max band (the *_by_strategy outputs).
 labels: []                # optional, one per run; defaults to the strategy name
-output_dir: /scratch/mstryja/adota_runs/al_retro/d30/exp0012/compare
+output_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/exp0012/compare
 title: "Retrospective active learning (EXP-0012)"
 
 # A cycle whose training loss rises more than divergence_ratio-fold between two

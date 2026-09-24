@@ -60,6 +60,17 @@ CYCLE0_RUN=/scratch/mstryja/adota_runs/al_retro/d30/train_20260910_192628_al_EXP
 nohup bash scripts/run_al_retro.sh > /scratch/mstryja/adota_runs/al_retro/d30/exp0011/launch.out 2>&1 & echo "PID: $!"
 ```
 
+EXP-0012 draws new patient-held-out splits and trains its own cycle 0, at the
+constant 5e-4 EXP-0009's cycle 0 ran, while the strategy runs use the config's
+warmed-up cosine; `CYCLE0_ARGS` passes extra arguments to the cycle-0 stage only:
+
+```bash
+uv run python scripts/al_retro_loop.py splits --config scripts/config_al_retro_loop.yaml
+GPUS="0 1 2" STRATEGIES="random score_topk score_topk_mixed" SEEDS="1234 1235 1236" SKIP_SPLITS=1 \
+CYCLE0_ARGS="--set lr_schedule=constant --set warmup_epochs=0" \
+nohup bash scripts/run_al_retro.sh > /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/exp0012/launch.out 2>&1 & echo "PID: $!"
+```
+
 **Smoke test first.** There is no smoke YAML: the smoke test is the main config plus
 the repeatable `--set KEY=VALUE` option, which overrides any key (dotted for nested
 blocks) before the config is validated. The list below runs the identical code path
@@ -137,6 +148,9 @@ YAML). Precedence: per-field option > `--set` > YAML > defaults, through
 | `record_provenance_csv` | the study's `uuid_provenance_map.csv` | Patient and anatomy per record for the fingerprint; optional. |
 | `splits_dir`, `runs_dir` | under `/scratch/mstryja/adota_runs/al_retro` | Where the splits and the runs go. |
 | `val_fraction`, `initial_fraction` | 0.15, 0.20 | `V` as a share of `D`; the cycle-0 set as a share of `T`. |
+| `val_split` | `record` | `record`: `V` is `val_fraction` of `D`, drawn record by record, so `V` shares patients with `T` (EXP-0009 to EXP-0011). `patient`: `V` is every record of whole held-out groups; `val_fraction` is unused. |
+| `val_group_column`, `val_stratify_column` | `patient_key`, `source_dataset` | Under `patient`: the metadata column that defines a patient (on v3, one CT scan by its geometry) and the column within which groups are drawn, so `V` covers every anatomy. |
+| `val_groups_per_stratum` | `{}` | Under `patient`: groups held out per stratum, drawn with `split_seed` from the sorted group ids; EXP-0012 holds out `{initial_test_one_ct: 9, trainset_pelvis: 3}`, 12 of 56 scans. `load_run_inputs` re-checks at every load that no group has records in both `V` and `T`. |
 | `split_seed`, `initial_seed` | 42, 20260910 | The two draws. |
 | `batch_fraction`, `n_cycles`, `epochs_per_cycle` | 0.10, 5, 50 | `N` as a share of `T`; the loop length. |
 | `eval_every_n_epochs`, `eval_subsample_size`, `eval_subsample_seed` | 5, 1000, 20260910 | The metric cadence and the fixed subsample. |

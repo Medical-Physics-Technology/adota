@@ -113,7 +113,9 @@ def test_shipped_loop_config_is_exp0012():
     cfg = RetroConfig.from_dict(raw)
     assert cfg.experiment == "EXP-0012"
     assert (cfg.lr_schedule, cfg.lr_min, cfg.warmup_epochs) == ("cosine_per_cycle", 5e-5, 5)
-    assert cfg.runs_dir.endswith("/d30/exp0012")
+    assert cfg.runs_dir.endswith("/d30_patient/exp0012")
+    assert "DoTA_dataset_v3" in cfg.dataset_path and cfg.val_split == "patient"
+    assert cfg.val_groups_per_stratum == {"initial_test_one_ct": 9, "trainset_pelvis": 3}
 
 
 def test_retro_config_rejects_unknown_lr_schedule():
