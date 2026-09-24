@@ -1,6 +1,7 @@
 """The exclusion list, the order of operations, the split files and the schedule."""
 from __future__ import annotations
 
+import h5py
 import numpy as np
 import pandas as pd
 import pytest
@@ -109,3 +110,113 @@ def test_record_metadata_reads_attributes_and_joins_provenance(tmp_path):
     np.testing.assert_allclose(meta["energy_mev"], [90.0, 120.0, 150.0], atol=1e-3)
     assert meta["patient"].tolist() == ["P1", "unknown", "P2"]
     assert meta["anatomy"].tolist() == ["thorax", "unknown", "pelvic"]
+
+
+def test_record_metadata_v2_without_provenance_stays_unknown(tmp_path):
+    ids = ["a", "b"]
+    path = write_dataset(tmp_path / "ds_v2.h5", ids, energies=[90.0, 120.0])
+    meta = record_metadata(path, ids)
+    assert meta.columns.tolist() == ["sample_id", "energy_mev", "gantry_deg", "theta_x_deg",
+                                     "theta_y_deg", "patient", "anatomy"]
+    assert meta["patient"].tolist() == ["unknown", "unknown"]
+    assert meta["anatomy"].tolist() == ["unknown", "unknown"]
+
+
+def _add_v3_attrs(path, ids, *, energy_mev_by_id, source_dataset_by_id, patient_key_by_id,
+                  spot_key_by_id, isocenter_by_id):
+    """Layer v3 provenance attrs on top of the v2-shaped groups `write_dataset`
+    wrote. `conftest.py` is read-only for this package, so this stays local to the
+    test module rather than growing the shared fixture.
+    """
+    with h5py.File(path, "a") as handle:
+        for sample_id in ids:
+            group = handle[sample_id]
+            group.attrs["schema_version"] = np.int64(3)
+            group.attrs["energy_mev"] = np.float64(energy_mev_by_id[sample_id])
+            group.attrs["source_dataset"] = source_dataset_by_id[sample_id]
+            group.attrs["patient_key"] = patient_key_by_id[sample_id]
+            group.attrs["spot_key"] = spot_key_by_id[sample_id]
+            group.attrs["isocenter_mm"] = np.array(isocenter_by_id[sample_id], dtype=np.float64)
+
+
+def test_record_metadata_v3_attrs_adds_provenance_columns_and_uses_energy_attr(tmp_path):
+    ids = ["a", "b"]
+    path = write_dataset(tmp_path / "ds_v3.h5", ids, energies=[90.0, 120.0])
+    # energy_mev attrs deliberately differ from the denormalised initial_energy values,
+    # to prove the v3 path reads the attr rather than denormalising.
+    _add_v3_attrs(
+        path, ids,
+        energy_mev_by_id={"a": 201.5, "b": 55.25},
+        source_dataset_by_id={"a": "trainset_pelvis", "b": "initial_test_one_ct"},
+        patient_key_by_id={"a": "patientA", "b": "patientB"},
+        spot_key_by_id={"a": "spotA", "b": "spotB"},
+        isocenter_by_id={"a": (10.0, 20.0, 30.0), "b": (40.0, 50.0, 60.0)},
+    )
+
+    meta = record_metadata(path, ids)
+    np.testing.assert_allclose(meta["energy_mev"], [201.5, 55.25])
+    assert meta["source_dataset"].tolist() == ["trainset_pelvis", "initial_test_one_ct"]
+    assert meta["patient_key"].tolist() == ["patientA", "patientB"]
+    assert meta["spot_key"].tolist() == ["spotA", "spotB"]
+    np.testing.assert_allclose(meta["isocenter_x_mm"], [10.0, 40.0])
+    np.testing.assert_allclose(meta["isocenter_y_mm"], [20.0, 50.0])
+    np.testing.assert_allclose(meta["isocenter_z_mm"], [30.0, 60.0])
+    # no provenance CSV: patient/anatomy fall back to patient_key/source_dataset
+    assert meta["patient"].tolist() == ["patientA", "patientB"]
+    assert meta["anatomy"].tolist() == ["trainset_pelvis", "initial_test_one_ct"]
+
+    provenance = tmp_path / "prov_v3.csv"
+    pd.DataFrame({"sample_id": ["a", "b"], "anatomy": ["thorax", "pelvic"],
+                  "patient_key": ["P1", "P2"]}).to_csv(provenance, index=False)
+    meta_with_prov = record_metadata(path, ids, provenance)
+    assert meta_with_prov["patient"].tolist() == ["P1", "P2"]
+    assert meta_with_prov["anatomy"].tolist() == ["thorax", "pelvic"]
+
+
+def test_record_metadata_reads_from_index_csv_when_present(tmp_path):
+    ids = ["a", "b"]
+    path = write_dataset(tmp_path / "ds_idx.h5", ids, energies=[90.0, 120.0])
+    _add_v3_attrs(
+        path, ids,
+        energy_mev_by_id={"a": 1.0, "b": 2.0},
+        source_dataset_by_id={"a": "trainset_pelvis", "b": "trainset_pelvis"},
+        patient_key_by_id={"a": "attrs-patient-a", "b": "attrs-patient-b"},
+        spot_key_by_id={"a": "attrs-spot-a", "b": "attrs-spot-b"},
+        isocenter_by_id={"a": (1.0, 1.0, 1.0), "b": (2.0, 2.0, 2.0)},
+    )
+
+    index_path = path.with_name(path.stem + "_index.csv")
+    pd.DataFrame({
+        "sample_id": ["a", "b"],
+        "energy_mev": [111.0, 222.0],
+        "gantry_angle": [10.0, 20.0],
+        "beamlet_angles_0": [0.1, 0.2],
+        "beamlet_angles_1": [-0.1, -0.2],
+        "source_dataset": ["initial_test_one_ct", "initial_test_one_ct"],
+        "patient_key": ["csv-patient-a", "csv-patient-b"],
+        "spot_key": ["csv-spot-a", "csv-spot-b"],
+        "isocenter_mm_0": [100.0, 200.0],
+        "isocenter_mm_1": [101.0, 201.0],
+        "isocenter_mm_2": [102.0, 202.0],
+    }).to_csv(index_path, index=False)
+
+    # requested in reverse order, to prove the frame follows `ids`, not the CSV's order
+    meta = record_metadata(path, ["b", "a"])
+    assert meta["sample_id"].tolist() == ["b", "a"]
+    np.testing.assert_allclose(meta["energy_mev"], [222.0, 111.0])
+    np.testing.assert_allclose(meta["gantry_deg"], [20.0, 10.0])
+    np.testing.assert_allclose(meta["theta_x_deg"], [0.2, 0.1])
+    np.testing.assert_allclose(meta["theta_y_deg"], [-0.2, -0.1])
+    assert meta["source_dataset"].tolist() == ["initial_test_one_ct", "initial_test_one_ct"]
+    assert meta["patient_key"].tolist() == ["csv-patient-b", "csv-patient-a"]
+    assert meta["spot_key"].tolist() == ["csv-spot-b", "csv-spot-a"]
+    np.testing.assert_allclose(meta["isocenter_x_mm"], [200.0, 100.0])
+    np.testing.assert_allclose(meta["isocenter_y_mm"], [201.0, 101.0])
+    np.testing.assert_allclose(meta["isocenter_z_mm"], [202.0, 102.0])
+    # patient/anatomy fall back to the index's patient_key/source_dataset, values that
+    # differ from the h5 attrs above, proving the index -- not the attrs -- was read
+    assert meta["patient"].tolist() == ["csv-patient-b", "csv-patient-a"]
+    assert meta["anatomy"].tolist() == ["initial_test_one_ct", "initial_test_one_ct"]
+
+    with pytest.raises(KeyError, match="missing-id"):
+        record_metadata(path, ["a", "missing-id"])

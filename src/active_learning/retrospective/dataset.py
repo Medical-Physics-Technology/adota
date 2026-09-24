@@ -202,31 +202,105 @@ def assert_schedule(n_current: int, n_initial: int, cycle: int, batch_size: int)
 # ── Record metadata ─────────────────────────────────────────────────────────
 
 
-def record_metadata(dataset_path: Path, ids: Sequence[str],
-                    provenance_csv: Optional[Path] = None,
-                    scale: Dict[str, float] = DEFAULT_SCALE) -> pd.DataFrame:
-    """Energy, gantry and steering per record from the HDF5 attributes, joined with
-    the patient and anatomy of the study's provenance map when one is given.
+def _v3_row_from_attrs(attrs) -> Dict[str, object]:
+    """The v3 provenance columns for one record, from its HDF5 attrs (spec section 4)."""
+    iso = np.asarray(attrs.get("isocenter_mm", [np.nan, np.nan, np.nan]), dtype=float)
+    return {
+        "source_dataset": str(attrs.get("source_dataset", "unknown")),
+        "patient_key": str(attrs.get("patient_key", "unknown")),
+        "spot_key": str(attrs.get("spot_key", "unknown")),
+        "isocenter_x_mm": float(iso[0]) if iso.size > 0 else np.nan,
+        "isocenter_y_mm": float(iso[1]) if iso.size > 1 else np.nan,
+        "isocenter_z_mm": float(iso[2]) if iso.size > 2 else np.nan,
+    }
 
-    Reads attributes only, never a dose array. Records missing from the provenance
-    map keep ``patient`` and ``anatomy`` as ``"unknown"``.
+
+def _frame_from_attrs(dataset_path: Path, ids: Sequence[str], scale: Dict[str, float]) -> pd.DataFrame:
+    """Today's per-id attribute read (v2), extended with the v3 columns of
+    :func:`_v3_row_from_attrs` when a group carries ``schema_version`` (v3).
     """
     rows = []
     with h5py.File(str(dataset_path), "r") as handle:
         for sample_id in ids:
             attrs = handle[sample_id].attrs
             angles = np.asarray(attrs.get("beamlet_angles", [np.nan, np.nan]), dtype=float)
-            rows.append({
+            is_v3 = "schema_version" in attrs
+            energy_mev = (float(attrs["energy_mev"]) if is_v3
+                         else float(denormalize_energy(float(attrs["initial_energy"]), scale)))
+            row = {
                 "sample_id": sample_id,
-                "energy_mev": float(denormalize_energy(float(attrs["initial_energy"]), scale)),
+                "energy_mev": energy_mev,
                 "gantry_deg": float(attrs.get("gantry_angle", np.nan)),
                 "theta_x_deg": float(angles[0]) if angles.size > 0 else np.nan,
                 "theta_y_deg": float(angles[1]) if angles.size > 1 else np.nan,
-            })
-    frame = pd.DataFrame(rows)
-    frame["patient"] = "unknown"
-    frame["anatomy"] = "unknown"
-    if provenance_csv is not None and Path(provenance_csv).exists():
+            }
+            if is_v3:
+                row.update(_v3_row_from_attrs(attrs))
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _frame_from_index(index_csv_path: Path, ids: Sequence[str]) -> pd.DataFrame:
+    """The frame built straight from ``<stem>_index.csv``, without opening the HDF5
+    file (spec section 6.4). An id absent from the index is a hard error, never a
+    silent NaN.
+    """
+    # round_trip: pandas' default float parser is off by an ulp on some values, which
+    # would make the index path disagree with the attrs path on energy_mev.
+    index = pd.read_csv(index_csv_path, float_precision="round_trip", dtype={
+        "sample_id": str, "source_dataset": str, "patient_key": str, "spot_key": str})
+    index = index.set_index("sample_id")
+    missing = [sample_id for sample_id in ids if sample_id not in index.index]
+    if missing:
+        raise KeyError(f"{missing[0]!r} not found in index {index_csv_path}")
+    rows = index.loc[list(ids)]
+    return pd.DataFrame({
+        "sample_id": list(ids),
+        "energy_mev": rows["energy_mev"].astype(float).to_numpy(),
+        "gantry_deg": rows["gantry_angle"].astype(float).to_numpy(),
+        "theta_x_deg": rows["beamlet_angles_0"].astype(float).to_numpy(),
+        "theta_y_deg": rows["beamlet_angles_1"].astype(float).to_numpy(),
+        "source_dataset": rows["source_dataset"].astype(str).to_numpy(),
+        "patient_key": rows["patient_key"].astype(str).to_numpy(),
+        "spot_key": rows["spot_key"].astype(str).to_numpy(),
+        "isocenter_x_mm": rows["isocenter_mm_0"].astype(float).to_numpy(),
+        "isocenter_y_mm": rows["isocenter_mm_1"].astype(float).to_numpy(),
+        "isocenter_z_mm": rows["isocenter_mm_2"].astype(float).to_numpy(),
+    })
+
+
+def record_metadata(dataset_path: Path, ids: Sequence[str],
+                    provenance_csv: Optional[Path] = None,
+                    scale: Dict[str, float] = DEFAULT_SCALE) -> pd.DataFrame:
+    """Energy, gantry and steering per record, joined with the patient and anatomy
+    of the study's provenance map when one is given.
+
+    When ``<stem>_index.csv`` sits next to ``dataset_path`` the frame is built from
+    that CSV alone (no HDF5 read); otherwise attributes are read per id, and a v3
+    record (``schema_version`` present) contributes the extra provenance columns
+    ``source_dataset``, ``patient_key``, ``spot_key``, ``isocenter_x_mm``,
+    ``isocenter_y_mm``, ``isocenter_z_mm``, with ``energy_mev`` taken from the
+    ``energy_mev`` attr rather than denormalised. On a v2 file the returned frame is
+    exactly as before.
+
+    Records missing from the provenance map keep ``patient`` and ``anatomy`` as
+    ``"unknown"``, unless the frame carries the v3 columns and no provenance map was
+    given (or it does not exist), in which case they fall back to ``patient_key``
+    and ``source_dataset`` respectively.
+    """
+    dataset_path = Path(dataset_path)
+    index_csv_path = dataset_path.with_name(dataset_path.stem + "_index.csv")
+    if index_csv_path.exists():
+        frame = _frame_from_index(index_csv_path, ids)
+        logger.info("record metadata: %d records read from %s", len(frame), index_csv_path)
+    else:
+        frame = _frame_from_attrs(dataset_path, ids, scale)
+
+    is_v3 = "source_dataset" in frame.columns
+    have_provenance = provenance_csv is not None and Path(provenance_csv).exists()
+    frame["patient"] = frame["patient_key"] if is_v3 and not have_provenance else "unknown"
+    frame["anatomy"] = frame["source_dataset"] if is_v3 and not have_provenance else "unknown"
+    if have_provenance:
         prov = pd.read_csv(provenance_csv).rename(columns={"patient_key": "patient"})
         prov = prov.drop_duplicates("sample_id").set_index("sample_id")
         hit = frame["sample_id"].isin(prov.index)

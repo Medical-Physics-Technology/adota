@@ -15,6 +15,40 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 
 ### Added
 
+- **`src/datasets/beamlet_record.py`**: the pinned per-record recipe for v3 builds.
+  Exports `load_raw_record` (load and parse), `flux_inputs` and `flux_batch` (flux
+  projection), `downsample_grid` (average, linear, or trilinear), `preprocess_ct_dose`
+  (normalise and downsample), `preprocess_flux`, `finish_record` (compose to a
+  `PreprocessedRecord`), `skip_reason` (zero_dose, bad_shape, short_depth),
+  `spots_reason` (n_spots), plus the constants `RECORD_SUFFIXES`, `DOWNSAMPLE_METHODS`,
+  `FLUX_SPACING_MM`, `EXPECTED_LATERAL`, `MIN_DEPTH`, `REQUIRED_METADATA_KEYS`.
+- **`src/datasets/beamlet_h5.py`**: the v3 schema and writer. Exports `SCHEMA_VERSION`,
+  `V2_ATTRS`, `V3_ATTRS`, `DATASET_NAMES`, `DATASET_KWARGS`, `SKIP_REASONS`, plus
+  `RecordProvenance` (source, flux compute path, BDL file and hash, downsample method,
+  flux model); `derive_keys` (patient and spot key hash), `v2_attrs` (the six v2
+  attributes), `v3_attrs` (the v3-only attributes), `write_record` (create the HDF5
+  group), `is_complete_group` (has datasets and schema version), `write_file_attrs`,
+  `index_row` (CSV flattening), `write_index_csv`, `write_skip_csv`, `sha256_of`,
+  `plan_candidates` (apply exclusion filter and scope to ids-file).
+- **`scripts/build_beamlet_h5.py`**: rebuild the training HDF5 from raw Monte Carlo
+  records to v3 schema with full provenance. Takes `--raw-root`, `--source` (repeatable),
+  `--out`, `--bdl`, `--exclusion-list` (required, no default), `--device`, `--flux-batch`,
+  `--downsample`, `--limit`, `--ids-file`, `--resume`, `--workers`. Writes
+  `<out>.partial`, renames on success. Side outputs: index CSV, skip CSV, build log.
+  Process pool for load/screen, main process for GPU flux and HDF5 writes. Resume on
+  interrupt with `--resume`.
+- **`scripts/check_beamlet_h5.py`**: verify a rebuilt v3 against its v2 source. Takes
+  `--old` (v2), `--new` (v3), `--exclusion-list`, `--sample` (200), `--seed` (0),
+  `--ids-file` (scopes to partial builds), `--allow-new` (ids the old build lost to
+  read errors and the new one recovered), `--out`. Checks id-set arithmetic, dataset
+  storage and array equality, v2 attribute types and values, v3-only attributes present,
+  spot_key multiplicity (informational), H5PYGenerator equivalence on sampled records.
+  Writes JSON report with six checks (a-f) plus verdict and flux_equivalence. Exit code
+  1 on fail.
+- **`tests/utils/beamlet_records.py`**: test fixture for synthetic records. Exports
+  `make_metadata` (JSON structure with pinned defaults) and `write_synthetic_record`
+  (write npy arrays and JSON to a directory).
+
 - **`src/acquisition/`**: `bragg_curve` (Bortfeld 1997, straggled with the HPTC
   beam model's energy spread vendored under `data/hptc_energy_spread.csv`),
   `surrogate` (per-ray WEPL times the Bragg curve times the flux; the
@@ -32,6 +66,12 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 
 ### Changed
 
+- **`record_metadata` in `src/active_learning/retrospective/dataset.py`** reads the
+  v3 attributes when present and prefers the `<stem>_index.csv` next to the file when
+  it exists. On v3 records the returned frame gains `source_dataset`, `patient_key`,
+  `spot_key`, `isocenter_x_mm`, `isocenter_y_mm`, `isocenter_z_mm`, and `energy_mev`
+  comes from the attribute rather than being denormalised; without a provenance CSV,
+  `patient` is `patient_key` and `anatomy` is `source_dataset`. Unchanged on v2 files.
 - **The smoke configs are gone**: `scripts/config_al_retro_smoke.yaml`,
   `scripts/config_al_smoke.yaml` and `scripts/config_al_train_smoke.yaml` are
   removed. A smoke test is the main config plus the new repeatable
