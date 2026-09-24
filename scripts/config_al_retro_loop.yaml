@@ -1,4 +1,4 @@
-# Retrospective active-learning benchmark on the training HDF5 (EXP-0009)
+# Retrospective active-learning benchmark on the training HDF5 (EXP-0011)
 # =========================================================================
 #   uv run python scripts/al_retro_loop.py splits --config scripts/config_al_retro_loop.yaml
 #   uv run python scripts/al_retro_loop.py cycle0 --config scripts/config_al_retro_loop.yaml --device-index 0
@@ -7,12 +7,23 @@
 #   Any key can be overridden on the command line with --set KEY=VALUE (dotted for
 #   nested blocks); the smoke test is this file plus the --set list in the guide.
 #
+# EXP-0011 is EXP-0010 (score_topk_mixed in place of stratified_score, a fixed
+# learning-rate schedule in place of ReduceLROnPlateau) with the schedule changed
+# from constant to a per-cycle cosine and three seeds per strategy, run on the
+# same d30 splits and from the same EXP-0009 cycle 0. EXP-0010 found that under
+# a constant 5e-4 the boundary row is one epoch of a validation loss that swings
+# several-fold inside a cycle, that the mini-batch order pins that trajectory so
+# same-seed runs are not independent, and that one run in three diverged
+# mid-cycle; the cosine settles the model before it is measured and the seeds
+# change the selection draws and the mini-batch order. Seeds are passed on the
+# command line (`--seed`, or SEEDS for scripts/run_al_retro.sh).
+#
 # The labels already exist; the loop hides them and reveals them only for the
 # records a strategy selects. No Monte Carlo, no candidate generation, no cost
 # axis: the question is how the sampling strategy shapes the training progress.
 # Guide: scripts/docs/al_retro_loop.md. Design: docs/active_learning_pipeline.md.
 
-experiment: EXP-0009
+experiment: EXP-0011
 
 # ── Data ──────────────────────────────────────────────────────────────────
 dataset_path: /scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5
@@ -34,8 +45,12 @@ data_fraction: 0.30
 data_fraction_seed: 20260911
 
 # ── Splits (written once by the `splits` stage, read by every run) ─────────
+# splits_dir is unchanged from EXP-0009: same d30 splits. The cycle-0 run is
+# also reused from EXP-0009 rather than retrained, via --cycle0-run on `run`
+# (or CYCLE0_RUN for scripts/run_al_retro.sh); runs_dir below only collects the
+# new strategy runs.
 splits_dir: /scratch/mstryja/adota_runs/al_retro/d30/splits
-runs_dir: /scratch/mstryja/adota_runs/al_retro/d30
+runs_dir: /scratch/mstryja/adota_runs/al_retro/d30/exp0011
 val_fraction: 0.15        # V, drawn from D with train_val_split (train_adota's mechanism)
 initial_fraction: 0.20    # the cycle-0 set, drawn from T the same way
 split_seed: 42
@@ -49,10 +64,24 @@ epochs_per_cycle: 50
 eval_every_n_epochs: 5    # full metric set on the subsample; loss every epoch on all of V
 eval_subsample_size: 1000
 eval_subsample_seed: 20260910
-strategy: random          # random | score_topk | stratified_score (override on the CLI)
-seed: 1234
+strategy: random          # random | score_topk | score_topk_mixed (override on the CLI)
+strategy_params: {}       # forwarded to the strategy as keyword args; score_topk_mixed's
+                           # default is {top_fraction: 0.5}, random and score_topk take none
+seed: 1234               # EXP-0011 runs 1234, 1235 and 1236 (SEEDS="1234 1235 1236")
 device_index: 0
 checkpoint_every_n_epochs: 10
+
+# lr_schedule: plateau (ReduceLROnPlateau on the validation loss, state carried
+# across cycles; what EXP-0009 ran), constant (training.learning_rate held fixed
+# every epoch; what EXP-0010 ran), or cosine_per_cycle (cosine decay from
+# training.learning_rate to lr_min over each cycle, warm-restarting every cycle).
+# EXP-0011 uses `cosine_per_cycle`, 5e-4 to 5e-5: still a pure function of the
+# epoch, so identical for every strategy, but the model is at a low learning
+# rate when the boundary is measured, which is where EXP-0010's within-cycle
+# oscillation and both mid-cycle divergences lived. The shared cycle 0 stays the
+# constant-LR endpoint of EXP-0009; it is common to every run and cancels.
+lr_schedule: cosine_per_cycle
+lr_min: 0.00005
 
 # ── Scoring (cycle 1 onward, on the fly, through the scorer interface) ────
 scorer:
@@ -93,8 +122,8 @@ training:
   normalize_flux_only: true
   learning_rate: 0.0005
   weight_decay: 0.001
-  lr_factor: 0.9
-  lr_patience: 20
+  lr_factor: 0.9          # only used under lr_schedule: plateau
+  lr_patience: 20         # only used under lr_schedule: plateau
   compile: true             # both relax cuDNN determinism; turn off for a bit-exact resume check
   compile_mode: default
   allow_tf32: true

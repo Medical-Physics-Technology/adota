@@ -1,38 +1,44 @@
 #!/usr/bin/env bash
 # Run the whole retrospective active-learning benchmark unattended:
-# cycle 0 once, then the three strategies over the free GPUs, then the comparison.
+# cycle 0 once, then every (seed, strategy) pair over the free GPUs, seed by
+# seed, then one comparison over everything that finished.
 #
 # Usage (from the repository root):
-#   nohup bash scripts/run_al_retro.sh > /scratch/mstryja/adota_runs/al_retro/d30/pilot.out 2>&1 & echo "PID: $!"
+#   nohup bash scripts/run_al_retro.sh > /scratch/mstryja/adota_runs/al_retro/d30/exp0011/launch.out 2>&1 & echo "PID: $!"
 #
 # Knobs, all environment variables:
 #   CONFIG      the loop config            (default scripts/config_al_retro_loop.yaml)
-#   GPUS        space-separated device ids  (default "0 2"); strategies queue over them
-#   STRATEGIES  space-separated strategies  (default "random score_topk stratified_score")
-#   CYCLE0_RUN  an existing cycle-0 run directory, to skip training it again
+#   GPUS        space-separated device ids  (default "0 1 2"); jobs queue over them
+#   STRATEGIES  space-separated strategies  (default "random score_topk score_topk_mixed")
+#   SEEDS       space-separated seeds       (default: the config's `seed`); the jobs are
+#               ordered seed-major, so with three GPUs and three strategies each seed
+#               is one round and the first round can be compared while the rest run
+#   CYCLE0_RUN  an existing cycle-0 run directory, to skip training it again; every
+#               seed resumes from this one checkpoint (the seed changes the selection
+#               draws and the mini-batch order, not the starting weights)
 #   SKIP_SPLITS set to 1 when the splits are already written
 #
 # Every stage writes its own log next to the runs (see `runs_dir` in the config);
-# this script's stdout is the summary. A failed strategy does not stop the others,
-# but the comparison runs only over the strategies that finished.
+# this script's stdout is the summary. A failed job does not stop the others,
+# but the comparison runs only over the jobs that finished.
 
 set -uo pipefail
 
 CONFIG=${CONFIG:-scripts/config_al_retro_loop.yaml}
-GPUS=${GPUS:-"0 2"}
-STRATEGIES=${STRATEGIES:-"random score_topk stratified_score"}
+GPUS=${GPUS:-"0 1 2"}
+STRATEGIES=${STRATEGIES:-"random score_topk score_topk_mixed"}
 CYCLE0_RUN=${CYCLE0_RUN:-}
 SKIP_SPLITS=${SKIP_SPLITS:-0}
 
 RUNS_DIR=$(grep -E '^runs_dir:' "$CONFIG" | awk '{print $2}')
-SEED=$(grep -E '^seed:' "$CONFIG" | awk '{print $2}')
+SEEDS=${SEEDS:-$(grep -E '^seed:' "$CONFIG" | awk '{print $2}')}
 mkdir -p "$RUNS_DIR"
 STAMP=$(date +%Y%m%d_%H%M%S)
 LOG_DIR="$RUNS_DIR/logs_$STAMP"
 mkdir -p "$LOG_DIR"
 stamp() { echo "$(date '+%F %T') $*"; }
 
-stamp "config $CONFIG | runs $RUNS_DIR | gpus [$GPUS] | strategies [$STRATEGIES] | logs $LOG_DIR"
+stamp "config $CONFIG | runs $RUNS_DIR | gpus [$GPUS] | strategies [$STRATEGIES] | seeds [$SEEDS] | logs $LOG_DIR"
 
 # ── 1. Splits ────────────────────────────────────────────────────────────────
 if [ "$SKIP_SPLITS" != "1" ]; then
@@ -53,50 +59,52 @@ fi
 [ -d "$CYCLE0_RUN" ] || { stamp "no cycle-0 run directory ($CYCLE0_RUN)"; exit 1; }
 stamp "cycle 0: $CYCLE0_RUN"
 
-# ── 3. Strategies, queued over the GPUs ──────────────────────────────────────
-declare -A PID_GPU PID_STRATEGY
+# ── 3. (seed, strategy) jobs, queued over the GPUs ───────────────────────────
+declare -A PID_GPU PID_JOB
 declare -a FREE=("${GPU_LIST[@]}")
 FINISHED=()
 
 launch() {
-    local strategy=$1 gpu=$2
-    stamp "=== $strategy on GPU $gpu"
+    local strategy=$1 seed=$2 gpu=$3 job="${strategy}_seed${seed}"
+    stamp "=== $job on GPU $gpu"
     uv run python scripts/al_retro_loop.py run --config "$CONFIG" --strategy "$strategy" \
-        --cycle0-run "$CYCLE0_RUN" --device-index "$gpu" > "$LOG_DIR/$strategy.log" 2>&1 &
+        --seed "$seed" --cycle0-run "$CYCLE0_RUN" --device-index "$gpu" > "$LOG_DIR/$job.log" 2>&1 &
     PID_GPU[$!]=$gpu
-    PID_STRATEGY[$!]=$strategy
+    PID_JOB[$!]=$job
 }
 
 reap() {
-    # Wait for any one child; free its GPU; remember the strategy if it succeeded.
+    # Wait for any one child; free its GPU; remember the job if it succeeded.
     local pid status
     wait -n -p pid "${!PID_GPU[@]}" 2>/dev/null; status=$?
     [ -n "${pid:-}" ] || return 1
-    local strategy=${PID_STRATEGY[$pid]}
+    local job=${PID_JOB[$pid]}
     if [ "$status" -eq 0 ]; then
-        stamp "$strategy finished: $(grep '^strategy ' "$LOG_DIR/$strategy.log" | tail -1 | sed 's/.*-> //')"
-        FINISHED+=("$strategy")
+        stamp "$job finished: $(grep '^strategy ' "$LOG_DIR/$job.log" | tail -1 | sed 's/.*-> //')"
+        FINISHED+=("$job")
     else
-        stamp "$strategy FAILED (exit $status), see $LOG_DIR/$strategy.log"
+        stamp "$job FAILED (exit $status), see $LOG_DIR/$job.log"
     fi
     FREE+=("${PID_GPU[$pid]}")
-    unset "PID_GPU[$pid]" "PID_STRATEGY[$pid]"
+    unset "PID_GPU[$pid]" "PID_JOB[$pid]"
 }
 
-for strategy in $STRATEGIES; do
-    while [ "${#FREE[@]}" -eq 0 ]; do reap || break; done
-    gpu=${FREE[0]}; FREE=("${FREE[@]:1}")
-    launch "$strategy" "$gpu"
+for seed in $SEEDS; do
+    for strategy in $STRATEGIES; do
+        while [ "${#FREE[@]}" -eq 0 ]; do reap || break; done
+        gpu=${FREE[0]}; FREE=("${FREE[@]:1}")
+        launch "$strategy" "$seed" "$gpu"
+    done
 done
 while [ "${#PID_GPU[@]}" -gt 0 ]; do reap || break; done
 
 # ── 4. Comparison ────────────────────────────────────────────────────────────
 if [ "${#FINISHED[@]}" -lt 2 ]; then
-    stamp "fewer than two strategies finished; no comparison"; exit 1
+    stamp "fewer than two jobs finished; no comparison"; exit 1
 fi
 RUN_ARGS=()
-for strategy in "${FINISHED[@]}"; do
-    RUN_ARGS+=(--run "$(ls -dt "$RUNS_DIR"/train_*_"${strategy}"_seed"${SEED}" | head -1)")
+for job in "${FINISHED[@]}"; do
+    RUN_ARGS+=(--run "$(ls -dt "$RUNS_DIR"/train_*_"${job}" | head -1)")
 done
 stamp "=== compare ${FINISHED[*]}"
 uv run python scripts/al_compare.py --config scripts/config_al_compare.yaml \
