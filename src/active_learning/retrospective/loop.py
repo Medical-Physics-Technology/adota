@@ -70,9 +70,19 @@ logger = logging.getLogger(__name__)
 # ── Stage 1: splits ─────────────────────────────────────────────────────────
 
 
-def prepare_splits(cfg: RetroConfig) -> Dict[str, Any]:
+def prepare_splits(cfg: RetroConfig, overwrite: bool = False) -> Dict[str, Any]:
     """Apply the exclusion list, draw ``V`` and the cycle-0 set, write them, and
-    write the per-record metadata the fingerprints need."""
+    write the per-record metadata the fingerprints need.
+
+    Refuses to write into a ``splits_dir`` that already holds a ``splits.json``
+    unless ``overwrite`` is set: the splits are frozen once drawn, every run
+    manifest pins their fingerprint, and some (the v3 d30 splits) are the v2
+    ids materialised by hand rather than a draw this function would reproduce.
+    """
+    existing = Path(cfg.splits_dir) / "splits.json"
+    if existing.exists() and not overwrite:
+        raise FileExistsError(f"{existing} exists; the splits are frozen. Pass overwrite "
+                              "(--overwrite on the CLI) to redraw them deliberately.")
     excluded = read_exclusion_list(Path(cfg.exclude_indexes_path))
     check = cross_check_exclusions(Path(cfg.exclude_indexes_path))
     all_ids = read_record_ids(Path(cfg.dataset_path))
@@ -175,7 +185,8 @@ def _write_run_manifest(run_dir: Path, cfg: RetroConfig, inputs: RunInputs, **ex
 def _build_state(cfg: RetroConfig) -> TrainState:
     device = resolve_device(cfg.device_index)
     train_cfg = cfg.training_config()
-    state = build_train_state(train_cfg, device, lr_schedule=cfg.lr_schedule, lr_min=cfg.lr_min)
+    state = build_train_state(train_cfg, device, lr_schedule=cfg.lr_schedule, lr_min=cfg.lr_min,
+                              warmup_epochs=cfg.warmup_epochs)
     n_params = sum(p.numel() for p in state.base_model.parameters())
     log_phase("INIT", f"Device {device} | DoTA3D_v3 {n_params / 1e6:.2f} M params | "
                       f"compile={'on' if train_cfg.compile else 'off'} "
@@ -202,7 +213,8 @@ def run_cycle0(cfg: RetroConfig, run_dir: Path) -> Path:
     """Train the shared baseline; returns the checkpoint every strategy resumes from."""
     inputs = load_run_inputs(cfg)
     _write_run_manifest(run_dir, cfg, inputs, strategy="cycle0", role="cycle0_baseline",
-                        lr_schedule=cfg.lr_schedule, lr_min=cfg.lr_min)
+                        lr_schedule=cfg.lr_schedule, lr_min=cfg.lr_min,
+                        warmup_epochs=cfg.warmup_epochs)
     train_cfg = cfg.training_config()
     state = _build_state(cfg)
     validation = build_validation_bundle(train_cfg, inputs.splits.validation,
@@ -301,8 +313,10 @@ def _log_cycle0_lr(cycle0_run: Path, cycle0_manifest: Dict[str, Any], cfg: Retro
     if cfg.lr_schedule != "plateau" and len(lrs) > 1:
         logger.warning("this strategy run uses lr_schedule=%r but the shared cycle-0 baseline "
                        "%s was not trained at a constant LR (values %s); the fixed schedule "
-                       "restarts from lr0=%.3e regardless", cfg.lr_schedule, cycle0_run, lrs,
-                       cfg.training_config().learning_rate)
+                       "starts cycle 1 from %.3e regardless (lr0, or lr_min under a warmup of "
+                       "%d epochs)", cfg.lr_schedule, cycle0_run, lrs,
+                       cfg.lr_min if cfg.warmup_epochs else cfg.training_config().learning_rate,
+                       cfg.warmup_epochs)
 
 
 def run_strategy(cfg: RetroConfig, run_dir: Path, cycle0_run: Path) -> List[Dict[str, Any]]:
@@ -324,7 +338,8 @@ def run_strategy(cfg: RetroConfig, run_dir: Path, cycle0_run: Path) -> List[Dict
         _write_run_manifest(run_dir, cfg, inputs, strategy=cfg.strategy, role="strategy",
                             cycle0_run=str(cycle0_run), cycle0_checkpoint=str(checkpoint),
                             cycle0_checkpoint_sha256=checkpoint_sha, status="running",
-                            lr_schedule=cfg.lr_schedule, lr_min=cfg.lr_min)
+                            lr_schedule=cfg.lr_schedule, lr_min=cfg.lr_min,
+                            warmup_epochs=cfg.warmup_epochs)
         shutil.copy2(cycle0_run / "metrics.jsonl", run_dir / "cycle0_metrics.jsonl")
     metrics_log = MetricsLog(metrics_path)
     if not resuming:

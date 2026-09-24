@@ -68,13 +68,17 @@ class TrainState:
     :data:`src.active_learning.retrospective.lr_schedule.ALL_LR_SCHEDULES`."""
     lr_min: float = 0.0
     lr0: float = 0.0
+    warmup_epochs: int = 0
+    """Linear warmup at the start of every cycle of a fixed schedule; see
+    :func:`src.active_learning.retrospective.lr_schedule.fixed_lr`."""
     best_val_loss: float = float("inf")
     patience_counter: int = 0
     prev_val: Optional[Dict[str, float]] = None
 
 
 def build_train_state(config: TrainingConfig, device: torch.device, *,
-                      lr_schedule: str = "plateau", lr_min: float = 0.0) -> TrainState:
+                      lr_schedule: str = "plateau", lr_min: float = 0.0,
+                      warmup_epochs: int = 0) -> TrainState:
     """Fresh weights, fresh optimizer, seeded RNGs: the cycle-0 starting point.
 
     ``lr_schedule`` selects how the learning rate evolves within a cycle. For
@@ -84,6 +88,7 @@ def build_train_state(config: TrainingConfig, device: torch.device, *,
     kept: :func:`train_cycle` sets the optimizer's ``lr`` directly from
     :func:`src.active_learning.retrospective.lr_schedule.fixed_lr` at the
     start of every epoch, so there is no scheduler state to checkpoint.
+    ``warmup_epochs`` is passed through to that function.
     """
     set_determinism(config.seed)
     configure_backends(config)
@@ -96,7 +101,8 @@ def build_train_state(config: TrainingConfig, device: torch.device, *,
                       optimizer=optimizer, scheduler=scheduler,
                       balancer=TwoObjectiveBalancer(smoothing=config.balancer_smoothing),
                       loss_mse_fn=LMSE(), loss_ps_fn=LPS(dx=config.lps_dx_mm, dy=config.lps_dy_mm),
-                      lr_schedule=lr_schedule, lr_min=lr_min, lr0=config.learning_rate)
+                      lr_schedule=lr_schedule, lr_min=lr_min, lr0=config.learning_rate,
+                      warmup_epochs=warmup_epochs)
 
 
 def restore_train_state(state: TrainState, checkpoint: Path) -> Dict[str, Any]:
@@ -214,7 +220,8 @@ def train_cycle(state: TrainState, train_loader: DataLoader, validation: Validat
         epoch_started = perf_counter()
         w_mse, w_ps = resolve_weights(config, cumulative, state.balancer, state.prev_val, device)
         if state.lr_schedule != "plateau":
-            lr = fixed_lr(state.lr_schedule, state.lr0, state.lr_min, epoch, spec.epochs)
+            lr = fixed_lr(state.lr_schedule, state.lr0, state.lr_min, epoch, spec.epochs,
+                          warmup_epochs=state.warmup_epochs)
             for group in state.optimizer.param_groups:
                 group["lr"] = lr
         log_phase("EPOCH", f"cycle {spec.cycle} epoch {epoch}/{spec.epochs - 1} "

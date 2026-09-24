@@ -6,23 +6,29 @@
 # splits, the cycle-0 checkpoint, the evaluation subsample and the training set
 # size at every cycle. Output goes to a timestamped directory under output_dir.
 runs: []
-#  - /scratch/mstryja/adota_runs/al_retro/d30/exp0011/train_<ts>_al_EXP-0011_d30_random_seed1234
-#  - /scratch/mstryja/adota_runs/al_retro/d30/exp0011/train_<ts>_al_EXP-0011_d30_random_seed1235
-#  - /scratch/mstryja/adota_runs/al_retro/d30/exp0011/train_<ts>_al_EXP-0011_d30_score_topk_seed1234
+#  - /scratch/mstryja/adota_runs/al_retro/d30/exp0012/train_<ts>_al_EXP-0012_d30_random_seed1234
+#  - /scratch/mstryja/adota_runs/al_retro/d30/exp0012/train_<ts>_al_EXP-0012_d30_random_seed1235
+#  - /scratch/mstryja/adota_runs/al_retro/d30/exp0012/train_<ts>_al_EXP-0012_d30_score_topk_seed1234
 #  ...
 # Several runs of one strategy (its seeds) are labelled <strategy>_seed<seed> and
 # also folded into a mean with a min-max band (the *_by_strategy outputs).
 labels: []                # optional, one per run; defaults to the strategy name
-output_dir: /scratch/mstryja/adota_runs/al_retro/compare
-title: "Retrospective active learning (EXP-0011)"
+output_dir: /scratch/mstryja/adota_runs/al_retro/d30/exp0012/compare
+title: "Retrospective active learning (EXP-0012)"
 
 # A cycle whose training loss rises more than divergence_ratio-fold between two
 # consecutive epochs is flagged in divergences.csv and consistency.json (EXP-0009
-# and EXP-0010 each had one such run, at x11 and x10). trajectory_last_k is how
-# many of the last subsample evaluations of a cycle the trajectory summary takes
-# the median of, as a boundary estimate independent of the boundary epoch.
+# and EXP-0010 each had one such run, at x11 and x10). The step from the last
+# epoch of one cycle into epoch 0 of the next counts for the later cycle, so a
+# warm-restart shock (EXP-0011, x40 to x67 at cycle 2) is flagged too.
+# trajectory_last_k is how many of the last subsample evaluations of a cycle the
+# trajectory summary takes the median of, as a boundary estimate independent of
+# the boundary epoch. restart_peak_epochs is the window at the start of every
+# cycle over which restart_ratios.csv takes the peak loss, since a warmup can
+# delay the shock instead of removing it.
 divergence_ratio: 2.0
 trajectory_last_k: 3
+restart_peak_epochs: 10
 
 # Epochs-to-quality thresholds, read off the subsample metrics after the fact.
 # Metric names are the `sub_` columns of the flattened metrics log. The pass-rate

@@ -1,4 +1,4 @@
-# Retrospective active-learning benchmark on the training HDF5 (EXP-0011)
+# Retrospective active-learning benchmark on the training HDF5 (EXP-0012)
 # =========================================================================
 #   uv run python scripts/al_retro_loop.py splits --config scripts/config_al_retro_loop.yaml
 #   uv run python scripts/al_retro_loop.py cycle0 --config scripts/config_al_retro_loop.yaml --device-index 0
@@ -7,23 +7,25 @@
 #   Any key can be overridden on the command line with --set KEY=VALUE (dotted for
 #   nested blocks); the smoke test is this file plus the --set list in the guide.
 #
-# EXP-0011 is EXP-0010 (score_topk_mixed in place of stratified_score, a fixed
-# learning-rate schedule in place of ReduceLROnPlateau) with the schedule changed
-# from constant to a per-cycle cosine and three seeds per strategy, run on the
-# same d30 splits and from the same EXP-0009 cycle 0. EXP-0010 found that under
-# a constant 5e-4 the boundary row is one epoch of a validation loss that swings
-# several-fold inside a cycle, that the mini-batch order pins that trajectory so
-# same-seed runs are not independent, and that one run in three diverged
-# mid-cycle; the cosine settles the model before it is measured and the seeds
-# change the selection draws and the mini-batch order. Seeds are passed on the
-# command line (`--seed`, or SEEDS for scripts/run_al_retro.sh).
+# EXP-0012 is EXP-0011 with a 5-epoch linear warmup at the start of every
+# cycle: the learning rate rises from lr_min to 5e-4 over epochs 0 to 4, then
+# decays by cosine back to lr_min by epoch 49. EXP-0011's warm restart (lr_min
+# straight back to 5e-4 at epoch 0 of every cycle) was itself a divergence: the
+# training loss jumped 40-fold (random), 67-fold (score_topk) and 50-fold
+# (score_topk_mixed) into cycle 2, and the strategy ranking followed the size of
+# that shock. The warmup removes the jump; restart_ratios.csv of al_compare.py
+# checks that it is removed and not only delayed. Everything else is identical
+# to EXP-0011: the same v2 dataset, the same d30 splits, the same EXP-0009
+# cycle 0, the same three strategies (random, score_topk, score_topk_mixed) and
+# the same three seeds, 1234, 1235 and 1236, passed on the command line
+# (`--seed`, or SEEDS for scripts/run_al_retro.sh).
 #
 # The labels already exist; the loop hides them and reveals them only for the
 # records a strategy selects. No Monte Carlo, no candidate generation, no cost
 # axis: the question is how the sampling strategy shapes the training progress.
 # Guide: scripts/docs/al_retro_loop.md. Design: docs/active_learning_pipeline.md.
 
-experiment: EXP-0011
+experiment: EXP-0012
 
 # ── Data ──────────────────────────────────────────────────────────────────
 dataset_path: /scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5
@@ -50,7 +52,7 @@ data_fraction_seed: 20260911
 # (or CYCLE0_RUN for scripts/run_al_retro.sh); runs_dir below only collects the
 # new strategy runs.
 splits_dir: /scratch/mstryja/adota_runs/al_retro/d30/splits
-runs_dir: /scratch/mstryja/adota_runs/al_retro/d30/exp0011
+runs_dir: /scratch/mstryja/adota_runs/al_retro/d30/exp0012
 val_fraction: 0.15        # V, drawn from D with train_val_split (train_adota's mechanism)
 initial_fraction: 0.20    # the cycle-0 set, drawn from T the same way
 split_seed: 42
@@ -67,7 +69,7 @@ eval_subsample_seed: 20260910
 strategy: random          # random | score_topk | score_topk_mixed (override on the CLI)
 strategy_params: {}       # forwarded to the strategy as keyword args; score_topk_mixed's
                            # default is {top_fraction: 0.5}, random and score_topk take none
-seed: 1234               # EXP-0011 runs 1234, 1235 and 1236 (SEEDS="1234 1235 1236")
+seed: 1234               # EXP-0012 runs 1234, 1235 and 1236 (SEEDS="1234 1235 1236")
 device_index: 0
 checkpoint_every_n_epochs: 10
 
@@ -75,13 +77,22 @@ checkpoint_every_n_epochs: 10
 # across cycles; what EXP-0009 ran), constant (training.learning_rate held fixed
 # every epoch; what EXP-0010 ran), or cosine_per_cycle (cosine decay from
 # training.learning_rate to lr_min over each cycle, warm-restarting every cycle).
-# EXP-0011 uses `cosine_per_cycle`, 5e-4 to 5e-5: still a pure function of the
-# epoch, so identical for every strategy, but the model is at a low learning
-# rate when the boundary is measured, which is where EXP-0010's within-cycle
-# oscillation and both mid-cycle divergences lived. The shared cycle 0 stays the
-# constant-LR endpoint of EXP-0009; it is common to every run and cancels.
+# EXP-0011 used `cosine_per_cycle`, 5e-4 to 5e-5: a pure function of the epoch,
+# so identical for every strategy, with the model at a low learning rate when
+# the boundary is measured, which is where EXP-0010's within-cycle oscillation
+# and both mid-cycle divergences lived. Its warm restart was a 40 to 67-fold
+# shock to the training loss, so EXP-0012 keeps the cosine and adds
+# warmup_epochs: 5, a linear rise from lr_min (epoch 0, exactly where the
+# previous cycle ended) to training.learning_rate (epoch 5), after which the
+# cosine decays to lr_min at the last epoch. Still a pure function of the epoch,
+# so mid-cycle resume stays exact. warmup_epochs must be smaller than
+# epochs_per_cycle and is rejected under plateau; 0 is no warmup. The shared
+# cycle 0 stays the constant-LR endpoint of EXP-0009; it is common to every run
+# and cancels (cycle 1 now starts from lr_min instead of 5e-4, a drop, not a
+# shock).
 lr_schedule: cosine_per_cycle
 lr_min: 0.00005
+warmup_epochs: 5
 
 # ── Scoring (cycle 1 onward, on the fly, through the scorer interface) ────
 scorer:

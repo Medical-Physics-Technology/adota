@@ -17,7 +17,7 @@ design filter for it.
 
 | Script | Config | What it does |
 |---|---|---|
-| [`al_retro_loop.py`](../al_retro_loop.py) `splits` | `config_al_retro_loop.yaml` | Apply the exclusion list; draw and write the validation set, the training split and the cycle-0 set. Run once. |
+| [`al_retro_loop.py`](../al_retro_loop.py) `splits` | `config_al_retro_loop.yaml` | Apply the exclusion list; draw and write the validation set, the training split and the cycle-0 set. Run once: it refuses to overwrite a `splits_dir` that already holds a `splits.json` unless given `--overwrite`. |
 | [`al_retro_loop.py`](../al_retro_loop.py) `cycle0` | same | Train the shared baseline from random weights on the cycle-0 set. Run once per seed. |
 | [`al_retro_loop.py`](../al_retro_loop.py) `run` | same | One strategy: resume from the cycle-0 checkpoint; each cycle scores the pool, selects `N` records, trains `epochs_per_cycle` epochs, validates. One process per strategy. |
 | [`al_compare.py`](../al_compare.py) | `config_al_compare.yaml` | Read the strategy runs back, check they are comparable, write the four figures and the tables. |
@@ -119,7 +119,7 @@ validate; write the cycle manifest
 
 ## Options
 
-`splits`: `--config`, `--data-fraction`, `--max-records` (smoke tests only), `--splits-dir`.
+`splits`: `--config`, `--data-fraction`, `--max-records` (smoke tests only), `--splits-dir`, `--overwrite` (redraw frozen splits deliberately; a rerun of the smoke test into the same `splits_dir` needs it).
 `cycle0`: `--config`, `--device-index`, `--epochs-per-cycle`, `--seed`, `--runs-dir`,
 `--resume-dir`. `run`: the same plus `--strategy`, `--cycle0-run` (required),
 `--n-cycles`. Every stage also takes `--set KEY=VALUE`, repeatable, for any config key
@@ -145,7 +145,8 @@ YAML). Precedence: per-field option > `--set` > YAML > defaults, through
 | `scorer` | `{name: difficulty, ...}` | `scorer_path`, `variant`, `arm`, `n_workers`. |
 | `gamma_params`, `gamma_cutoff_percent`, `gamma_backend` | 2%/2mm, 10, torch | Named in every metric filename. |
 | `lr_schedule` | plateau | `plateau`, `constant` or `cosine_per_cycle`; see "Learning-rate schedule" below. |
-| `lr_min` | 0.0 | The floor of the `cosine_per_cycle` schedule, an absolute learning rate. Unused otherwise. |
+| `lr_min` | 0.0 | The floor of the `cosine_per_cycle` schedule and the start of a warmup, an absolute learning rate. Unused otherwise. |
+| `warmup_epochs` | 0 | Linear warmup from `lr_min` to `training.learning_rate` at the start of every cycle of a fixed schedule; must be smaller than `epochs_per_cycle`, rejected under `plateau`. 0 is no warmup. |
 | `training` | the baseline model and optimizer | Any `TrainingConfig` field; the model is trained from scratch. |
 
 ## Learning-rate schedule
@@ -172,6 +173,29 @@ rise of the training loss in one epoch). EXP-0011 uses `cosine_per_cycle`, 5e-4
 to `lr_min` 5e-5, so the model is at a low learning rate when it is measured,
 and runs three seeds per strategy.
 
+EXP-0011 then found that the warm restart is itself a divergence: jumping from
+`lr_min` straight back to 5e-4 at epoch 0 of a cycle multiplied the training
+loss 40-fold (random), 67-fold (score_topk) and 50-fold (score_topk_mixed) into
+cycle 2, and the strategy ranking followed the size of that shock.
+`warmup_epochs` (EXP-0012 uses 5) adds a linear warmup to either fixed
+schedule. With `W = warmup_epochs`, `lr0 = training.learning_rate` and `E =
+epochs_per_cycle`:
+
+- epochs `0 .. W-1`: `lr_min + (lr0 - lr_min) * e / W`, so epoch 0 is exactly
+  `lr_min`, where the previous cosine cycle ended, and there is no jump;
+- `cosine_per_cycle`, epochs `W .. E-1`: a cosine from `lr0` at epoch `W` to
+  `lr_min` at epoch `E-1` (when `W = E-1` there is no room to decay and the
+  last epoch is at `lr0`);
+- `constant`, epochs `W .. E-1`: `lr0`. Note that `lr_min` defaults to 0.0, so
+  a warmup under `constant` spends epoch 0 at a learning rate of zero unless
+  `lr_min` is set.
+
+For W = 5, 5e-4 and 5e-5 over 50 epochs that is 5.0e-5, 1.4e-4, 2.3e-4,
+3.2e-4, 4.1e-4 for epochs 0 to 4, 5.0e-4 at epoch 5, and 5.0e-5 at epoch 49.
+The warmup is part of the pure function of the epoch, so a mid-cycle resume is
+still exact. Cycle 1 resumes from the EXP-0009 cycle 0, which ended at 5e-4,
+and starts at `lr_min`: a drop, not a shock.
+
 A fixed schedule (`constant` or `cosine_per_cycle`) carries no scheduler
 object, so a strategy run under one may resume from a cycle-0 checkpoint that
 was trained under `plateau`, as EXP-0010 does with the EXP-0009 cycle 0. The
@@ -183,7 +207,8 @@ is then not quite the constant-LR starting point the fixed schedule assumes.
 ## Outputs
 
 A run directory is a standard training run directory: `manifest.json` (git hash,
-GPU, dataset fingerprint, resolved config including `lr_schedule` and `lr_min`,
+GPU, dataset fingerprint, resolved config including `lr_schedule`, `lr_min` and
+`warmup_epochs`,
 the splits fingerprint, the cycle-0 checkpoint path and SHA-256, and one entry
 per cycle with the selected count, the selection fingerprint, the timings and
 the full-set metrics), append-only `metrics.jsonl` (every row also carries
@@ -200,17 +225,27 @@ run reads on its own.
 `summary_boundaries_gamma_<criteria>.csv`, `epochs_to_quality.csv` and
 `consistency.json`. The figure functions are in `src/figures/al_curves.py`.
 
-Two readers added after EXP-0010 sit beside those: `divergences.csv` gives, per
-run and cycle, the largest epoch-to-epoch rise of the training loss and flags it
-above `divergence_ratio` (a flagged cycle, and everything after it, measures the
-recovery rather than the data; `consistency.json` lists the flagged cycles under
-`diverged` and the script warns); `summary_trajectory_last<k>_gamma_<criteria>.csv`
-gives the median of the last `trajectory_last_k` subsample evaluations of every
-cycle, a boundary estimate that does not depend on which epoch the cycle
+Three readers added after EXP-0010 and EXP-0011 sit beside those:
+`divergences.csv` gives, per run and cycle, the largest epoch-to-epoch rise of
+the training loss and flags it above `divergence_ratio` (a flagged cycle, and
+everything after it, measures the recovery rather than the data;
+`consistency.json` lists the flagged cycles under `diverged` and the script
+warns). The rises are taken over the whole run, so the step from the last epoch
+of cycle c-1 into epoch 0 of cycle c counts for cycle c, and `at_restart` says
+whether the largest rise was that step (grouping by cycle alone missed the
+EXP-0011 restart shock). `restart_ratios.csv` gives, per run and cycle >= 1,
+`restart_ratio` (training loss at epoch 0 over the last epoch of the previous
+cycle) and `restart_peak_ratio` with `restart_peak_epoch` (the peak over the
+first `restart_peak_epochs` epochs, default 10, since a warmup may delay the
+shock rather than remove it), and the same with a `val_` prefix for the
+validation loss; the cycle-2 means are 40, 67 and 50 for EXP-0011 (random,
+score_topk, score_topk_mixed) and about 1 for EXP-0010. And
+`summary_trajectory_last<k>_gamma_<criteria>.csv` gives the median of the last
+`trajectory_last_k` subsample evaluations of every cycle, a boundary estimate that does not depend on which epoch the cycle
 happened to end on (on the subsample, so not interchangeable with the full-V
 boundary numbers). When a strategy was run under several seeds, its runs are
-labelled `<strategy>_seed<seed>` and the boundary and trajectory summaries, F2
-and F3 are written a second time `_by_strategy`: mean across seeds with a
+labelled `<strategy>_seed<seed>` and the boundary, trajectory and restart
+summaries, F2 and F3 are written a second time `_by_strategy`: mean across seeds with a
 min-max band (`aggregate_over_seeds` in `compare.py`).
 
 ## Resume

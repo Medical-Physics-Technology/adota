@@ -11,7 +11,7 @@ from dataclasses import dataclass, field, fields
 from typing import Any, Dict, List, Optional
 
 from src.active_learning.retrospective.dataset import DEFAULT_EXCLUDE_PATH
-from src.active_learning.retrospective.lr_schedule import ALL_LR_SCHEDULES
+from src.active_learning.retrospective.lr_schedule import ALL_LR_SCHEDULES, validate_warmup
 from src.active_learning.retrospective.validation import MetricSettings
 from src.adota.config import DEFAULT_GAMMA_PARAMS, DEFAULT_SCALE
 from src.schemas.configs import TrainingConfig
@@ -73,13 +73,28 @@ class RetroConfig:
     validation loss."""
     lr_min: float = 0.0
     """The floor of the ``"cosine_per_cycle"`` schedule: an absolute learning
-    rate, not a fraction of ``training.learning_rate``. Unused otherwise."""
+    rate, not a fraction of ``training.learning_rate``. Unused otherwise, except
+    as the starting point of a warmup."""
+    warmup_epochs: int = 0
+    """Length of a linear warmup at the start of every cycle, for the fixed
+    schedules only: epochs ``0 .. warmup_epochs-1`` rise linearly from
+    ``lr_min`` to ``training.learning_rate``, reached at epoch
+    ``warmup_epochs``; ``"cosine_per_cycle"`` then decays over the remaining
+    epochs and ``"constant"`` stays flat. It removes the warm-restart jump
+    that EXP-0011 found to be a 40 to 67-fold shock to the training loss
+    (EXP-0012). ``0`` (the default) is no warmup, so older configs reproduce
+    byte for byte; must be smaller than ``epochs_per_cycle`` and is rejected
+    with ``"plateau"``."""
     training: Dict[str, Any] = field(default_factory=dict)
     """The :class:`TrainingConfig` block: model, optimizer, loader, scale."""
 
     def __post_init__(self) -> None:
         if self.lr_schedule not in ALL_LR_SCHEDULES:
             raise ValueError(f"lr_schedule must be one of {ALL_LR_SCHEDULES}, got {self.lr_schedule!r}")
+        if self.warmup_epochs and self.lr_schedule == "plateau":
+            raise ValueError("warmup_epochs needs a fixed lr_schedule ('constant' or "
+                             "'cosine_per_cycle'); 'plateau' has no warmup")
+        validate_warmup(self.warmup_epochs, self.epochs_per_cycle)
 
     @classmethod
     def from_dict(cls, raw: Dict[str, Any]) -> "RetroConfig":

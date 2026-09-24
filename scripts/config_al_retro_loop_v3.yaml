@@ -1,0 +1,168 @@
+# Retrospective active-learning benchmark on the v3 training HDF5 (EXP-0013, prepared)
+# =====================================================================================
+#   Do NOT run the `splits` stage with this config: splits_dir is already
+#   materialised (see below) and a fresh draw would overwrite it.
+#   uv run python scripts/al_retro_loop.py cycle0 --config scripts/config_al_retro_loop_v3.yaml \
+#       --device-index 0 --set lr_schedule=constant --set warmup_epochs=0
+#   uv run python scripts/al_retro_loop.py run    --config scripts/config_al_retro_loop_v3.yaml \
+#       --strategy random --cycle0-run <v3 cycle-0 run dir> --device-index 0
+#
+# STATUS: prepared, not yet run. EXP-0013 is a placeholder name for the first
+# run on v3; rename it (here and in the record) when the run is scheduled.
+#
+# This is the EXP-0012 d30 setup (scripts/config_al_retro_loop.yaml: cosine per
+# cycle 5e-4 to 5e-5 with a 5-epoch linear warmup, three strategies, three
+# seeds) pointed at the v3 beamlet file. Everything outside dataset_path,
+# splits_dir, runs_dir and experiment is identical to the v2 config, so a v2 vs
+# v3 difference is the data file and nothing else.
+#
+# Paired with v2: the same split ids. splits_dir holds byte-identical copies of
+# the v2 d30 id lists (/scratch/mstryja/adota_runs/al_retro/d30/splits,
+# fingerprint 18ddcc5c...), taken rather than drawn; record_metadata.csv was
+# regenerated from the v3 index CSV, and splits.json records both the v3
+# dataset_path and the v2 source of the ids (the ids_source* fields). Every id
+# exists in v3. The three records v3 recovered (recovered_not_in_v2.txt, lost by
+# the v2 build to transient CIFS read errors) are not in these splits, as they
+# are not in v2's. A fresh v3 draw would have differed almost entirely (the
+# data_fraction draw indexes D by position and the recovered ids shift it); that
+# draw is kept in splits_dir/_fresh_draw_superseded/. data_fraction and
+# data_fraction_seed below are read only by the `splits` stage; here they
+# describe how the v2 ids were drawn on v2's D.
+#
+# Own cycle 0, trained fresh on v3 with the schedule EXP-0009's cycle 0 actually
+# ran: constant 5e-4 for 50 epochs (configured as plateau, never cut). The
+# cycle0 command above overrides lr_schedule and warmup_epochs for that process
+# only; the strategy runs keep the EXP-0012 schedule set below. As the v2-to-v3
+# equivalence check, the v3 cycle 0 is expected to reproduce EXP-0009's cycle-0
+# boundary within training noise: mean GPR (2%/2mm, 10% cutoff) 82.2%, 99.6% of
+# V below 95% GPR, p95 |dR80| 63.7 mm.
+#
+# The labels already exist; the loop hides them and reveals them only for the
+# records a strategy selects. Guide: scripts/docs/al_retro_loop.md.
+# Design: docs/active_learning_pipeline.md. v3 format: scripts/docs/build_beamlet_h5.md.
+
+experiment: EXP-0013
+
+# ── Data ──────────────────────────────────────────────────────────────────
+dataset_path: /scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5
+# Mandatory. The same v2 list on purpose: v3 was built with it, so on v3 it
+# matches no record (0 of 952 present, a checked no-op), and keeping the same
+# file keeps the excluded_indexes fingerprint in every manifest equal to the v2
+# experiments'. H5PYGenerator also opens this path, so it must stay a real file.
+exclude_indexes_path: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
+# sample_id -> anatomy, patient_key of the difficulty study; feeds the selection
+# fingerprint. Kept (rather than null) so `patient` and `anatomy` read exactly
+# as in EXP-0009..0012. With null, record_metadata falls back to the v3
+# patient_key (a 16-hex hash) and source_dataset (initial_test_one_ct,
+# trainset_pelvis). Checked on all 70,146 v3 ids: every id is in the map, and
+# the grouping is identical either way (56 v3 patient_keys map 1:1 onto 56 map
+# patient keys; initial_test_one_ct == thorax, trainset_pelvis ==
+# pelvic_abdominal), so the choice only changes the labels. Note that neither
+# key is a true patient id: both identify a resampled CT volume (the map's key
+# is anatomy|shape|origin). The v3 columns are written to record_metadata.csv
+# either way, because the index CSV beside the HDF5 is read.
+record_provenance_csv: /scratch/mstryja/adota_runs/20260707_124010/figures/acquisition/uuid_provenance_map.csv
+
+# ── Scale of the experiment ───────────────────────────────────────────────
+data_fraction: 0.30
+data_fraction_seed: 20260911
+
+# ── Splits (written once by the `splits` stage, read by every run) ─────────
+# The v2 d30 ids materialised for v3 (see the header); runs_dir is v3-only.
+splits_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30/splits
+runs_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30/exp0013
+val_fraction: 0.15        # V, drawn from D with train_val_split (train_adota's mechanism)
+initial_fraction: 0.20    # the cycle-0 set, drawn from T the same way
+split_seed: 42
+initial_seed: 20260910
+max_records: null         # smoke tests only
+
+# ── The loop ──────────────────────────────────────────────────────────────
+batch_fraction: 0.10      # N = 10 percent of |T| per cycle
+n_cycles: 5
+epochs_per_cycle: 50
+eval_every_n_epochs: 5    # full metric set on the subsample; loss every epoch on all of V
+eval_subsample_size: 1000
+eval_subsample_seed: 20260910
+strategy: random          # random | score_topk | score_topk_mixed (override on the CLI)
+strategy_params: {}       # forwarded to the strategy as keyword args; score_topk_mixed's
+                           # default is {top_fraction: 0.5}, random and score_topk take none
+seed: 1234               # run 1234, 1235 and 1236 (SEEDS="1234 1235 1236")
+device_index: 0
+checkpoint_every_n_epochs: 10
+
+# The EXP-0012 schedule: cosine decay from training.learning_rate to lr_min
+# over each cycle, warm-restarting every cycle, with a linear warmup over the
+# first warmup_epochs epochs of every cycle.
+lr_schedule: cosine_per_cycle
+lr_min: 0.00005
+warmup_epochs: 5
+
+# ── Scoring (cycle 1 onward, on the fly, through the scorer interface) ────
+scorer:
+  name: difficulty
+  scorer_path: src/acquisition/data/analytic_scorer.json   # DifficultyScorer.load default
+  variant: "full (ridge)"
+  arm: null
+  n_workers: 12
+
+# ── Validation metrics ────────────────────────────────────────────────────
+# 2%/2mm with a 10 percent dose cutoff on the torch backend; named in every
+# filename and caption.
+gamma_params:
+  dose_percent_threshold: 2
+  distance_mm_threshold: 2
+  interp_fraction: 10
+  max_gamma: 2
+  lower_percent_dose_cutoff: 10
+  random_subset: null
+  local_gamma: false
+  quiet: true
+gamma_resolution_mm: [2.0, 2.0, 2.0]
+gamma_cutoff_percent: 10.0
+gamma_backend: torch
+
+# ── Training (TrainingConfig fields; the model is trained from scratch) ───
+training:
+  scale:
+    min_ds: 0.0
+    max_ds: 25277028.0
+    min_ct: -1024
+    max_ct: 3071
+    min_energy: 70.0
+    max_energy: 270.0
+  batch_size: 56
+  num_workers: 4
+  augmentation: true
+  normalize_flux_only: true
+  learning_rate: 0.0005
+  weight_decay: 0.001
+  lr_factor: 0.9          # only used under lr_schedule: plateau
+  lr_patience: 20         # only used under lr_schedule: plateau
+  compile: true             # both relax cuDNN determinism; turn off for a bit-exact resume check
+  compile_mode: default
+  allow_tf32: true
+  initial_weight_mse: 0.7
+  initial_weight_ps: 0.3
+  balancer_smoothing: 0.9
+  adaptive_after_epoch: 10000
+  loss_mode: mse_idd
+  lps_dx_mm: 2.0
+  lps_dy_mm: 2.0
+  input_shape: [2, 160, 30, 30]
+  num_transformers: 1
+  num_heads: 4
+  dim_feedforward: null
+  num_levels: 4
+  enc_features: 32
+  kernel_size: 3
+  convolutional_steps: 2
+  conv_hidden_channels: 64
+  dropout_rate: 0.1
+  causal: true
+  zero_padding: true
+  last_activation: false
+  num_forward: 2
+  weight_standardization: false
+  norm_layer: batch
+  weight_init: default
