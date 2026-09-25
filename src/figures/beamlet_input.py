@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
+from typing import Mapping, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -40,6 +41,7 @@ def _ct_channel_mosaic(
     beamlet_angles: tuple[float, float] | None,
     spot_id: str | None,
     ct_window: tuple[float, float] | None,
+    provenance: Optional[Mapping[str, object]] = None,
 ) -> list[Path]:
     """The 2x2 CT-over-channel mosaic shared by the input and dose figures."""
     if ct.shape != channel.shape:
@@ -104,6 +106,10 @@ def _ct_channel_mosaic(
     aligned_colorbar(fig, channel_im, ax_dict["D"], channel_label, label_coords=(4.2, 0.5))
 
     title = _title(initial_energy, beamlet_angles, spot_id)
+    if provenance:
+        # One ``key: value`` line under the title, so a panel names the record it came from.
+        prov_line = "  |  ".join(f"{key}: {value}" for key, value in provenance.items())
+        title = f"{title}\n{prov_line}" if title else prov_line
     if title:
         fig.suptitle(title, fontsize=16, weight="bold")
 
@@ -120,6 +126,7 @@ def beamlet_input_figure(
     beamlet_angles: tuple[float, float] | None = None,
     spot_id: str | None = None,
     ct_window: tuple[float, float] | None = None,
+    provenance: Optional[Mapping[str, object]] = None,
 ) -> list[Path]:
     """Plot a constructed beamlet input (CT crop + flux) for correctness checks.
 
@@ -141,12 +148,14 @@ def beamlet_input_figure(
         spot_id: Spot id (for the title), optional.
         ct_window: ``(vmin, vmax)`` HU window for the CT; defaults to the crop's
             own min/max.
+        provenance: Record identifiers (e.g. ``patient_key``, ``spot_key``) printed as
+            one ``key: value`` line under the title, optional.
 
     Returns:
         The list of written figure paths.
     """
     return _ct_channel_mosaic(ct, flux, figure_path, "Flux [a.u.]", "hot",
-                              initial_energy, beamlet_angles, spot_id, ct_window)
+                              initial_energy, beamlet_angles, spot_id, ct_window, provenance)
 
 
 def beamlet_dose_figure(
@@ -158,6 +167,7 @@ def beamlet_dose_figure(
     spot_id: str | None = None,
     ct_window: tuple[float, float] | None = None,
     dose_label: str = "Dose [a.u.]",
+    provenance: Optional[Mapping[str, object]] = None,
 ) -> list[Path]:
     """The :func:`beamlet_input_figure` mosaic with the ground-truth dose in place
     of the flux, so a record's target can be read next to its input.
@@ -172,12 +182,14 @@ def beamlet_dose_figure(
         ct_window: ``(vmin, vmax)`` HU window for the CT; defaults to the crop's
             own min/max.
         dose_label: Row and colorbar label for the dose (say the unit if known).
+        provenance: Record identifiers printed as one ``key: value`` line under the
+            title, as in :func:`beamlet_input_figure`, optional.
 
     Returns:
         The list of written figure paths.
     """
     return _ct_channel_mosaic(ct, dose, figure_path, dose_label, "magma",
-                              initial_energy, beamlet_angles, spot_id, ct_window)
+                              initial_energy, beamlet_angles, spot_id, ct_window, provenance)
 
 
 def entrance_profile_figure(
