@@ -229,6 +229,71 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   `seeds` and `diverged`. Config keys `divergence_ratio` (2.0) and
   `trajectory_last_k` (3). `scripts/run_al_retro.sh` gains `SEEDS` and queues
   (seed, strategy) jobs seed-major; its logs are named `<strategy>_seed<seed>.log`.
+- **Warmup for the fixed LR schedules (EXP-0012)**: new `RetroConfig` key
+  `warmup_epochs` (default 0, no warmup, so EXP-0010 and EXP-0011 configs
+  reproduce unchanged). With `warmup_epochs = W > 0` the learning rate rises
+  linearly from `lr_min` at epoch 0 of every cycle to `training.learning_rate`
+  at epoch W; `cosine_per_cycle` then decays to `lr_min` at the last epoch and
+  `constant` stays flat. It must be smaller than `epochs_per_cycle` and is
+  rejected under `plateau`. `fixed_lr` gains a `warmup_epochs` keyword,
+  `build_train_state` and `TrainState` a `warmup_epochs` field, and
+  `lr_schedule.py` exports `validate_warmup`. EXP-0011's warm restart (`lr_min`
+  straight back to `lr0`) was itself a 40 to 67-fold jump of the training loss
+  at cycle 2; the warmup removes the jump while staying a pure function of the
+  epoch. `scripts/config_al_retro_loop.yaml` is now EXP-0012 (EXP-0011 plus
+  `warmup_epochs: 5`, on v3 with a patient-held-out V; see below).
+- Output format: run `manifest.json` files gain `warmup_epochs` beside
+  `lr_schedule` and `lr_min`.
+- **`divergence_table` semantics changed**: the epoch-to-epoch rise is now taken
+  over the whole run, so the step from the last epoch of cycle c-1 (for cycle 1,
+  the inherited cycle-0 rows) into epoch 0 of cycle c counts for cycle c, and a
+  new column `at_restart` says whether the largest rise was that step. Grouping
+  by cycle alone had missed the EXP-0011 warm-restart shock. Rerunning
+  `al_compare.py` on EXP-0011 now flags cycle 2 of every run.
+- **New `restart_table`** in `compare.py`: per run and cycle >= 1,
+  `restart_ratio` (training loss at epoch 0 over the last epoch of the previous
+  cycle), `restart_peak_ratio` and `restart_peak_epoch` (the peak over the first
+  `restart_peak_epochs` epochs, since a warmup may delay the shock rather than
+  remove it), and the same three with a `val_` prefix for the validation loss.
+  Output format of `scripts/al_compare.py`: new `restart_ratios.csv`, plus
+  `restart_ratios_by_strategy.csv` when a strategy has several seeds; new config
+  key `restart_peak_epochs` (10). On the existing runs the cycle-2 mean
+  `restart_ratio` is 40 / 67 / 50 (EXP-0011 random / score_topk /
+  score_topk_mixed) and 0.92 to 1.01 (EXP-0010).
+- **`prepare_splits` in `src/active_learning/retrospective/loop.py`** gains
+  `overwrite: bool = False` and raises `FileExistsError` when `splits_dir`
+  already holds a `splits.json`; the `splits` stage of
+  `scripts/al_retro_loop.py` gains `--overwrite`. Frozen splits (the d30 splits
+  of EXP-0009 to EXP-0011 and the patient-held-out splits of EXP-0012) can no
+  longer be redrawn by a stray `splits` run or a launcher started without
+  `SKIP_SPLITS=1`.
+- **Patient-held-out validation split.** New module
+  `src/active_learning/retrospective/patient_split.py` (`select_held_out_groups`,
+  `build_patient_splits`, `assert_groups_disjoint`) and new `RetroConfig` keys
+  `val_split` (`record`, the default and unchanged, or `patient`),
+  `val_group_column` (`patient_key`), `val_stratify_column` (`source_dataset`)
+  and `val_groups_per_stratum`. Under `patient`, V is every record of a fixed
+  number of held-out groups per stratum, drawn with `split_seed`; `load_run_inputs`
+  re-checks that no group is in both V and T. Output format: `splits.json`
+  gains `val_split` and, under `patient`, `held_out_groups`,
+  `n_groups_validation` and `n_groups_training`.
+- **`scripts/run_al_retro.sh`** gains `CYCLE0_ARGS`, extra arguments for the
+  cycle-0 stage only (EXP-0012 trains cycle 0 at a constant 5e-4 while the
+  strategy runs use the warmed-up cosine).
+- **`scripts/config_al_retro_loop.yaml`** is EXP-0012 on the v3 HDF5 with 12
+  held-out CT scans (9 thorax, 3 pelvis) at d30, splits and runs under
+  `/scratch/mstryja/adota_runs/al_retro_v3/d30_patient/`.
+- **`scripts/analysis/acquisition_input_only_refit.py`** gains
+  `--exclude-patients` (provenance-map `patient_key` values whose records are
+  dropped from development and frozen test before fitting) and `--output-dir`
+  (defaults to `--features-dir`, the old behaviour); `analytic_scorer.json`
+  gains `excluded_patients`.
+- **New vendored scorer
+  `src/acquisition/data/analytic_scorer_exp0012_train_patients.json`**: the
+  EXP-0006 protocol refitted without EXP-0012's 12 held-out scans (the deployed
+  scorer was fitted on 11 of them). EXP-0012 loads it with `arm:
+  analytic/both_inside_crop`, `variant: full (ridge)`; the deployed
+  `analytic_scorer.json` is unchanged.
 
 ## [1.5.0] - 2026-09-03
 

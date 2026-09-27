@@ -1,4 +1,4 @@
-"""Compare the strategy runs of the retrospective benchmark (EXP-0009 to EXP-0011).
+"""Compare the strategy runs of the retrospective benchmark (EXP-0009 to EXP-0012).
 
     uv run python scripts/al_compare.py --config scripts/config_al_compare.yaml
     uv run python scripts/al_compare.py --run /scratch/.../train_<ts>_al_EXP-0011_random_seed1234 \
@@ -16,15 +16,20 @@ same training set size at every cycle), and writes:
 - ``summary_boundaries.csv``, ``epochs_to_quality.csv``, ``consistency.json``,
   and a CSV of the numbers beside every figure;
 - ``divergences.csv``: per run and cycle, the largest epoch-to-epoch rise of the
-  training loss and whether it crossed the ``divergence_ratio`` (a flagged
-  cycle, and everything after it, measures the recovery, not the data);
+  training loss, the step into the cycle from the previous one's last epoch
+  included (``at_restart``), and whether it crossed the ``divergence_ratio`` (a
+  flagged cycle, and everything after it, measures the recovery, not the data);
+- ``restart_ratios.csv``: per run and cycle >= 1, the training and validation
+  loss at epoch 0 and at their peak over the first ``restart_peak_epochs``
+  epochs, each over the last epoch of the previous cycle (the warm-restart
+  shock of EXP-0011, and whether a warmup removes it or only delays it);
 - ``summary_trajectory_last<k>.csv``: the median of the last ``trajectory_last_k``
   subsample evaluations of every cycle, the boundary estimate that does not
   depend on which epoch the cycle happened to end on.
 
 When a strategy was run under several seeds (the same run directories, several
 ``--run`` entries), the runs are labelled ``<strategy>_seed<seed>``, and the
-boundary and trajectory summaries plus F2 and F3 are written a second time
+boundary, trajectory and restart summaries plus F2 and F3 are written a second time
 ``_by_strategy``: mean across seeds with a min-max band.
 
 Figures come from :mod:`src.figures.al_curves`; every output goes to the config's
@@ -51,6 +56,7 @@ from src.active_learning.retrospective.compare import (
     fingerprints,
     quality_curves,
     read_run,
+    restart_table,
     trajectory_table,
     unique_labels,
 )
@@ -65,8 +71,8 @@ app = typer.Typer(help="Compare retrospective active-learning runs.", add_comple
 logger = logging.getLogger("al_compare")
 
 DEFAULTS = {"runs": [], "labels": [], "output_dir": "/scratch/mstryja/adota_runs/al_retro/compare",
-            "thresholds": None, "title": "Retrospective active learning (EXP-0011)",
-            "divergence_ratio": 2.0, "trajectory_last_k": 3}
+            "thresholds": None, "title": "Retrospective active learning (EXP-0012)",
+            "divergence_ratio": 2.0, "trajectory_last_k": 3, "restart_peak_epochs": 10}
 
 
 def _thresholds(raw: Optional[Dict]) -> Dict[str, Tuple[float, str]]:
@@ -101,15 +107,18 @@ def main(
     consistency = check_consistency(runs)
     divergences = divergence_table(runs, ratio=float(cfg["divergence_ratio"]))
     divergences.to_csv(out / "divergences.csv", index=False)
+    restarts = restart_table(runs, peak_epochs=int(cfg["restart_peak_epochs"]))
+    restarts.to_csv(out / "restart_ratios.csv", index=False)
     flagged = divergences[divergences["diverged"]] if not divergences.empty else divergences
     consistency["diverged"] = {label: [int(c) for c in group["cycle"]]
                                for label, group in flagged.groupby("label")}
     (out / "consistency.json").write_text(json.dumps(consistency, indent=2))
     logger.info("comparing %d runs: %s", len(runs), consistency["labels"])
     for _, row in flagged.iterrows():
-        logger.warning("%s diverged in cycle %d at epoch %d: training loss %.4g -> %.4g "
+        logger.warning("%s diverged in cycle %d at epoch %d%s: training loss %.4g -> %.4g "
                        "(x%.1f); that cycle and the ones after it measure the recovery",
                        row["label"], row["cycle"], row["epoch_in_cycle"],
+                       " (at the restart)" if row["at_restart"] else "",
                        row["train_loss_before"], row["train_loss_after"], row["max_rise"])
 
     gamma_label = str(consistency["gamma_label"])
@@ -159,6 +168,9 @@ def main(
         aggregate_over_seeds(trajectory).to_csv(
             out / f"summary_trajectory_last{last_k}_by_strategy_gamma_{gamma_label}.csv",
             index=False)
+        if not restarts.empty:
+            aggregate_over_seeds(restarts, carry=("n_train",)).to_csv(
+                out / "restart_ratios_by_strategy.csv", index=False)
         stacked = pd.concat([frame.assign(strategy=r.strategy) for r in runs
                              for frame in [curves[r.label]]], ignore_index=True)
         agg = aggregate_over_seeds(stacked, keys=("strategy", "cumulative_epoch"),
@@ -194,7 +206,12 @@ def main(
     typer.echo(f"comparison written to {out}")
     if not flagged.empty:
         typer.echo("DIVERGED: " + "; ".join(f"{r.label} cycle {r.cycle} epoch {r.epoch_in_cycle} "
-                                            f"(x{r.max_rise:.1f})" for r in flagged.itertuples()))
+                                            f"(x{r.max_rise:.1f}{', restart' if r.at_restart else ''})"
+                                            for r in flagged.itertuples()))
+    if not restarts.empty:
+        typer.echo(restarts[["label", "cycle", "restart_ratio", "restart_peak_ratio",
+                             "val_restart_ratio", "val_restart_peak_ratio"]]
+                   .to_string(index=False, float_format=lambda v: f"{v:.3g}"))
     typer.echo(summary.to_string(index=False, float_format=lambda v: f"{v:.4g}"))
 
 

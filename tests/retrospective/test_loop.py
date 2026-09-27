@@ -140,8 +140,19 @@ def test_data_fraction_subsamples_d_before_any_split(tmp_path, fraction):
     inputs = load_run_inputs(cfg)
     total = len(inputs.splits.validation) + len(inputs.splits.training)
     assert total == round(24 * fraction)
-    again = prepare_splits(cfg)
+    again = prepare_splits(cfg, overwrite=True)
     assert again["fingerprint"] == summary["fingerprint"]        # same seed, same subset
     if fraction < 1.0:
         cfg.data_fraction_seed += 1
-        assert prepare_splits(cfg)["fingerprint"] != summary["fingerprint"]
+        assert prepare_splits(cfg, overwrite=True)["fingerprint"] != summary["fingerprint"]
+
+
+def test_prepare_splits_refuses_to_overwrite_frozen_splits(tmp_path):
+    cfg = make_config(tmp_path)
+    summary = prepare_splits(cfg)
+    before = (tmp_path / "splits" / "splits.json").read_bytes()
+    cfg.split_seed += 1
+    with pytest.raises(FileExistsError, match="frozen"):
+        prepare_splits(cfg)
+    assert (tmp_path / "splits" / "splits.json").read_bytes() == before
+    assert prepare_splits(cfg, overwrite=True)["fingerprint"] != summary["fingerprint"]
