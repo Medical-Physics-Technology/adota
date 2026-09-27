@@ -70,3 +70,14 @@ def test_entrance_profile_overlay_figure(tmp_path: Path) -> None:
         [("a", flux, dose), ("b", flux * 2, dose)], str(tmp_path / "overlay"), title="t")
     assert {p.suffix for p in paths} == {".svg", ".pdf", ".png"}
     assert len(csv_path.read_text().splitlines()) == 1 + 2 * (flux.shape[0] + flux.shape[1])
+
+
+def test_dose_figure_accepts_provenance(tmp_path: Path) -> None:
+    from src.figures.beamlet_input import beamlet_dose_figure
+
+    ct, dose = _ct_and_flux()
+    paths = beamlet_dose_figure(
+        ct, dose, str(tmp_path / "spot_prov"), initial_energy=100.0,
+        provenance={"patient_key": "f5b61ce95ba07c63", "spot_key": "589cadd1b3c3aa7e"},
+    )
+    assert {p.suffix for p in paths} == {".svg", ".pdf", ".png"}
