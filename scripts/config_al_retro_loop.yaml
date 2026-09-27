@@ -33,7 +33,7 @@
 # axis: the question is how the sampling strategy shapes the training progress.
 # Guide: scripts/docs/al_retro_loop.md. Design: docs/active_learning_pipeline.md.
 
-experiment: EXP-0012
+experiment: EXP-0013
 
 # ── Data ──────────────────────────────────────────────────────────────────
 # v3 (CHG-0011): the v2 records byte for byte plus per-record provenance
@@ -64,7 +64,7 @@ data_fraction_seed: 20260911
 # held-out scans (split_seed), T = the rest, the cycle-0 set from T record by
 # record (initial_seed). The `splits` stage refuses to overwrite them.
 splits_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/splits
-runs_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/exp0012
+runs_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/exp0013
 val_split: patient        # record (EXP-0009 to EXP-0011) | patient
 val_group_column: patient_key
 val_stratify_column: source_dataset
@@ -108,9 +108,15 @@ checkpoint_every_n_epochs: 10
 # cycle 0 stays the constant-LR endpoint of EXP-0009; it is common to every run
 # and cancels (cycle 1 now starts from lr_min instead of 5e-4, a drop, not a
 # shock).
-lr_schedule: cosine_per_cycle
+# EXP-0012's warmup delayed the shock instead of removing it: the loss exploded
+# 2 to 24-fold once the warmup climbed through 2.3e-4 to 5e-4, on a model that
+# had settled at 5e-5. EXP-0013 never raises the learning rate again: cycle 0 is
+# EXP-0012's (constant 5e-4, reused through CYCLE0_RUN), then every strategy
+# cycle runs at a constant training.learning_rate of 1e-4, a 5-fold drop at the
+# start of cycle 1 and flat after it. lr_min is unused under `constant`.
+lr_schedule: constant
 lr_min: 0.00005
-warmup_epochs: 5
+warmup_epochs: 0
 
 # ── Scoring (cycle 1 onward, on the fly, through the scorer interface) ────
 # The deployed EXP-0006 scorer was fitted on 11 of EXP-0012's 12 held-out scans,
@@ -157,7 +163,7 @@ training:
   num_workers: 4
   augmentation: true
   normalize_flux_only: true
-  learning_rate: 0.0005
+  learning_rate: 0.0001   # EXP-0013, cycles 1 to 5; cycle 0 (reused) ran at 5e-4
   weight_decay: 0.001
   lr_factor: 0.9          # only used under lr_schedule: plateau
   lr_patience: 20         # only used under lr_schedule: plateau
