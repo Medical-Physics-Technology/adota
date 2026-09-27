@@ -20,12 +20,18 @@ anatomies arriving later).
 
 Usage:
     uv run --with scikit-learn python scripts/analysis/acquisition_input_only_refit.py --features-dir <dir>
+
+``--exclude-patients`` drops every record of the listed patients (``patient_key``
+values of the provenance map, one per line) from both the development and the
+frozen test set before anything is fitted, so a benchmark whose validation
+patients are listed can use a scorer that has never seen their labels
+(EXP-0012). ``--output-dir`` keeps such a refit away from the study's own files.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Annotated, Dict, List
+from typing import Annotated, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -120,10 +126,26 @@ def main(
     provenance: Annotated[Path, typer.Option()] = PROVENANCE,
     frozen_ids: Annotated[Path, typer.Option()] = FROZEN_TEST_IDS,
     arms: Annotated[List[str], typer.Option(help="Feature arms to fit.")] = ["gt", "analytic"],
+    exclude_patients: Annotated[Optional[Path], typer.Option(
+        help="File of provenance-map patient_key values whose records are left out entirely.")] = None,
+    output_dir: Annotated[Optional[Path], typer.Option(
+        help="Where the outputs go; features_dir when omitted.")] = None,
 ) -> None:
-    """Write refit_results.csv, anatomy_transfer.csv and analytic_scorer.json into features_dir."""
+    """Write refit_results.csv, anatomy_transfer.csv and analytic_scorer.json into output_dir."""
+    output_dir = output_dir or features_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
     targets = (pd.read_csv(results, usecols=["sample_id", "rde"])
                .merge(pd.read_csv(provenance), on="sample_id", how="left"))
+    excluded: List[str] = []
+    if exclude_patients is not None:
+        excluded = sorted({line.strip() for line in exclude_patients.read_text().splitlines() if line.strip()})
+        unknown = sorted(set(excluded) - set(targets["patient_key"].astype(str)))
+        if unknown:
+            raise typer.BadParameter(f"{len(unknown)} excluded patients are not in the provenance map, "
+                                     f"e.g. {unknown[0]!r}")
+        before = len(targets)
+        targets = targets[~targets["patient_key"].astype(str).isin(excluded)]
+        typer.echo(f"excluded {len(excluded)} patients: {before - len(targets)} of {before} records dropped")
     test_ids = set(pd.read_csv(frozen_ids)["sample_id"])
     inside_by_arm = {arm: pd.read_csv(features_dir / f"features_{arm}.csv", usecols=["sample_id", "peak_inside_crop"])
                      for arm in arms}
@@ -149,14 +171,15 @@ def main(
                            f"{r['dev_cv_spearman']:.3f}   TEST P/S {r['test_pearson']:.3f}/{r['test_spearman']:.3f}")
 
     res = pd.DataFrame(results_rows)
-    res.to_csv(features_dir / "refit_results.csv", index=False)
+    res.to_csv(output_dir / "refit_results.csv", index=False)
     tr = pd.DataFrame(transfer_rows)
-    tr.to_csv(features_dir / "anatomy_transfer.csv", index=False)
+    tr.to_csv(output_dir / "anatomy_transfer.csv", index=False)
     typer.echo("\nleave-one-anatomy-out Pearson (mean over the two directions):")
     typer.echo(tr.groupby(["arm", "population", "variant"]).pearson.mean().round(3).to_string())
-    (features_dir / "analytic_scorer.json").write_text(json.dumps(
-        {"features": FEATS, "frozen_test_ids": str(frozen_ids), "arms": scorer}, indent=1))
-    typer.secho(f"\nwrote refit_results.csv, anatomy_transfer.csv, analytic_scorer.json in {features_dir}",
+    (output_dir / "analytic_scorer.json").write_text(json.dumps(
+        {"features": FEATS, "frozen_test_ids": str(frozen_ids), "arms": scorer,
+         "excluded_patients": excluded}, indent=1))
+    typer.secho(f"\nwrote refit_results.csv, anatomy_transfer.csv, analytic_scorer.json in {output_dir}",
                 fg=typer.colors.GREEN)
 
 

@@ -1,7 +1,9 @@
-"""The after-the-fact readers of ``compare.py``: divergence flag, trajectory
-estimate and seed aggregation, on synthetic run frames (no training)."""
+"""The after-the-fact readers of ``compare.py``: divergence flag (boundaries
+included), restart ratios, trajectory estimate and seed aggregation, on
+synthetic run frames and a synthetic ``metrics.jsonl`` (no training)."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +16,8 @@ from src.active_learning.retrospective.compare import (
     aggregate_over_seeds,
     boundary_table,
     divergence_table,
+    read_run,
+    restart_table,
     trajectory_table,
     unique_labels,
 )
@@ -97,3 +101,81 @@ def test_aggregate_over_seeds_gives_mean_and_range_per_strategy():
 def test_unique_labels_refuses_the_same_strategy_and_seed_twice():
     with pytest.raises(ValueError, match="explicit labels"):
         unique_labels([_run("random", "random", 1), _run("random", "random", 1)])
+
+
+def _write_run(run_dir: Path, losses: dict, strategy: str = "random", seed: int = 7) -> Path:
+    """A run directory as the loop writes it: ``losses[cycle]`` is the list of
+    (train, val) combined losses of that cycle's epochs, cycle 0 included (the
+    inherited rows)."""
+    run_dir.mkdir(parents=True)
+    rows, cumulative = [], 0
+    for cycle in sorted(losses):
+        for epoch, (train, val) in enumerate(losses[cycle]):
+            rows.append({"cycle": cycle, "epoch_in_cycle": epoch, "cumulative_epoch": cumulative,
+                         "n_train": 100 + 10 * cycle, "strategy": strategy if cycle else "cycle0",
+                         "cycle_boundary": epoch == len(losses[cycle]) - 1, "lr": 1e-3,
+                         "train": {"loss_combined_mean": train},
+                         "val_loss": {"loss_combined_mean": val, "loss_mse_mean": val,
+                                      "loss_ps_mean": val},
+                         "metrics_subsample": None, "metrics_full": None, "gamma_label": "g"})
+            cumulative += 1
+    (run_dir / "metrics.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    (run_dir / "manifest.json").write_text(json.dumps({"strategy": strategy,
+                                                       "config": {"seed": seed}}))
+    return run_dir
+
+
+def _falling(start: float, n: int = 12) -> list:
+    return [(start * 0.9 ** k, 2 * start * 0.9 ** k) for k in range(n)]
+
+
+def test_restart_ratio_and_boundary_divergence_on_a_metrics_log(tmp_path):
+    cycle0 = _falling(1.0)
+    end0 = cycle0[-1][0]
+    # Cycle 1: a warmup-like start, no jump at epoch 0 but a delayed peak at epoch 3.
+    cycle1 = [(end0, 2 * end0), (1.2 * end0, 2 * end0), (1.5 * end0, 3 * end0),
+              (3.0 * end0, 8 * end0)] + _falling(end0, 8)
+    end1 = cycle1[-1][0]
+    # Cycle 2: a warm-restart shock, x40 at epoch 0, then recovery.
+    cycle2 = [(40 * end1, 10 * 2 * end1)] + _falling(end1, 11)
+    run = read_run(_write_run(tmp_path / "run", {0: cycle0, 1: cycle1, 2: cycle2}))
+
+    restarts = restart_table([run], peak_epochs=10).set_index("cycle")
+    assert list(restarts.index) == [1, 2]
+    assert restarts.loc[1, "restart_ratio"] == pytest.approx(1.0)
+    assert restarts.loc[1, "restart_peak_ratio"] == pytest.approx(3.0)
+    assert restarts.loc[1, "restart_peak_epoch"] == 3
+    assert restarts.loc[1, "val_restart_peak_ratio"] == pytest.approx(8 * end0 / cycle0[-1][1])
+    assert restarts.loc[2, "restart_ratio"] == pytest.approx(40.0)
+    assert restarts.loc[2, "restart_peak_ratio"] == pytest.approx(40.0)
+    assert restarts.loc[2, "restart_peak_epoch"] == 0
+    assert restarts.loc[2, "val_restart_ratio"] == pytest.approx(10.0)
+    assert restarts.loc[2, "train_loss_prev_end"] == pytest.approx(end1)
+
+    # A peak window shorter than the delay misses the cycle-1 peak.
+    short = restart_table([run], peak_epochs=2).set_index("cycle")
+    assert short.loc[1, "restart_peak_ratio"] == pytest.approx(1.2)
+
+    table = divergence_table([run], ratio=2.0).set_index("cycle")
+    # The x40 step from cycle 1's last epoch into cycle 2 belongs to cycle 2.
+    assert table.loc[2, "diverged"]
+    assert table.loc[2, "at_restart"]
+    assert table.loc[2, "epoch_in_cycle"] == 0
+    assert table.loc[2, "max_rise"] == pytest.approx(40.0)
+    # Cycle 1's largest rise is x2 (1.5 -> 3.0), inside the cycle and not above the ratio.
+    assert not table.loc[1, "at_restart"]
+    assert table.loc[1, "max_rise"] == pytest.approx(2.0)
+    assert not table.loc[1, "diverged"]
+    assert not table.loc[0, "diverged"]
+
+
+def test_divergence_grouped_by_cycle_would_have_missed_the_restart():
+    run = _run("a", "random", 1)
+    rows = run.rows.copy()
+    first_of_2 = (rows["cycle"] == 2) & (rows["epoch_in_cycle"] == 0)
+    rows.loc[rows["cycle"] == 2, "train_loss"] *= 50.0     # the whole cycle sits x50 higher
+    run = RunData(**{**run.__dict__, "rows": rows})
+    table = divergence_table([run]).set_index("cycle")
+    assert table.loc[2, "diverged"] and table.loc[2, "at_restart"]
+    assert table.loc[2, "train_loss_after"] == pytest.approx(rows.loc[first_of_2, "train_loss"].iloc[0])
+    assert not table.loc[1, "diverged"]

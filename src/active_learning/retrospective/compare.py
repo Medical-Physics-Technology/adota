@@ -10,11 +10,14 @@ from the logged per-epoch metrics after the fact rather than decided in advance.
 EXP-0010 showed that two of the six d30 runs diverged mid-cycle (a ten-fold rise
 of the training loss in one epoch) and that the boundary row, one epoch of a
 validation loss that swings several-fold inside a cycle, differs by 1 to 2
-points of pass rate between same-data replicates. Three helpers read those
-effects off the log: :func:`divergence_table` flags the rises,
-:func:`trajectory_table` gives a boundary estimate that does not depend on
-which epoch a cycle happened to end on, and :func:`aggregate_over_seeds` folds
-the runs of one strategy under several seeds into a mean with a min-max range.
+points of pass rate between same-data replicates; EXP-0011 showed that a warm
+restart of the learning rate is itself such a rise, at the cycle boundary.
+Four helpers read those effects off the log: :func:`divergence_table` flags the
+rises, boundaries included, :func:`restart_table` measures the shock at the
+start of every cycle, :func:`trajectory_table` gives a boundary estimate that
+does not depend on which epoch a cycle happened to end on, and
+:func:`aggregate_over_seeds` folds the runs of one strategy under several seeds
+into a mean with a min-max range.
 """
 from __future__ import annotations
 
@@ -165,29 +168,84 @@ def quality_curves(runs: Sequence[RunData]) -> Dict[str, pd.DataFrame]:
 
 def divergence_table(runs: Sequence[RunData], ratio: float = 2.0) -> pd.DataFrame:
     """Per run and cycle, the largest epoch-to-epoch rise of the training loss
-    inside the cycle, where it happened, and whether it exceeds ``ratio``.
+    entering or inside the cycle, where it happened, and whether it exceeds
+    ``ratio``.
 
-    A healthy cycle has a ratio near 1; the two divergences of EXP-0009 and
-    EXP-0010 were 11 and 10. The flag is a property of the run, not of the
-    strategy, and a flagged cycle and everything after it measure the recovery
-    rather than the data.
+    The rises are taken over the run's whole epoch sequence, cycle boundaries
+    included: the step from the last epoch of cycle ``c-1`` (for cycle 1, the
+    inherited cycle-0 rows) to epoch 0 of cycle ``c`` belongs to cycle ``c``,
+    as every step belongs to the cycle of its later epoch. ``at_restart`` says
+    whether the largest rise was that boundary step. Grouping by cycle alone
+    missed the warm-restart shock of EXP-0011 (40 to 67-fold, exactly at the
+    boundary). A healthy cycle has a ratio near 1; the two mid-cycle
+    divergences of EXP-0009 and EXP-0010 were 11 and 10. The flag is a
+    property of the run, not of the strategy, and a flagged cycle and
+    everything after it measure the recovery rather than the data.
     """
     rows = []
     for run in runs:
-        for cycle, group in run.rows.groupby("cycle", sort=True):
-            loss = group.sort_values("cumulative_epoch")["train_loss"].to_numpy(dtype=float)
-            epochs = group.sort_values("cumulative_epoch")["epoch_in_cycle"].to_numpy()
-            if len(loss) < 2:
+        frame = run.rows.sort_values("cumulative_epoch")
+        loss = frame["train_loss"].to_numpy(dtype=float)
+        cycles = frame["cycle"].to_numpy()
+        epochs = frame["epoch_in_cycle"].to_numpy()
+        if len(loss) < 2:
+            continue
+        rises = loss[1:] / loss[:-1]
+        later_cycle = cycles[1:]
+        for cycle in np.unique(later_cycle):
+            steps = np.flatnonzero(later_cycle == cycle)
+            if not np.isfinite(rises[steps]).any():
                 continue
-            rises = loss[1:] / loss[:-1]
-            if not np.isfinite(rises).any():
-                continue
-            at = int(np.nanargmax(rises))
+            at = int(steps[np.nanargmax(rises[steps])])
             rows.append({"label": run.label, "strategy": run.strategy, "seed": run.seed,
                          "cycle": int(cycle), "max_rise": float(rises[at]),
                          "epoch_in_cycle": int(epochs[at + 1]),
+                         "at_restart": bool(cycles[at] != cycles[at + 1]),
                          "train_loss_before": float(loss[at]), "train_loss_after": float(loss[at + 1]),
                          "diverged": bool(rises[at] > ratio)})
+    return pd.DataFrame(rows)
+
+
+def restart_table(runs: Sequence[RunData], peak_epochs: int = 10) -> pd.DataFrame:
+    """Per run and cycle >= 1, how hard the start of the cycle hit the loss.
+
+    ``restart_ratio`` is the training loss at epoch 0 of the cycle over the
+    training loss at the last epoch of the previous cycle; ``restart_peak_ratio``
+    is the largest training loss over the first ``peak_epochs`` epochs over that
+    same reference, with ``restart_peak_epoch`` where it was. A warmup may
+    delay the shock rather than remove it, so the peak is the number to read
+    beside the epoch-0 ratio. ``val_restart_ratio`` and
+    ``val_restart_peak_ratio`` are the same two for the validation loss. Under
+    a constant learning rate both sit near 1 (EXP-0010); the warm restarts of
+    EXP-0011 put ``restart_ratio`` at 40 to 67 in cycle 2.
+    """
+    rows = []
+    for run in runs:
+        frame = run.rows.sort_values("cumulative_epoch")
+        for cycle in sorted(int(c) for c in frame["cycle"].unique()):
+            prev = frame[frame["cycle"] == cycle - 1]
+            cur = frame[frame["cycle"] == cycle]
+            if cycle < 1 or prev.empty or cur.empty:
+                continue
+            ref = prev.iloc[-1]
+            head = cur[cur["epoch_in_cycle"] < peak_epochs]
+            first = cur.iloc[0]
+            row = {"label": run.label, "strategy": run.strategy, "seed": run.seed,
+                   "cycle": cycle, "n_train": int(first["n_train"]),
+                   "epoch_in_cycle_first": int(first["epoch_in_cycle"])}
+            for prefix, column in (("", "train_loss"), ("val_", "val_loss")):
+                before = float(ref[column]) if pd.notna(ref[column]) and ref[column] != 0 else np.nan
+                at_zero = float(first[column]) if pd.notna(first[column]) else np.nan
+                values = head[column].to_numpy(dtype=float)
+                peak = int(np.nanargmax(values)) if np.isfinite(values).any() else None
+                row[f"{column}_prev_end"] = before
+                row[f"{column}_epoch0"] = at_zero
+                row[f"{prefix}restart_ratio"] = at_zero / before
+                row[f"{prefix}restart_peak_ratio"] = (float(values[peak]) / before
+                                                      if peak is not None else np.nan)
+                row[f"{prefix}restart_peak_epoch"] = (int(head["epoch_in_cycle"].iloc[peak])
+                                                      if peak is not None else np.nan)
+            rows.append(row)
     return pd.DataFrame(rows)
 
 
