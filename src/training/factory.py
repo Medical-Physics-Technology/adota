@@ -111,6 +111,9 @@ def build_adota_model(config: TrainingConfig, device: torch.device) -> DoTA3D_v3
     """
     model = DoTA3D_v3(
         input_shape=tuple(config.input_shape),
+        sequence_mixer=config.sequence_mixer,
+        mlstm_proj_factor=config.mlstm_proj_factor,
+        mlstm_conv_kernel=config.mlstm_conv_kernel,
         num_transformers=config.num_transformers,
         num_heads=config.num_heads,
         dim_feedforward=config.dim_feedforward,
