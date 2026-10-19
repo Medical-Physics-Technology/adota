@@ -213,6 +213,10 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 - **`scripts/active_learning/ensemble_hpo.py`** with `config_ensemble_hpo.yaml`.
   New output format: `trials.json`, `trials/<trial>/segment_<epochs>.json`,
   `results.csv`, `selection.json`. Guide: `scripts/docs/ensemble_hpo.md`.
+- `src.training.run_dir.save_resolved_config` (and the manifest's `config`)
+  now writes a mapping config as YAML; it used to write a plain dict as its
+  `repr`, which affected the `config.yaml` of `ensemble_agreement.py`,
+  `cross_fit_partition.py` and `ensemble_hpo.py`.
 - `src.evaluation.cli.on_root_filesystem`: whether an output path would land on
   the root disk, for scripts that refuse it.
 
