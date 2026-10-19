@@ -8,12 +8,17 @@ here, so ``from src.adota.layers import ConvBlock3D_v2`` keeps working.
   their skip connections.
 - ``transformer``: ``TransformerEncoderLayerDoTA``, ``PositionalEmbedding``,
   ``LinearProj`` -- the causal-masked attention over the slice sequence.
+- ``mlstm``: ``MLSTMBlockDoTA`` -- the mLSTM block, a recurrent alternative.
+- ``mixers``: ``build_sequence_mixer``, ``SEQUENCE_MIXERS`` -- the mixer stack
+  chosen by name (transformer, mlstm, none).
 - ``tensor_ops``: ``Permute``, ``ReshapeLayer``, ``CroppingLayer`` -- shape
   adapters between the (B, C, D, H, W) and (B, D, H, W, C) conventions.
 """
 
 from src.adota.layers.conv import Conv3D, ConvBlock3D_v2
 from src.adota.layers.encoder_decoder import ConvDecoder3D, ConvEncoder3D
+from src.adota.layers.mixers import SEQUENCE_MIXERS, build_sequence_mixer
+from src.adota.layers.mlstm import MLSTMBlockDoTA
 from src.adota.layers.tensor_ops import CroppingLayer, Permute, ReshapeLayer
 from src.adota.layers.transformer import (
     LinearProj,
@@ -28,8 +33,11 @@ __all__ = [
     "ConvEncoder3D",
     "CroppingLayer",
     "LinearProj",
+    "MLSTMBlockDoTA",
     "Permute",
     "PositionalEmbedding",
     "ReshapeLayer",
+    "SEQUENCE_MIXERS",
     "TransformerEncoderLayerDoTA",
+    "build_sequence_mixer",
 ]
