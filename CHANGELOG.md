@@ -159,6 +159,34 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   with the corrected `gpr[1]` to within 1e-4 pp except on voxels with gamma
   exactly 0.
 
+### Added (ensemble agreement, EXP-0014)
+
+- **`src/active_learning/ensemble/`**: `members` (`Member`, `EvaluationSettings`,
+  `resolve_member`, `infer_errors`, `training_config_from_yaml`, `held_out_table`:
+  a trained model's per-record errors, reused from a CSV or inferred from its
+  checkpoint, and its training ids) and `agreement` (`ERROR_METRICS`,
+  `error_matrix`, `assign_cells`, `pair_levels`, `cell_correlations`, `pair_table`,
+  `scan_bootstrap`, `agreement_matrix`: within scan x 20 MeV cell rank agreement
+  per pair, the pair level read from the training ids, a bootstrap over scans).
+- **`scripts/active_learning/ensemble_agreement.py`** with
+  `config_ensemble_agreement.yaml` (stage 0b: the nine cycle-5 models of
+  EXP-0012). New output format: `pairs_<metric>.csv`, `levels_<metric>.csv`,
+  `cells_<metric>.csv`, `members.csv`, `held_out.csv`, `summary.json`. Guide:
+  `scripts/docs/ensemble_agreement.md`.
+- **`src/figures/ensemble_agreement.py`**: `agreement_matrix_figure`.
+- **`src/active_learning/ensemble/partition.py`**: `scans_from_frozen_ids`,
+  `scans_from_patients`, `scan_table`, `assign_folds`, `hpo_split`,
+  `record_table`, `check_partition`, `fold_ids`, `fold_summary`: the scan-level
+  F / V / R partition, anatomy-stratified cross-fitting folds and the HPO split
+  of R.
+- **`scripts/active_learning/cross_fit_partition.py`** with
+  `config_cross_fit_partition.yaml`. New output format: `partition.csv`,
+  `records.csv`, `folds/fold_<k>_{train,eval}_ids.csv`,
+  `hpo/hpo_{train,val}_ids.csv`, `fold_summary.csv`. Guide:
+  `scripts/docs/cross_fit_partition.md`.
+- `src.evaluation.cli.on_root_filesystem`: whether an output path would land on
+  the root disk, for scripts that refuse it.
+
 ### Added (retrospective active learning)
 
 - **`src/active_learning/retrospective/`**: the retrospective benchmark on the
@@ -186,6 +214,8 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 
 ### Changed (retrospective active learning)
 
+- `src.active_learning.retrospective.sampling.energy_bin` is public (was
+  `_energy_bin`), so the ensemble cells use the selection fingerprint's 20 MeV bins.
 - **`src/active_learning/retrospective/sampling.py`**: `stratified_score`
   (`stratified_score_strategy`) is removed from the retrospective registry.
   EXP-0009 found that equal counts per score decile, uniform inside a decile, is
