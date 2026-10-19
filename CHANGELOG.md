@@ -205,6 +205,14 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   `records.csv`, `folds/fold_<k>_{train,eval}_ids.csv`,
   `hpo/hpo_{train,val}_ids.csv`, `fold_summary.csv`. Guide:
   `scripts/docs/cross_fit_partition.md`.
+- **`src/hpo/`**: `space` (`decode`, `encode`, `unit_distance`, `Trial`,
+  `draw_trials`: scrambled-Sobol trials under a parameter cap), `halving`
+  (`rung_budgets`, `promote`, `rank`, `schedule`, `total_epochs`), `trial`
+  (`trial_config`, `count_parameters`, `run_segment`, `evaluate_finalist`,
+  `best_so_far`), `selection` (`results_table`, `member_roles`, `finalists`).
+- **`scripts/active_learning/ensemble_hpo.py`** with `config_ensemble_hpo.yaml`.
+  New output format: `trials.json`, `trials/<trial>/segment_<epochs>.json`,
+  `results.csv`, `selection.json`. Guide: `scripts/docs/ensemble_hpo.md`.
 - `src.evaluation.cli.on_root_filesystem`: whether an output path would land on
   the root disk, for scripts that refuse it.
 
