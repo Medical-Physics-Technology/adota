@@ -336,6 +336,11 @@ def run(
     devices: Annotated[Optional[str], typer.Option(help="Comma-separated CUDA indices.")] = None,
     set_: Annotated[Optional[List[str]], typer.Option("--set", help="KEY=VALUE override.")] = None,
 ) -> None:
+    # torch.compile and the loader workers write under TMPDIR; refuse the root
+    # disk before anything is created.
+    if on_root_filesystem(Path(tempfile.gettempdir())):
+        raise typer.BadParameter("TMPDIR is on the root filesystem; point it at /scratch "
+                                 "(e.g. TMPDIR=/scratch/$USER/tmp)")
     if resume is not None:
         hpo_dir = Path(resume)
         cfg = _hpo_config(hpo_dir)
@@ -348,8 +353,6 @@ def run(
             raise typer.BadParameter(f"output_dir {root} is on the root filesystem; use /scratch")
         hpo_dir = root / f"hpo_{datetime.now():%Y%m%d_%H%M%S}"
         hpo_dir.mkdir(parents=True)
-    if on_root_filesystem(Path(tempfile.gettempdir())):
-        raise typer.BadParameter("TMPDIR is on the root filesystem; point it at /scratch")
     setup_logging(hpo_dir, log_filename="hpo.log")
     device_list = [int(d) for d in devices.split(",")] if devices else list(cfg["devices"])
     if resume is None:
