@@ -243,11 +243,16 @@ def drive(hpo_dir: Path, cfg: Dict[str, Any], devices: List[int]) -> None:
         _run_jobs(workers, [{"key": f"memcheck x{len(c)}", "log": hpo_dir / "memcheck.log",
                              "args": ["memcheck"] + sum((["--trial", t] for t in c), [])}
                             for c in chunks if c], lambda job: None)
+        missing = [t for t in pending if not (hpo_dir / "trials" / t / "memcheck.json").exists()]
+        if missing:
+            raise RuntimeError(f"the memory check wrote no result for {len(missing)} trials "
+                               f"(e.g. {missing[0]}); the worker failed, see {hpo_dir / 'memcheck.log'}")
         failed = [t for t in pending
                   if not json.loads((hpo_dir / "trials" / t / "memcheck.json").read_text())["ok"]]
         if failed:
-            raise RuntimeError(f"{len(failed)} trials do not fit in GPU memory: {failed}; "
-                               "lower the batch size or the parameter cap")
+            errors = {t: json.loads((hpo_dir / "trials" / t / "memcheck.json").read_text())["error"]
+                      for t in failed}
+            raise RuntimeError(f"{len(failed)} trials failed the memory check: {errors}")
 
     # 2. Successive halving, all mixers interleaved, state rebuilt from disk.
     def on_segment_done(job):
@@ -289,7 +294,9 @@ def drive(hpo_dir: Path, cfg: Dict[str, Any], devices: List[int]) -> None:
     label = _settings(cfg).gamma_label
     todo = [t for t in final if not (hpo_dir / "trials" / t / f"finalist_{label}.json").exists()]
     _run_jobs(workers, [{"key": f"finalist {t}", "log": hpo_dir / "trials" / t / "worker.log",
-                         "args": ["finalist", "--trial", t]} for t in todo], lambda job: None)
+                         "args": ["finalist", "--trial", t]} for t in todo],
+              lambda job: job["code"] and logger.warning("%s failed (exit %d); see %s; its metrics "
+                                                         "stay empty", job["key"], job["code"], job["log"]))
     write_results(hpo_dir, cfg, trials, table, roles, final, budgets, by_id, label)
 
 
@@ -403,7 +410,10 @@ def memcheck(trial: Annotated[List[str], typer.Option()], hpo_dir: Annotated[Pat
     for name in trial:
         cfg, t, config, device = _worker_setup(hpo_dir, name)
         result = {"ok": True, "peak_gb": None, "error": None}
+        if device.type != "cuda":
+            raise RuntimeError("memcheck needs a CUDA device; none is visible to this worker")
         try:
+            torch.cuda.init()  # the peak counter cannot be reset before CUDA is initialised
             torch.cuda.reset_peak_memory_stats(device)
             model = build_adota_model(config, device)
             shape = (config.batch_size, *config.input_shape)
@@ -411,7 +421,9 @@ def memcheck(trial: Annotated[List[str], typer.Option()], hpo_dir: Annotated[Pat
             out.mean().backward()
             result["peak_gb"] = round(torch.cuda.max_memory_allocated(device) / 1e9, 2)
         except torch.cuda.OutOfMemoryError as exc:
-            result.update(ok=False, error=str(exc)[:500])
+            result.update(ok=False, error=f"out of memory: {str(exc)[:500]}")
+        except RuntimeError as exc:  # recorded, so the driver names the trial instead of crashing
+            result.update(ok=False, error=f"{type(exc).__name__}: {str(exc)[:500]}")
         finally:
             model = out = None
             torch.cuda.empty_cache()

@@ -134,3 +134,15 @@ def test_a_segment_trains_checkpoints_and_resumes(tmp_path, mixer):
     assert read_segment(trial_dir, 1)["end_epoch"] == 1
     assert (trial_dir / "checkpoints" / "best.pth").exists()
     assert pd.notna(second["objective"])
+
+
+def test_a_resolved_mapping_config_is_written_as_readable_yaml(tmp_path):
+    """The HPO workers read the driver's config.yaml back; a mapping must not be
+    written as its repr (the first smoke run failed on exactly that)."""
+    import yaml
+
+    from src.training.run_dir import save_resolved_config
+
+    cfg = {"training": {"batch_size": 56, "scale": {"min_ds": 0.0}}, "mixers": ["none"], "x": None}
+    save_resolved_config(cfg, tmp_path / "config.yaml")
+    assert yaml.safe_load((tmp_path / "config.yaml").read_text()) == cfg
