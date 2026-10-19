@@ -1,0 +1,72 @@
+# Ensemble agreement (scripts/active_learning/ensemble_agreement.py)
+# ===================================================================
+#   uv run python scripts/active_learning/ensemble_agreement.py \
+#       --config scripts/active_learning/config_ensemble_agreement.yaml
+#
+# EXP-0014 stage 0b: the nine cycle-5 models of EXP-0012 (3 strategies x seeds
+# 1234-1236) on its 12 held-out scans V (4,382 records), which none of them
+# trained on. The errors already exist (validation/cycle_05_full_gamma_*.csv),
+# so with source: auto this runs on CPU in about a minute. Every output goes to
+# a timestamped directory under output_dir; nothing is written to the root disk.
+experiment: EXP-0014
+stage: 0b
+output_dir: /scratch/mstryja/adota_runs/exp0014/stage0b
+
+# The evaluation set: sample ids (column sample_id) in the HDF5 of dataset_path.
+dataset_path: /scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5
+record_ids: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/splits/validation_ids.csv
+# Per-record scan and energy. Empty: read from the HDF5's <stem>_index.csv.
+metadata_csv: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/splits/record_metadata.csv
+group_column: patient_key     # a cell is one scan ...
+energy_column: energy_mev     # ... times one 20 MeV energy bin
+
+# Members. Three forms (src/active_learning/ensemble/members.py):
+#   - run_dir: <retrospective run>   [cycle: N]   [label: ...]
+#   - checkpoint: <.pth>  model_config: <training yaml>  [training_ids: <csv>]  [label: ...]
+#   - errors_csv: <per-record csv>  [training_ids: <csv>]  [label: ...]
+# Run labels default to <strategy>_seed<seed>. Pair levels are read from the
+# training ids: identical ids -> seed_only, anything else -> data.
+cycle: 5                      # default for run_dir members without their own
+checkpoint: last              # checkpoints/cycle_<cc>/<checkpoint>.pth, for inference
+members:
+  - run_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/exp0012/train_20260924_160210_al_EXP-0012_d30_random_seed1234
+  - run_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/exp0012/train_20260924_160210_al_EXP-0012_d30_score_topk_seed1234
+  - run_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/exp0012/train_20260924_160210_al_EXP-0012_d30_score_topk_mixed_seed1234
+  - run_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/exp0012/train_20260925_042820_al_EXP-0012_d30_random_seed1235
+  - run_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/exp0012/train_20260925_050226_al_EXP-0012_d30_score_topk_seed1235
+  - run_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/exp0012/train_20260925_051010_al_EXP-0012_d30_score_topk_mixed_seed1235
+  - run_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/exp0012/train_20260925_175842_al_EXP-0012_d30_random_seed1236
+  - run_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/exp0012/train_20260925_183328_al_EXP-0012_d30_score_topk_seed1236
+  - run_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/exp0012/train_20260925_192450_al_EXP-0012_d30_score_topk_mixed_seed1236
+
+# auto: reuse a member's errors CSV when it covers every record with these gamma
+# criteria, else infer from the checkpoint; csv: never infer; infer: always.
+source: auto
+device_index: null            # inference only; falls back to CPU with a warning
+batch_size: null              # inference only; null keeps the member's own
+num_workers: null
+
+# Identical for every member so the errors are comparable; they also select the
+# existing CSV (validation/cycle_<cc>_full_gamma_2pct_2mm_cutoff10pct.csv).
+gamma_params:
+  dose_percent_threshold: 2
+  distance_mm_threshold: 2
+  interp_fraction: 10
+  max_gamma: 2
+  lower_percent_dose_cutoff: 10
+  random_subset: null
+  local_gamma: false
+  quiet: true
+gamma_resolution_mm: [2.0, 2.0, 2.0]
+gamma_cutoff_percent: 10.0
+gamma_backend: torch
+
+# The analysis. Per-record errors, larger = worse; rank statistics, so rde_pct
+# also stands for log(1 + RDE), the EXP-0014 target.
+metrics: [rde_pct, gamma_fail, mape_pct, abs_dr80_mm]
+min_cell_size: 10             # cells with fewer complete records are skipped
+top_fraction: 0.10            # the top-decile Jaccard overlap
+n_bootstrap: 2000             # replicates of the bootstrap over scans
+bootstrap_seed: 20260929
+ci: 0.95
+allow_training_overlap: false # stop if any member trained on an evaluation scan
