@@ -1,16 +1,18 @@
-"""MC vs pencil beam vs ADoTA on saved MC beamlet directories, ranked by gamma pass rate.
+"""Pencil beam on saved MC beamlet directories; PBA and saved ADoTA ranked against the saved MC.
 
 Stages (``--stages``, comma-separated, run in this order):
 
-* ``mirror`` -- select the full-lattice directories and mirror each one into the
-                output root as symlinks (the source datasets are never written).
 * ``pba``    -- rebuild each field's canonical CT from the source DICOM (checked
-                bit for bit against the saved crops), ray-trace it once, and write
-                ``{id}_ds_pba.npy`` per beamlet in the ADoTA crop layout.
-* ``adota``  -- fresh ADoTA inference into the mirror (``{id}_ds_pred.npy``).
-* ``score``  -- gamma and dose agreement of PBA and ADoTA against MC, per beamlet.
+                bit for bit against the saved crops), ray-trace it once, and add
+                ``{id}_ds_pba.npy`` per beamlet to the source directory, in the
+                ``_ds.npy`` crop layout. Created exclusively: no existing file in a
+                source directory is ever modified or replaced.
+* ``score``  -- gamma and dose agreement against the saved MC (``_ds.npy``) of the
+                pencil beam and of the saved ADoTA prediction (``_ds_pred.npy``).
 * ``report`` -- the best and worst ``n`` beamlets per engine, with a three-engine
                 figure each, and the tables behind them.
+
+Metrics, rankings and figures are written to ``output_root`` only.
 
   uv run python scripts/pencil_beam/score_saved_beamlets.py \\
       --config scripts/pencil_beam/config_score_energy_gantry_full.yaml
@@ -42,7 +44,6 @@ from src.pencil_beam.pipeline import provenance, write_rows_csv
 from src.pencil_beam.saved_beamlets import (
     compute_field_pba,
     load_triplet,
-    mirror_inputs,
     rank_beamlets,
     score_beamlet,
     survey_dirs,
@@ -53,10 +54,10 @@ logging.getLogger("pymedphys").setLevel(logging.WARNING)
 logger = logging.getLogger("score_saved_beamlets")
 app = typer.Typer(help="MC vs pencil beam vs ADoTA on saved MC beamlet directories.")
 
-STAGES = ("mirror", "pba", "adota", "score", "report")
+STAGES = ("pba", "score", "report")
 
 
-def _stage_pba(blocks, cfg, out_root: Path, overwrite: bool) -> None:
+def _stage_pba(blocks, cfg, out_root: Path) -> None:
     from src.beamlets.bdl import BeamDataLibrary
     from src.datasets.registry import build_dataset_from_config
     from src.mc_generation.geometry import reduce_vacuum_to_air, resample_to_isotropic
@@ -84,31 +85,11 @@ def _stage_pba(blocks, cfg, out_root: Path, overwrite: bool) -> None:
             # rotate by the exact saved angle: the rounded grouping key changes the interpolated CT
             geom = field_geometry(ct, field_blocks[0].gantry, rcfg, bdl)
             for b in field_blocks:
-                stats = compute_field_pba(engine, geom, bdl, rcfg.roi_size, b, out_root / b.name, overwrite)
+                stats = compute_field_pba(engine, geom, bdl, rcfg.roi_size, b)
                 logger.info("pba %s: %d beamlets (ray trace %.1f s, spots %.1f s)", b.name, stats["computed"],
                             stats["field_seconds"], stats["spot_seconds"])
+                (out_root / b.name).mkdir(parents=True, exist_ok=True)
                 (out_root / b.name / "pba_run.json").write_text(json.dumps(stats, indent=2, default=str))
-
-
-def _stage_adota(blocks, cfg, out_root: Path) -> None:
-    from src.adota.utils import load_model
-    from src.beamlets.inference import InferenceConfig, run_inference
-    from src.evaluation.cli import resolve_device
-
-    ad = cfg["adota"]
-    device = resolve_device(int(ad.get("device_index", 0)))
-    model_dir = Path(ad["model_dir"])
-    model = load_model(model_dir / ad.get("fname", "best_model.pth"), model_dir / "hyperparams.json", device)
-    for b in blocks:
-        out = out_root / b.name
-        if all((out / f"{s}_ds_pred.npy").exists() for s in b.stems):
-            continue
-        run_inference(out, model, device, InferenceConfig(batch_size=int(ad.get("batch_size", 56)), grid_factor=1))
-        # the paper's predictions, if the source has them, are read (never written) as a consistency check
-        src_pred = b.path / f"{b.stems[0]}_ds_pred.npy"
-        if src_pred.exists():
-            diff = float(np.max(np.abs(np.load(src_pred) - np.load(out / f"{b.stems[0]}_ds_pred.npy"))))
-            logger.info("adota %s: fresh vs source prediction max|diff| %.3g (%s)", b.name, diff, b.stems[0])
 
 
 def _stage_score(blocks, cfg, out_root: Path, criteria, overwrite: bool) -> List[dict]:
@@ -119,11 +100,16 @@ def _stage_score(blocks, cfg, out_root: Path, criteria, overwrite: bool) -> List
         if path.exists() and not overwrite:
             rows += json.loads(path.read_text())
             continue
-        tasks = [(str(out_root / b.name), s, tuple(criteria), b.name) for s in b.stems]
+        missing = [s for s in b.stems if not (b.path / f"{s}_ds_pba.npy").exists()]
+        if missing:
+            raise typer.BadParameter(f"{b.name}: {len(missing)} beamlets have no _ds_pba.npy; run the pba stage")
+        tasks = [(str(b.path), s, tuple(criteria), b.name) for s in b.stems]
         with ProcessPoolExecutor(max_workers=workers) as ex:
             block_rows = list(ex.map(score_beamlet, tasks, chunksize=2))
-        meta = {"anatomy": b.anatomy, "patient_id": b.patient_id, "energy": b.energy, "gantry": b.gantry}
+        meta = {"anatomy": b.anatomy, "patient_id": b.patient_id, "energy": b.energy, "gantry": b.gantry,
+                "block_dir": str(b.path)}
         block_rows = [dict(r, **meta) for r in block_rows]
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(block_rows, indent=1, default=float))
         head = criteria[0].key
         logger.info("score %s: median %s PBA %.1f%%, ADoTA %.1f%%", b.name, head,
@@ -168,7 +154,7 @@ def _stage_report(rows, cfg, out_root: Path, criteria) -> None:
                 ranking.append(dict(r, ranked_engine=engine, ranked_as=kind, rank=rank))
                 if not rep.get("figures", True):
                     continue
-                d = load_triplet(out_root / r["block"], r["stem"])
+                d = load_triplet(Path(r["block_dir"]), r["stem"])
                 text = {lab: f"{head.key} = {r[f'{lab.lower()}_{head.key}']:.1f}%  "
                              f"dR80 = {r[f'{lab.lower()}_r80_delta_mm']:+.2f} mm" for lab in ("PBA", "ADoTA")}
                 engine_comparison_figure(
@@ -193,7 +179,7 @@ def main(
     set_: Annotated[Optional[List[str]], typer.Option("--set", help=SET_OVERRIDE_HELP)] = None,
     limit_blocks: Annotated[Optional[int], typer.Option(help="Only the first N selected blocks (smoke).")] = None,
     limit_beamlets: Annotated[Optional[int], typer.Option(help="Only the first N beamlets per block (smoke).")] = None,
-    overwrite: Annotated[bool, typer.Option(help="Recompute PBA doses and scores that exist.")] = False,
+    rescore: Annotated[bool, typer.Option(help="Recompute scores that exist (PBA doses are never replaced).")] = False,
 ) -> None:
     cfg = apply_set_overrides(load_yaml_config(config), set_ or [])
     wanted = [s.strip() for s in stages.split(",") if s.strip()]
@@ -221,17 +207,11 @@ def main(
                                  "hptc_beam_model_rsnone.txt", "default", Path(cfg["pencil_beam"]["dosecuda_kernels"])),
     }, indent=2, default=str))
 
-    if "mirror" in wanted:
-        for b in blocks:
-            mirror_inputs(b, out_root / b.name)
-        logger.info("mirror: %d blocks -> %s (symlinks; sources untouched)", len(blocks), out_root)
     if "pba" in wanted:
-        _stage_pba(blocks, cfg, out_root, overwrite)
-    if "adota" in wanted:
-        _stage_adota(blocks, cfg, out_root)
+        _stage_pba(blocks, cfg, out_root)
     rows = None
     if "score" in wanted:
-        rows = _stage_score(blocks, cfg, out_root, criteria, overwrite)
+        rows = _stage_score(blocks, cfg, out_root, criteria, rescore)
     if "report" in wanted:
         if rows is None:
             rows = [r for b in blocks for r in json.loads((out_root / b.name / "metrics.json").read_text())]

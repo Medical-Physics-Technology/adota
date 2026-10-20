@@ -36,10 +36,11 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   `water_validation.csv`, `engine_comparison.csv`, and the per-beamlet `_engines.npz`
   (see `scripts/docs/compare_engines.md`).
 - **`src/pencil_beam/saved_beamlets.py`** (`survey_dirs`, `SourceDir`, `mirror_inputs`,
-  `compute_field_pba`, `load_triplet`, `score_beamlet`, `rank_beamlets`) and
+  `compute_field_pba`, `save_new_npy`, `load_triplet`, `score_beamlet`, `rank_beamlets`) and
   **`scripts/pencil_beam/score_saved_beamlets.py`**: the pencil beam and ADoTA on saved MC beamlet
-  grids, ranked by gamma. New per-beamlet output `{id}_ds_pba.npy` (pencil-beam dose in the
-  `_ds.npy` crop layout), written only to a mirror of the source. `PencilBeamEngine.prepare_field`
+  grids, scored with the saved MC and ADoTA and ranked by gamma. New per-beamlet output
+  `{id}_ds_pba.npy` (pencil-beam dose in the `_ds.npy` crop layout), added to the source
+  directory by exclusive creation: existing files are never modified. `PencilBeamEngine.prepare_field`
   / `dose_in_window` / `PreparedField`: one ray trace per field, dose per beamlet window.
 - **`src.mc_generation.mcsquare_runner.MCSQUARE_NUCLEAR_DATA_MAX_MEV`** (250 MeV, the end of
   MCsquare's ICRU nuclear tables): `MCSquareRunner.run_beamlet` / `run_beamlet_field` now log a
