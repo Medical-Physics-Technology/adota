@@ -29,6 +29,12 @@ pencil_beam:
   model_dir: /home/mstryja/tools/dosecuda/models/hptc_rsnone_mcsquare_v1
   gpu_id: 0
 
+adota:                          # used only for beamlets that have no _ds_pred.npy yet
+  model_dir: /home/mstryja/projects/adota/models/DoTA_v3_grid_search_v11   # the paper's model
+  fname: best_model.pth
+  device_index: 0
+  batch_size: 56
+
 scoring:
   gamma_criteria:               # ranking key first: 3%/3mm, 10% cutoff, global (MC maximum)
     - {dose: 3, dist: 3, cutoff: 10}

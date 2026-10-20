@@ -4,9 +4,17 @@ from __future__ import annotations
 import json
 
 import numpy as np
+import pytest
 
 from src.pencil_beam.metrics import criteria_from_config
-from src.pencil_beam.saved_beamlets import INPUT_SUFFIXES, rank_beamlets, save_new_npy, survey_dirs
+from src.pencil_beam.saved_beamlets import (
+    INPUT_SUFFIXES,
+    PREDICTION_SUFFIX,
+    check_or_write_provenance,
+    rank_beamlets,
+    save_new_npy,
+    survey_dirs,
+)
 
 
 def _block(root, name, cells, anatomy="thoracic"):
@@ -14,7 +22,7 @@ def _block(root, name, cells, anatomy="thoracic"):
     d.mkdir()
     for ix, iy in cells:
         stem = f"a{ix:02d}_{iy:02d}"
-        for suffix in INPUT_SUFFIXES:
+        for suffix in INPUT_SUFFIXES + (PREDICTION_SUFFIX,):
             if suffix != "_sim_res.json":
                 (d / f"{stem}{suffix}").write_bytes(b"x")
         (d / f"{stem}_sim_res.json").write_text(json.dumps({
@@ -34,11 +42,23 @@ def test_survey_keeps_full_lattices_and_says_why_it_drops_the_rest(tmp_path):
     assert "5 beamlets" in reasons["smoke"] and "3 x 3" in reasons["grid3"]
 
 
-def test_blocks_without_saved_adota_predictions_are_excluded(tmp_path):
+def test_missing_predictions_are_counted_but_missing_inputs_exclude(tmp_path):
     d = _block(tmp_path, "nopred", [(i, j) for i in range(2) for j in range(2)])
     (d / "a01_01_ds_pred.npy").unlink()
+    (selected,), _ = survey_dirs([d], grid_n=2, min_beamlets=1)
+    assert selected.n_missing_predictions == 1
+    (d / "a01_01_ds.npy").unlink()                             # a generator file missing: excluded
     selected, excluded = survey_dirs([d], grid_n=2, min_beamlets=1)
     assert not selected and "missing" in excluded[0][1]
+
+
+def test_provenance_refuses_to_mix_two_models_in_one_directory(tmp_path):
+    path = tmp_path / "pba_provenance.json"
+    first = check_or_write_provenance(path, {"model_fingerprint": "aaa", "note": 1}, ("model_fingerprint",))
+    again = check_or_write_provenance(path, {"model_fingerprint": "aaa", "note": 2}, ("model_fingerprint",))
+    assert first == again == json.loads(path.read_text())    # the original record is kept
+    with pytest.raises(RuntimeError, match="different setup"):
+        check_or_write_provenance(path, {"model_fingerprint": "bbb"}, ("model_fingerprint",))
 
 
 def test_save_new_npy_never_touches_an_existing_file(tmp_path):

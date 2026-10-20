@@ -33,7 +33,7 @@ from typing import Optional
 
 import numpy as np
 
-__all__ = ["LUT_LENGTH", "PencilBeamModel", "hu_to_rlsp", "read_rlsp_curve"]
+__all__ = ["LUT_LENGTH", "PencilBeamModel", "hu_to_rlsp", "model_fingerprint", "read_rlsp_curve"]
 
 LUT_LENGTH = 400          # compiled into DoseCUDA (IMPTClasses.cuh: LUT_LENGTH)
 _RS_FOLDER = "RS0"
@@ -191,6 +191,23 @@ class PencilBeamModel:
             sigmas=np.array(sigmas), idds=np.array(idds), reference_sigma=np.asarray(table["sigma"]),
             meta=json.loads(meta_path.read_text()) if meta_path.exists() else {},
         )
+
+
+def model_fingerprint(model_dir: Path) -> str:
+    """sha256 over the tables that define the beam (not the README, provenance or validation copy).
+
+    Two model directories with the same fingerprint compute the same dose, so this,
+    not the directory path, identifies the model that produced a result.
+    """
+    import hashlib
+
+    model_dir = Path(model_dir)
+    files = [model_dir / "machine_geometry.csv", model_dir / "rangeshifter_labels.csv", model_dir / "HU_RLSP.csv"]
+    files += sorted((model_dir / _RS_FOLDER).glob("*.csv"))
+    digest = hashlib.sha256()
+    for f in files:
+        digest.update(str(f.relative_to(model_dir)).encode() + b"\0" + f.read_bytes() + b"\0")
+    return digest.hexdigest()
 
 
 def read_rlsp_curve(model_dir: Path) -> tuple:
