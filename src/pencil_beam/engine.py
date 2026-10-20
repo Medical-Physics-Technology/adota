@@ -29,7 +29,8 @@ import SimpleITK as sitk
 from src.pencil_beam.beam_model import PencilBeamModel, hu_to_rlsp, read_rlsp_curve
 from src.pencil_beam.kernels import load_dose_kernels
 
-__all__ = ["DOSECUDA_GANTRY_FOR_MC_90", "PencilBeamEngine", "PencilBeamResult", "mc_frame_to_dosecuda"]
+__all__ = ["DOSECUDA_GANTRY_FOR_MC_90", "PencilBeamEngine", "PencilBeamResult", "PreparedField",
+           "mc_frame_to_dosecuda"]
 
 DOSECUDA_GANTRY_FOR_MC_90 = 270.0
 
@@ -52,6 +53,16 @@ def mc_frame_to_dosecuda(ct: sitk.Image, iso_mc: Sequence[float], mc_gantry: flo
     spacing = np.asarray(ct.GetSpacing(), dtype=float)
     iso_world = origin - spacing / 2.0 + np.asarray(iso_mc, dtype=float)
     return iso_world, DOSECUDA_GANTRY_FOR_MC_90
+
+
+@dataclass
+class PreparedField:
+    """One field's RLSP volume, beam and full-grid WET (cm), from :meth:`PencilBeamEngine.prepare_field`."""
+
+    volume: SimpleNamespace
+    beam: SimpleNamespace
+    wet_cm: np.ndarray
+    seconds: float
 
 
 @dataclass
@@ -87,6 +98,62 @@ class PencilBeamEngine:
         model = SimpleNamespace(VSADX=float(self.model.vsadx), VSADY=float(self.model.vsady))
         return 10.0 * self.kernels.proton_raytrace_cuda(model, volume, beam, self.gpu_id)
 
+    def prepare_field(self, ct: sitk.Image, iso_mc: Sequence[float], mc_gantry: float = 90.0) -> "PreparedField":
+        """RLSP and ray-traced WET of one field, computed once for all its spots and energies.
+
+        The WET depends only on the CT and the field geometry (isocenter, gantry,
+        point source at the mean VSAD), not on the spot or the energy, so a field's
+        beamlets can share it and each needs only the cheap spot kernel.
+        """
+        spacing = ct.GetSpacing()
+        if not np.allclose(spacing, spacing[0]):
+            raise ValueError(f"DoseCUDA needs isotropic spacing, got {spacing}")
+        t0 = perf_counter()
+        rlsp = hu_to_rlsp(sitk.GetArrayFromImage(ct), self.rlsp_curve)
+        volume, beam = self._volume_and_beam(ct, iso_mc, mc_gantry, rlsp)
+        model = SimpleNamespace(VSADX=float(self.model.vsadx), VSADY=float(self.model.vsady))
+        wet_cm = np.asarray(self.kernels.proton_raytrace_cuda(model, volume, beam, self.gpu_id), dtype=np.float32)
+        return PreparedField(volume=volume, beam=beam, wet_cm=wet_cm, seconds=perf_counter() - t0)
+
+    def dose_in_window(
+        self,
+        field: "PreparedField",
+        energy: float,
+        spots_xy: Sequence[Sequence[float]],
+        window: Optional[Tuple[slice, slice, slice]] = None,
+        weights: Optional[Sequence[float]] = None,
+    ) -> PencilBeamResult:
+        """Pencil-beam dose of one energy layer on a ``(z, y, x)`` window of a prepared field.
+
+        The spot kernel is evaluated per voxel, so a window gives exactly the full
+        grid's dose cut to that window (the WET still comes from the full-grid ray
+        trace). ``None`` is the whole grid.
+        """
+        shape = field.volume.voxel_data.shape
+        window = tuple(slice(0, n) for n in shape) if window is None else tuple(window)
+        for sl, n in zip(window, shape):
+            if not (0 <= sl.start < sl.stop <= n) or sl.step not in (None, 1):
+                raise ValueError(f"window {window} outside the grid {shape}")
+        weights = [1000.0] * len(spots_xy) if weights is None else list(weights)
+        t0 = perf_counter()
+        layer = self.model.at_energy(float(energy))
+        model = layer.kernel_model()
+        offset = np.array([window[2].start, window[1].start, window[0].start], dtype=np.float64)  # x, y, z
+        origin = (field.volume.origin.astype(np.float64) + offset * field.volume.spacing).astype(np.float32)
+        volume = SimpleNamespace(voxel_data=np.ascontiguousarray(field.volume.voxel_data[window]),
+                                 origin=origin, spacing=field.volume.spacing)
+        wet = SimpleNamespace(voxel_data=np.ascontiguousarray(field.wet_cm[window]), origin=origin,
+                              spacing=field.volume.spacing)
+        beam = SimpleNamespace(
+            iso=field.beam.iso, gantry_angle=field.beam.gantry_angle, couch_angle=field.beam.couch_angle,
+            spot_list=np.ascontiguousarray(
+                [[float(x), float(y), float(w), 0.0] for (x, y), w in zip(spots_xy, weights)], dtype=np.float32))
+        dose = self.kernels.proton_spot_cuda(model, volume, wet, beam, self.gpu_id)
+        return PencilBeamResult(
+            dose=np.asarray(dose, dtype=np.float32), wet_mm=10.0 * field.wet_cm[window],
+            seconds=perf_counter() - t0, model_energy=float(layer.energies[0]),
+            interpolated_from=layer.meta.get("interpolated_from"))
+
     def dose(
         self,
         ct: sitk.Image,
@@ -107,25 +174,10 @@ class PencilBeamEngine:
                 runner's default, so the dose is on the MC dose scale).
             mc_gantry: MC gantry angle; must be the canonical 90.
         """
-        spacing = ct.GetSpacing()
-        if not np.allclose(spacing, spacing[0]):
-            raise ValueError(f"DoseCUDA needs isotropic spacing, got {spacing}")
-        weights = [1000.0] * len(spots_xy) if weights is None else list(weights)
-        t0 = perf_counter()
-        layer = self.model.at_energy(float(energy))
-        rlsp = hu_to_rlsp(sitk.GetArrayFromImage(ct), self.rlsp_curve)
-        volume, beam = self._volume_and_beam(ct, iso_mc, mc_gantry, rlsp)
-        model = layer.kernel_model()
-        wet_cm = self.kernels.proton_raytrace_cuda(model, volume, beam, self.gpu_id)
-        wet_object = SimpleNamespace(voxel_data=np.ascontiguousarray(wet_cm, dtype=np.float32),
-                                     origin=volume.origin, spacing=volume.spacing)
-        beam.spot_list = np.ascontiguousarray(
-            [[float(x), float(y), float(w), 0.0] for (x, y), w in zip(spots_xy, weights)], dtype=np.float32)
-        dose = self.kernels.proton_spot_cuda(model, volume, wet_object, beam, self.gpu_id)
-        return PencilBeamResult(
-            dose=np.asarray(dose, dtype=np.float32), wet_mm=10.0 * np.asarray(wet_cm),
-            seconds=perf_counter() - t0, model_energy=float(layer.energies[0]),
-            interpolated_from=layer.meta.get("interpolated_from"))
+        field = self.prepare_field(ct, iso_mc, mc_gantry)
+        result = self.dose_in_window(field, energy, spots_xy, None, weights)
+        result.seconds += field.seconds
+        return result
 
     def _volume_and_beam(self, ct, iso_mc, mc_gantry, rlsp):
         iso_world, gantry = mc_frame_to_dosecuda(ct, iso_mc, mc_gantry)

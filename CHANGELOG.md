@@ -35,6 +35,12 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   `/home/mstryja/tools/dosecuda`). New output formats: the commissioned model directory,
   `water_validation.csv`, `engine_comparison.csv`, and the per-beamlet `_engines.npz`
   (see `scripts/docs/compare_engines.md`).
+- **`src/pencil_beam/saved_beamlets.py`** (`survey_dirs`, `SourceDir`, `mirror_inputs`,
+  `compute_field_pba`, `load_triplet`, `score_beamlet`, `rank_beamlets`) and
+  **`scripts/pencil_beam/score_saved_beamlets.py`**: the pencil beam and ADoTA on saved MC beamlet
+  grids, ranked by gamma. New per-beamlet output `{id}_ds_pba.npy` (pencil-beam dose in the
+  `_ds.npy` crop layout), written only to a mirror of the source. `PencilBeamEngine.prepare_field`
+  / `dose_in_window` / `PreparedField`: one ray trace per field, dose per beamlet window.
 - **`src.mc_generation.mcsquare_runner.MCSQUARE_NUCLEAR_DATA_MAX_MEV`** (250 MeV, the end of
   MCsquare's ICRU nuclear tables): `MCSquareRunner.run_beamlet` / `run_beamlet_field` now log a
   warning above it, where MCsquare's nuclear physics reads past the tables (undefined, and a

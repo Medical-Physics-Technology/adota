@@ -73,3 +73,34 @@ def test_off_axis_spot_lands_where_mcsquare_puts_it(tmp_path):
         plane = dose[:, :, 40]
         centre = (np.indices(plane.shape)[axis] * plane).sum() / plane.sum() + 0.5
         assert centre - 50.0 == pytest.approx(sign * 20.0 * (1 - upstream / vsad), abs=0.1)
+
+
+@pytest.mark.gpu
+@pytest.mark.integration
+@pytest.mark.skipif(not KERNELS.is_file(), reason=(
+    f"DoseCUDA kernels not built at {KERNELS}; run scripts/pencil_beam/provision_dosecuda.sh "
+    "or set ADOTA_DOSECUDA_KERNELS"))
+def test_window_dose_equals_full_grid_dose_cut_to_the_window(tmp_path):
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("needs a CUDA device")
+    from src.pencil_beam.engine import PencilBeamEngine
+    from src.pencil_beam.rlsp import write_rlsp_csv
+    from tests.pencil_beam.test_rlsp_and_model import _model
+
+    _model().write(tmp_path)
+    write_rlsp_csv(tmp_path / "HU_RLSP.csv", np.array([-1000.0, 0.0, 1000.0]), np.array([0.001, 1.0, 1.6]))
+    arr = np.zeros((90, 100, 160), dtype=np.float32)
+    arr[:, 40:60, 30:50] = 800.0                      # a lateral bone slab: WET varies across the beam
+    ct = sitk.GetImageFromArray(arr)
+    ct.SetOrigin((-80.0, 12.5, -3.0))
+    eng = PencilBeamEngine(KERNELS, tmp_path)
+    iso = [80.0, 50.0, 45.0]
+    full = eng.dose(ct, 125.0, [(6.0, -4.0)], iso).dose
+    field = eng.prepare_field(ct, iso)
+    window = (slice(20, 70), slice(25, 75), slice(0, 120))
+    part = eng.dose_in_window(field, 125.0, [(6.0, -4.0)], window).dose
+    assert part.shape == (50, 50, 120)
+    assert np.allclose(part, full[window], rtol=1e-5, atol=1e-6 * full.max())
+    with pytest.raises(ValueError):
+        eng.dose_in_window(field, 125.0, [(0.0, 0.0)], (slice(0, 200), slice(0, 10), slice(0, 10)))

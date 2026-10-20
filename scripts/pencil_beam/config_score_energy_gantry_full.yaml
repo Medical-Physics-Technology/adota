@@ -1,0 +1,46 @@
+# MC vs pencil beam vs ADoTA on the paper's energy x gantry beamlet grids
+# =====================================================================
+#   uv run python scripts/pencil_beam/score_saved_beamlets.py \
+#       --config scripts/pencil_beam/config_score_energy_gantry_full.yaml
+#
+# The sources are read only: every block is mirrored into output_root as symlinks and
+# all new files ({id}_ds_pba.npy, {id}_ds_pred.npy, metrics, figures) are written there.
+# Guide: scripts/docs/score_saved_beamlets.md
+
+output_root: /scratch/mstryja/pencil_beam/engine_comparison/energy_gantry_full
+
+sources:
+  - /scratch/mstryja/DoTA_dataset_v2/energy_gantry_full_thoracic_*
+  - /scratch/mstryja/DoTA_dataset_v2/energy_gantry_full_abdominal_*    # the 18x18 abdominal grids
+  - /scratch/mstryja/DoTA_dataset_v2/energy_gantry_smoke_abdominal_*   # 4-5 beamlets each: excluded below
+
+selection:
+  grid_n: 18                    # keep blocks whose grid indices span the 18 x 18 lattice ...
+  min_beamlets: 200             # ... and that hold at least this many beamlets (QA removed a few)
+
+# How the sources were generated: datasets (to reload the CTs) and the robustness block
+# (resampling, rotation to the canonical frame, trim, ROI). The rebuilt CT crops are
+# checked bit for bit against the saved {id}_ct.npy.
+generation_config: scripts/mc/config_energy_gantry_full.yaml
+
+pencil_beam:
+  dosecuda_kernels: /home/mstryja/tools/dosecuda/current/dose_kernels.so
+  model_dir: /home/mstryja/tools/dosecuda/models/hptc_rsnone_mcsquare_v1
+  gpu_id: 0
+
+adota:
+  model_dir: /home/mstryja/projects/adota/models/DoTA_v3_grid_search_v11   # the paper's model
+  fname: best_model.pth
+  device_index: 0
+  batch_size: 56
+
+scoring:
+  gamma_criteria:               # ranking key first: 3%/3mm, 10% cutoff, global (MC maximum)
+    - {dose: 3, dist: 3, cutoff: 10}
+    - {dose: 2, dist: 2, cutoff: 10}
+    - {dose: 1, dist: 1, cutoff: 10}
+  workers: 32
+
+report:
+  n: 10                         # best and worst n per engine (PBA, ADoTA)
+  figures: true

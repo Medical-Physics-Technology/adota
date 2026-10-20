@@ -72,6 +72,7 @@ select = ["E", "F", "I"]
 "scripts/mc/prototype_beamlet_mode.py" = ["E402"]
 # Pins BLAS to one thread before numpy loads, so the sigma-fit process pool scales.
 "scripts/pencil_beam/commission_dosecuda.py" = ["E402"]
+"scripts/pencil_beam/score_saved_beamlets.py" = ["E402"]
 # Preloads the CUDA shared objects via ctypes before torch imports them;
 # mutating LD_LIBRARY_PATH from inside Python is too late.
 "scripts/rotation_performance_analysis.py" = ["E402"]
