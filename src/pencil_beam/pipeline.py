@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
+import SimpleITK as sitk
 
 from src.mc_generation.sweep import energy_tag
 from src.pencil_beam.commissioning import (
@@ -155,6 +156,17 @@ def validate_water(
                 # save_figure_as_publication_formats swaps the suffix
                 title=f"water, E = {energy:g} MeV, surface {s:g} mm before isocenter "
                       f"({'node' if row['node'] else 'interpolated'}), {num_primaries:.0e} primaries")
+            # the dose distributions themselves, MC vs PBA over the phantom, in Gy
+            from src.figures.pencil_beam import engine_comparison_figure
+
+            head = criteria[0]
+            engine_comparison_figure(
+                sitk.GetArrayFromImage(ct), {"MC": mc, "PBA": pb.dose},
+                str(out_dir / "figures" / f"dose_e{energy_tag(energy)}_s{energy_tag(s)}_{head.key}_global"),
+                title=f"water, E = {energy:g} MeV ({'node' if row['node'] else 'interpolated'}), surface {s:g} mm "
+                      f"before isocenter, {num_primaries:.0e} primaries; gamma {head.dose:g}%/{head.dist:g}mm, "
+                      f"{head.cutoff:g}% cutoff (global)",
+                metrics_text={"PBA": f"{head.key} = {row[f'gpr_{head.key}']:.1f}%  dR80 = {row['dr80_mm']:+.2f} mm"})
     return rows
 
 

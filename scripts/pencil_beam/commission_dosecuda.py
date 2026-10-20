@@ -149,7 +149,7 @@ def main(
         (keep / "figures").mkdir(parents=True, exist_ok=True)
         for f in (out / "validation").glob("water_validation*"):
             shutil.copy2(f, keep / f.name)
-        for f in (out / "validation" / "figures").glob("*.png"):
+        for f in (out / "validation" / "figures").glob("water_e*.png"):    # dose maps stay on /scratch
             shutil.copy2(f, keep / "figures" / f.name)
         write_model_card(model_dir, rows, gamma_key=criteria[0].key)
         logger.info("validate: %d runs -> %s (copied into %s)", len(rows), csv_path, keep)
