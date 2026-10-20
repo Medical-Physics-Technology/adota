@@ -85,11 +85,33 @@ class PencilBeamEngine:
         gpu_id: CUDA device index as the process sees it.
     """
 
-    def __init__(self, kernels_path: Path, model_dir: Path, gpu_id: int = 0):
+    def __init__(self, kernels_path: Path, model_dir: Path, gpu_id: int = 0, bdl_path: Optional[Path] = None):
         self.kernels = load_dose_kernels(kernels_path)
         self.model = PencilBeamModel.read(model_dir)
         self.rlsp_curve = read_rlsp_curve(model_dir)
         self.gpu_id = int(gpu_id)
+        # _v1 models predate the key and are on MCsquare's scale at weight 1000
+        self.dose_unit = self.model.meta.get("dose_unit", "mcsquare_per_weight_1000")
+        prov = self.model.meta.get("provenance", {})
+        self.bdl_path = Path(bdl_path) if bdl_path else (
+            Path(prov["mcsquare_install"]) / "BDL" / prov["bdl_file"] if "bdl_file" in prov else None)
+
+    def mcsquare_spot_weight(self, energy: float) -> float:
+        """The spot weight at which this model's dose equals MCsquare's eV/g per simulated proton.
+
+        Comparisons with MC (and with ADoTA, trained on it) run at this weight, so they
+        mean the same for every model unit; :func:`src.utils.unit_conversions.mcsquare_to_gy_per_mu`
+        then converts any of the three to Gy per MU.
+        """
+        if self.dose_unit == "mcsquare_per_weight_1000":
+            return 1000.0
+        if self.dose_unit == "gy_mm2_per_mu":
+            from src.utils.unit_conversions import mcsquare_to_gy_per_mu
+
+            if self.bdl_path is None:
+                raise ValueError("a gy_mm2_per_mu model needs its BDL (bdl_path) for protons per MU")
+            return 1.0 / float(mcsquare_to_gy_per_mu(1.0, float(energy), self.bdl_path))
+        raise ValueError(f"unknown dose_unit {self.dose_unit!r}")
 
     def wet(self, ct: sitk.Image, iso_mc: Sequence[float], mc_gantry: float = 90.0,
             rlsp: Optional[np.ndarray] = None) -> np.ndarray:
@@ -127,14 +149,16 @@ class PencilBeamEngine:
 
         The spot kernel is evaluated per voxel, so a window gives exactly the full
         grid's dose cut to that window (the WET still comes from the full-grid ray
-        trace). ``None`` is the whole grid.
+        trace). ``None`` is the whole grid. ``weights`` default to
+        :meth:`mcsquare_spot_weight`, i.e. MCsquare's scale; for a ``gy_mm2_per_mu``
+        model, weights in MU give Gy.
         """
         shape = field.volume.voxel_data.shape
         window = tuple(slice(0, n) for n in shape) if window is None else tuple(window)
         for sl, n in zip(window, shape):
             if not (0 <= sl.start < sl.stop <= n) or sl.step not in (None, 1):
                 raise ValueError(f"window {window} outside the grid {shape}")
-        weights = [1000.0] * len(spots_xy) if weights is None else list(weights)
+        weights = [self.mcsquare_spot_weight(energy)] * len(spots_xy) if weights is None else list(weights)
         t0 = perf_counter()
         layer = self.model.at_energy(float(energy))
         model = layer.kernel_model()
@@ -170,8 +194,9 @@ class PencilBeamEngine:
             energy: Nominal energy, MeV (interpolated between commissioned nodes).
             spots_xy: MC-frame spot positions in the isocenter plane, mm.
             iso_mc: MC-frame isocenter (as passed to MCsquare).
-            weights: Spot weights in MCsquare plan units (default 1000 each, the
-                runner's default, so the dose is on the MC dose scale).
+            weights: Spot weights in the model's unit (MU for a ``gy_mm2_per_mu``
+                model, giving Gy). Default: :meth:`mcsquare_spot_weight`, so the dose
+                is on MCsquare's eV/g-per-proton scale.
             mc_gantry: MC gantry angle; must be the canonical 90.
         """
         field = self.prepare_field(ct, iso_mc, mc_gantry)

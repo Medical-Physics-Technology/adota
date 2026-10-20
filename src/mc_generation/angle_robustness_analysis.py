@@ -243,7 +243,7 @@ def render_beamlet_examples(
     from src.loaders.dir_based import get_single_record
     from src.metrics.classic import calculate_pure_mape, calculate_rmse
     from src.utils.scallers import inverse_minmax
-    from src.utils.unit_conversions import to_gy
+    from src.utils.unit_conversions import legacy_to_gy_per_1e6_protons
 
     exp_dir = Path(exp_dir)
     gamma_params = {"dose_percent_threshold": crit.dose,
@@ -262,7 +262,7 @@ def render_beamlet_examples(
                 y_pred = model(x.unsqueeze(0), e_norm.to(device).unsqueeze(0))[0]
             gt = inverse_minmax(y.cpu().numpy(), scale["min_ds"], scale["max_ds"]).squeeze()
             pred = inverse_minmax(y_pred.cpu().numpy(), scale["min_ds"], scale["max_ds"]).squeeze()
-            rmse = float(calculate_rmse(to_gy(pred), to_gy(gt)))
+            rmse = float(calculate_rmse(legacy_to_gy_per_1e6_protons(pred), legacy_to_gy_per_1e6_protons(gt)))
             mask = gt > 0.1 * gt.max()
             mape = float(calculate_pure_mape(gt[mask], pred[mask])) if mask.any() else float("nan")
             sr = json.loads((exp_dir / f"{stem}_sim_res.json").read_text())

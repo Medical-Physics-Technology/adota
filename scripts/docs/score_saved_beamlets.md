@@ -75,8 +75,9 @@ Any directory written by the MC generator (`src.mc_generation.robustness`, throu
 
 ## Reproducing or auditing a result
 
-- `output_root/run_config.json` holds the resolved config, the selected and excluded
-  directories, and the provenance: the adota commit (and whether the tree had
+- `output_root/run_config.json` (written once, by the run that created `output_root`;
+  every later invocation is appended to `invocations.jsonl`) holds the resolved config, the
+  selected and excluded directories, and the provenance: the adota commit (and whether the tree had
   uncommitted code), the MCsquare and BDL sha256, the DoseCUDA build, the pencil-beam
   model fingerprint (`src.pencil_beam.beam_model.model_fingerprint`) and the time.
 - Every source directory with PBA files has a `pba_provenance.json` with the same
@@ -107,8 +108,9 @@ Everything else is logged with the reason and written to `run_config.json`; the
 ```
 
 Gamma is global, normalised to the MC maximum, with a 10% cutoff. 3%/3mm is the
-ranking key, and 2%/2mm and 1%/1mm are also reported. Figures show dose in Gy
-(`to_gy`).
+ranking key, and 2%/2mm and 1%/1mm are also reported. Scores are computed on MCsquare's
+scale, the unit of the saved files (see [docs/dose_units.md](../../docs/dose_units.md)).
+Figures show Gy per MU of each beamlet (`mcsquare_to_gy_per_mu`).
 
 ## Requirements
 

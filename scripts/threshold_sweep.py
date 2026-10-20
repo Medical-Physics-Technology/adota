@@ -134,7 +134,7 @@ def load_records_from_inference(
     from src.schemas.configs import AnalysisConfig
     from src.utils.dose_grid_utils import estimate_bragg_peak
     from src.utils.scallers import inverse_minmax
-    from src.utils.unit_conversions import to_gy
+    from src.utils.unit_conversions import legacy_to_gy_per_1e6_protons
 
     scale = DEFAULT_SCALE.copy()
     gamma_params = DEFAULT_GAMMA_PARAMS.copy()
@@ -239,10 +239,10 @@ def load_records_from_inference(
         tv = compute_bp_tv(ct_hu, bp_idx, config.bp_radius_mm, config.resolution)
         cv = compute_bp_cv(ct_hu, bp_idx, config.bp_radius_mm, config.resolution)
 
-        rmse = calculate_rmse(to_gy(y_pred_np), to_gy(y_np))
+        rmse = calculate_rmse(legacy_to_gy_per_1e6_protons(y_pred_np), legacy_to_gy_per_1e6_protons(y_np))
         mask = y_pred_np > 0.1 * np.max(y_pred_np)
         mape = calculate_pure_mape(y_np[mask], y_pred_np[mask])
-        rde = calculate_relative_dose_error(to_gy(y_pred_np), to_gy(y_np))
+        rde = calculate_relative_dose_error(legacy_to_gy_per_1e6_protons(y_pred_np), legacy_to_gy_per_1e6_protons(y_np))
 
         scale_gpr = {"y_min": scale["min_ds"], "y_max": scale["max_ds"]}
         gpr_result = gamma_index_torch(

@@ -88,8 +88,10 @@ def test_phantom_guards_mcsquare_nozzle_transport():
             commissioning_phantom(cfg, bad)
 
 
-def test_energies_above_mcsquare_nuclear_data_are_refused(caplog):
-    from src.mc_generation.mcsquare_runner import MCSQUARE_NUCLEAR_DATA_MAX_MEV, _warn_above_nuclear_data
+def test_energies_above_mcsquare_nuclear_data_are_refused_everywhere():
+    from src.active_learning.candidates import CandidateConfig
+    from src.mc_generation.mcsquare_runner import MCSQUARE_NUCLEAR_DATA_MAX_MEV
+    from src.mc_generation.sweep import RobustnessConfig
     from src.pencil_beam.commissioning import check_energies_simulable
 
     assert MCSQUARE_NUCLEAR_DATA_MAX_MEV == 250.0
@@ -97,6 +99,24 @@ def test_energies_above_mcsquare_nuclear_data_are_refused(caplog):
     with pytest.raises(ValueError, match="nuclear tables"):
         check_energies_simulable([245.0, 255.0])
     assert max(CommissioningConfig().energies) <= MCSQUARE_NUCLEAR_DATA_MAX_MEV
-    with caplog.at_level("WARNING"):
-        _warn_above_nuclear_data(260.0)
-    assert "nuclear tables" in caplog.text
+    RobustnessConfig(energies=[250.0])
+    with pytest.raises(ValueError, match="nuclear tables"):
+        RobustnessConfig(energies=[135.0, 260.0])            # every MC generator's config
+    with pytest.raises(ValueError, match="nuclear tables"):
+        CandidateConfig(energies=[180.0, 255.0])             # the active-learning candidate space
+
+
+def test_idd_unit_factor(tmp_path):
+    from src.pencil_beam.commissioning import idd_unit_factor
+    from src.utils.unit_conversions import mcsquare_to_gy_per_mu
+    from tests.utils.bdl import build_bdl_text
+
+    bdl = tmp_path / "bdl.txt"
+    bdl.write_text(build_bdl_text(preamble="--UPenn beam model (double gaussian)--"))
+    assert idd_unit_factor("mcsquare_per_weight_1000", 150.0, 1000.0, bdl) == 1.0
+    assert idd_unit_factor("gy_mm2_per_mu", 150.0, 1000.0, bdl) == pytest.approx(
+        1000.0 * mcsquare_to_gy_per_mu(1.0, 150.0, bdl))
+    with pytest.raises(ValueError):
+        idd_unit_factor("mcsquare_per_weight_1000", 150.0, 500.0, bdl)
+    with pytest.raises(ValueError):
+        idd_unit_factor("cGy", 150.0, 1000.0, bdl)

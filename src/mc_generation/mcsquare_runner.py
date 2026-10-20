@@ -34,16 +34,22 @@ logger = logging.getLogger(__name__)
 # 250 MeV. compute_nuclear_interaction.c interpolates between table entries index and index+1,
 # so above 250 MeV it reads past the end of the arrays: undefined nuclear physics up to about
 # 258 MeV, a segmentation fault (exit -11) from about 259 MeV (measured 2026-10-20; independent
-# of geometry, seed and primaries; runs normally with nuclear interactions off).
+# of geometry, seed and primaries; runs normally with nuclear interactions off). Every MC
+# generator, the active-learning candidate space and the training data are capped here.
 MCSQUARE_NUCLEAR_DATA_MAX_MEV = 250.0
 
 
-def _warn_above_nuclear_data(energy: float) -> None:
-    if energy > MCSQUARE_NUCLEAR_DATA_MAX_MEV:
-        logger.warning(
-            "MCsquare beamlet at %.2f MeV: above the %.0f MeV end of MCsquare's ICRU nuclear tables, "
-            "so its nuclear interactions read past the table (undefined below ~259 MeV, a crash above)",
-            energy, MCSQUARE_NUCLEAR_DATA_MAX_MEV)
+def check_energies_simulable(energies, limit: float = MCSQUARE_NUCLEAR_DATA_MAX_MEV) -> None:
+    """Refuse energies MCsquare cannot simulate correctly (above its nuclear data).
+
+    Raises:
+        ValueError: Naming the offending energies and the reason.
+    """
+    bad = [float(e) for e in energies if float(e) > limit]
+    if bad:
+        raise ValueError(
+            f"energies {bad} MeV exceed {limit:.0f} MeV, where MCsquare's ICRU nuclear tables end; "
+            "MCsquare's dose there is undefined (and it crashes from ~259 MeV)")
 
 
 def _mean_stat_uncertainty(outputs_dir: Path) -> float:
@@ -130,7 +136,7 @@ class MCSquareRunner:
         Note: MCsquare writes ``Simulation_progress.txt`` only outside beamlet
         mode, so ``sim_res["stat_uncertainty"]`` is NaN here.
         """
-        _warn_above_nuclear_data(float(energy))
+        check_energies_simulable([energy])
         iso = list(map(float, isocenter)) if isocenter is not None else self.default_isocenter(ct)
         spots = [(float(x), float(y)) for x, y in spots_xy]
         wd = self._make_workdir()
@@ -215,7 +221,7 @@ class MCSquareRunner:
         ``sim_res`` carries the plan params (energy, isocenter, spot shift, gantry),
         the mean statistical uncertainty, and timing. The dose grid matches the CT.
         """
-        _warn_above_nuclear_data(float(energy))
+        check_energies_simulable([energy])
         iso = list(map(float, isocenter)) if isocenter is not None else self.default_isocenter(ct)
         wd = self._make_workdir()
         try:

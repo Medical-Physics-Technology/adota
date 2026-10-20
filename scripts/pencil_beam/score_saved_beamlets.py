@@ -198,6 +198,10 @@ def _stage_report(rows, cfg, out_root: Path, criteria) -> None:
     head = criteria[0]
     fig_dir = out_root / "figures"
     fig_dir.mkdir(parents=True, exist_ok=True)
+    from src.utils.unit_conversions import mcsquare_to_gy_per_mu
+
+    gen_engine = load_yaml_config(Path(cfg["generation_config"]))["engine"]
+    bdl_path = Path(gen_engine["mcsquare_install"]) / "BDL" / gen_engine.get("bdl_file", "hptc_beam_model_rsnone.txt")
     ranking = []
     for engine in ("PBA", "ADoTA"):
         best, worst = rank_beamlets(rows, engine, criteria, n)
@@ -215,7 +219,8 @@ def _stage_report(rows, cfg, out_root: Path, criteria) -> None:
                     title=(f"{engine} {kind} #{rank}: {r['anatomy']} {r['patient_id']}  E={r['energy']:g} MeV  "
                            f"gantry={r['gantry']:.1f}  {r['stem']}  gamma {head.dose:g}%/{head.dist:g}mm, "
                            f"{head.cutoff:g}% cutoff (global)"),
-                    metrics_text=text)
+                    metrics_text=text, dose_unit="Gy per MU",
+                    dose_scale=float(mcsquare_to_gy_per_mu(1.0, float(r["energy"]), bdl_path)))
     write_rows_csv(ranking, out_root / f"ranking_best_worst_{n}_{head.key}_global.csv")
     (out_root / "summary.json").write_text(json.dumps(
         {"criteria": [c.key for c in criteria], "gamma": "global, normalised to the MC maximum",
@@ -268,10 +273,14 @@ def main(
         raise typer.Exit()
 
     out_root.mkdir(parents=True, exist_ok=True)
-    (out_root / "run_config.json").write_text(json.dumps({
-        "config": cfg, "stages": wanted, "blocks": [str(b.path) for b in blocks],
-        "excluded": {str(p): why for p, why in excluded}, "provenance": prov,
-    }, indent=2, default=str))
+    invocation = {"config": cfg, "stages": wanted, "blocks": [str(b.path) for b in blocks],
+                  "excluded": {str(p): why for p, why in excluded}, "provenance": prov}
+    # run_config.json describes the run that created output_root and is never replaced; every
+    # invocation (a later report or rescore) is appended to invocations.jsonl instead
+    if not (out_root / "run_config.json").exists():
+        (out_root / "run_config.json").write_text(json.dumps(invocation, indent=2, default=str))
+    with open(out_root / "invocations.jsonl", "a") as fh:
+        fh.write(json.dumps(invocation, default=str) + "\n")
 
     if "pba" in wanted:
         _stage_pba(blocks, cfg, out_root, prov)

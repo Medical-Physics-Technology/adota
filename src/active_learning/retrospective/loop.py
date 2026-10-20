@@ -88,6 +88,12 @@ def prepare_splits(cfg: RetroConfig, overwrite: bool = False) -> Dict[str, Any]:
     check = cross_check_exclusions(Path(cfg.exclude_indexes_path))
     all_ids = read_record_ids(Path(cfg.dataset_path))
     kept = apply_exclusions(all_ids, excluded)
+    from src.adota.config import DEFAULT_SCALE
+    from src.datasets.energy_cut import drop_above_energy
+
+    # older files carry only the normalised energy: de-normalise with the scale training uses
+    kept, _ = drop_above_energy(Path(cfg.dataset_path), kept, cfg.max_energy_mev,
+                                dict(cfg.training.get("scale", DEFAULT_SCALE)))
     n_full = len(kept)
     if not 0.0 < cfg.data_fraction <= 1.0:
         raise ValueError(f"data_fraction must lie in (0, 1], got {cfg.data_fraction}")
