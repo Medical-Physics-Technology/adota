@@ -36,12 +36,14 @@ from scipy.optimize import curve_fit
 
 from src.datasets.phantom import PhantomSpec, build_phantom_image
 from src.mc_generation.geometry import mc_isocenter
+from src.mc_generation.mcsquare_runner import MCSQUARE_NUCLEAR_DATA_MAX_MEV
 from src.pencil_beam.beam_model import LUT_LENGTH, PencilBeamModel
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "CommissioningConfig",
+    "check_energies_simulable",
     "DepthProfile",
     "commissioning_phantom",
     "depth_profile",
@@ -60,7 +62,7 @@ __all__ = [
 class CommissioningConfig:
     """Geometry, statistics and fit settings of a commissioning run (YAML ``commissioning:``)."""
 
-    energies: List[float] = field(default_factory=lambda: [float(e) for e in range(70, 275, 5)])
+    energies: List[float] = field(default_factory=lambda: [float(e) for e in range(70, 255, 5)])
     surface_to_iso_mm: List[float] = field(default_factory=lambda: [100.0, 175.0, 250.0, 325.0])
     lateral_size_mm: int = 120
     water_length_mm: int = 480
@@ -141,6 +143,20 @@ def commissioning_phantom(cfg: CommissioningConfig, surface_to_iso_mm: float
     return ct, iso
 
 
+def check_energies_simulable(energies: Sequence[float]) -> None:
+    """Refuse energies MCsquare cannot simulate correctly (above its nuclear data).
+
+    Raises:
+        ValueError: Naming the offending energies and the reason.
+    """
+    bad = [float(e) for e in energies if float(e) > MCSQUARE_NUCLEAR_DATA_MAX_MEV]
+    if bad:
+        raise ValueError(
+            f"energies {bad} MeV exceed {MCSQUARE_NUCLEAR_DATA_MAX_MEV:.0f} MeV, where MCsquare's ICRU "
+            "nuclear tables end; MCsquare's dose there is undefined (and it crashes from ~259 MeV), so "
+            "it cannot serve as the reference")
+
+
 def run_commissioning_beamlets(runner, cfg: CommissioningConfig, out_dir: Path,
                                energies: Optional[Sequence[float]] = None,
                                surfaces: Optional[Sequence[float]] = None) -> List[Path]:
@@ -149,6 +165,7 @@ def run_commissioning_beamlets(runner, cfg: CommissioningConfig, out_dir: Path,
     Resumable: a run whose ``.npz`` exists is skipped. Each file holds the full
     dose grid (float32, compressed), the profile fit, and the run's provenance.
     """
+    check_energies_simulable(cfg.energies if energies is None else energies)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     written = []

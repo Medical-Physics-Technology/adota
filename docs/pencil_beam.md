@@ -105,12 +105,42 @@ Two deviations from DoseCUDA's own script, both measured:
   that, the width at a held-out SSD agrees with MC to 0.01 mm.
 - **A per-energy depth grid.** DoseCUDA compiles a table length of 400, but looks
   depths up by value. Each energy therefore carries its own grid from 0 to 1.3 R80.
-  That covers 270 MeV (R80 ~ 41 cm) without patching the kernel.
+  That covers the highest energies (R80 ~ 37 cm at 250 MeV) without patching the kernel.
 
-**Continuous energies.** ADoTA's beamlets span 70-270 MeV continuously, while
+**Continuous energies.** ADoTA's beamlets span 70-270 MeV continuously (the pencil beam
+covers 70-250 MeV; see the next section), while
 DoseCUDA only knows tabulated energies. Nodes are therefore commissioned every
 5 MeV. `PencilBeamModel.at_energy` builds any energy in between by blending its two
 neighbours in range-scaled depth (`z / R80`), with R80 interpolated log-log.
+
+### MCsquare above 250 MeV
+
+MCsquare's ICRU nuclear cross-section tables (`Materials/<element>/ICRU_Nuclear_elastic.dat`
+and `_inelastic.dat`) end at **250 MeV**. `compute_nuclear_interaction.c` interpolates
+between table entries `index` and `index + 1`; above 250 MeV `index` is the last entry,
+so it reads past the end of the arrays.
+
+- **~250-258 MeV:** it runs, but the nuclear cross sections are interpolated with whatever
+  memory follows the table, so the dose is undefined.
+- **From ~259 MeV:** it crashes with a segmentation fault (exit -11) right after
+  "Simulation started". This was measured on 2026-10-20 at 260, 265 and 270 MeV, in every
+  geometry tried, at every seed and primary count. It runs normally with nuclear
+  interactions switched off.
+
+What counts is the mean proton energy, which the BDL maps from the nominal energy:
+nominal 250 MeV is 249.1 MeV (safe), nominal 255 MeV is 254.1 MeV (not). The datagenerator
+install is byte-identical, binary and tables both.
+
+Consequences:
+
+- The pencil beam is commissioned from 70 to 250 MeV. Above that there is no valid MC
+  reference, and both scripts refuse such energies.
+- `MCSquareRunner` logs a warning for any beamlet above 250 MeV. The limit is
+  `src.mc_generation.mcsquare_runner.MCSQUARE_NUCLEAR_DATA_MAX_MEV`.
+- **Open question for the training data:** the v3 HDF5 index lists 853 beamlets above
+  250 MeV, 422 of them above 258.4 MeV, all with this BDL. This engine cannot produce
+  the latter with nuclear interactions on. How they were simulated needs checking before
+  they are trusted.
 
 ### MCsquare nozzle transport: a geometry trap
 

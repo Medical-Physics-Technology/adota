@@ -19,7 +19,7 @@ uv run python scripts/pencil_beam/commission_dosecuda.py \
 | Stage | Does | Cost (16 MC threads) |
 |---|---|---|
 | `rlsp` | `HU_RLSP.csv` from MCsquare's HU tables and Geant4 stopping powers | seconds |
-| `simulate` | one central spot per energy node x SSD in a water box; one `runs/e{E}_s{s}.npz` each (full dose, IDD, single-Gaussian widths); resumable | 164 runs, ~7-20 s each at 2e6 primaries |
+| `simulate` | one central spot per energy node x SSD in a water box; one `runs/e{E}_s{s}.npz` each (full dose, IDD, single-Gaussian widths); resumable | 148 runs, ~7-35 s each at 2e6 primaries |
 | `fit` | kernel-form width fits (process pool), then IDD / sigma_mcs / sigma_air / R80 -> `model/` | ~minutes |
 | `validate` | fresh MC at held-out SSD(s) and between-node energies, 1e7 primaries; PBA on the same phantom; CSV, JSON, figures | ~14 runs, ~1-3 min each |
 
@@ -52,7 +52,8 @@ uv run python scripts/pencil_beam/commission_dosecuda.py --stages rlsp,simulate,
 - `engine`: MCsquare install, work dir, BDL, scanner (as in the MC generators).
 - `pencil_beam.dosecuda_kernels`, `pencil_beam.gpu_id`.
 - `rlsp_reference_energy_mev`: energy of the stopping-power ratio (100).
-- `commissioning`: energy nodes (default 70-270 MeV every 5), `surface_to_iso_mm`,
+- `commissioning`: energy nodes (default 70-250 MeV every 5; refused above 250 MeV, see
+  [docs/pencil_beam.md](../../docs/pencil_beam.md#mcsquare-above-250-mev)), `surface_to_iso_mm`,
   phantom size, primaries, threads, LUT span (`lut_depth_factor`), `z_ref` fraction.
   `air_front_mm + surface_to_iso_mm` must lie in [120, 420] mm, because MCsquare
   misplaces the entrance outside that range; this is guarded.

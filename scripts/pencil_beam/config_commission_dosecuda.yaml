@@ -4,7 +4,7 @@
 #       --config scripts/pencil_beam/config_commission_dosecuda.yaml \
 #       --stages rlsp,simulate,fit,validate
 #
-# simulate: 41 energies x 4 SSDs = 164 single-spot water runs; validate: 14 runs at
+# simulate: 37 energies x 4 SSDs = 148 single-spot water runs; validate: 14 runs at
 # 1e7 primaries. Both are long: launch them with nohup (see the guide).
 # Guide: scripts/docs/commission_dosecuda.md
 
@@ -27,16 +27,18 @@ rlsp_reference_energy_mev: 100.0  # stopping-power ratio energy (HU 0: 1.0180 @7
 fit_workers: 16
 
 commissioning:
-  # Energy nodes: ADoTA's training energies are continuous over 70-270 MeV; the
-  # pencil beam interpolates between nodes in range-scaled depth.
+  # Energy nodes, 70-250 MeV every 5. ADoTA's training energies run to 270 MeV, but MCsquare's
+  # ICRU nuclear tables end at 250 MeV: above that its nuclear physics reads past the table
+  # (undefined to ~258 MeV, a segfault from ~259 MeV), so it cannot be the reference there.
+  # Refused above 250 MeV. Between nodes the pencil beam interpolates in range-scaled depth.
   energies: [70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120, 125, 130, 135, 140, 145, 150,
              155, 160, 165, 170, 175, 180, 185, 190, 195, 200, 205, 210, 215, 220, 225, 230,
-             235, 240, 245, 250, 255, 260, 265, 270]
+             235, 240, 245, 250]
   # Water surface this far upstream of the isocenter. air_front_mm + s must stay in
   # [120, 420] mm or MCsquare's nozzle-to-CT transport misplaces the entrance (guarded).
   surface_to_iso_mm: [100.0, 175.0, 250.0, 325.0]
   lateral_size_mm: 120
-  water_length_mm: 480            # > 1.15 x R80 at 270 MeV in HU-0 water (~403 mm)
+  water_length_mm: 480            # > 1.15 x R80 at 250 MeV in HU-0 water (~370 mm)
   air_front_mm: 20                # front-only air slab, full width (no all-faces shell)
   water_hu: 0
   air_hu: -1024
@@ -52,7 +54,7 @@ commissioning:
 validation:
   # Held out of the fit: a different SSD, energies halfway between nodes, and a few
   # nodes for comparison; 5x the commissioning primaries.
-  energies: [70, 72.5, 92.5, 117.5, 120, 142.5, 167.5, 170, 192.5, 217.5, 220, 242.5, 267.5, 270]
+  energies: [70, 72.5, 92.5, 117.5, 120, 142.5, 167.5, 170, 192.5, 217.5, 220, 242.5, 247.5, 250]
   surface_to_iso_mm: [210.0]
   num_primaries: 1.0e7
   gamma_criteria:                 # 3%/3mm/10% is the headline (global, MC max)

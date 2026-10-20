@@ -16,7 +16,7 @@ Per energy the kernel uses ``sigma_total = sigma_air(d) + sigma_mcs(z_w)`` with
 ``idd`` is the integrated depth dose per unit spot weight. DoseCUDA compiles a
 fixed table length of 400 but looks depths up by value, so each energy carries its
 own 400-point depth grid (0 .. ~1.3 R80): fine steps at low energy, enough reach
-at 270 MeV (R80 ~ 41 cm), and no kernel patch.
+at the top energies (R80 ~ 37 cm at 250 MeV), and no kernel patch.
 
 DoseCUDA only accepts energies that are in the table. ADoTA's beamlets have
 continuous energies, so :meth:`PencilBeamModel.at_energy` builds the tables for any

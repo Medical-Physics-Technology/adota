@@ -86,3 +86,17 @@ def test_phantom_guards_mcsquare_nozzle_transport():
     for bad in (0.0, 50.0, 450.0):            # nozzle > 300 mm upstream, or inside the grid
         with pytest.raises(ValueError):
             commissioning_phantom(cfg, bad)
+
+
+def test_energies_above_mcsquare_nuclear_data_are_refused(caplog):
+    from src.mc_generation.mcsquare_runner import MCSQUARE_NUCLEAR_DATA_MAX_MEV, _warn_above_nuclear_data
+    from src.pencil_beam.commissioning import check_energies_simulable
+
+    assert MCSQUARE_NUCLEAR_DATA_MAX_MEV == 250.0
+    check_energies_simulable([70.0, 250.0])
+    with pytest.raises(ValueError, match="nuclear tables"):
+        check_energies_simulable([245.0, 255.0])
+    assert max(CommissioningConfig().energies) <= MCSQUARE_NUCLEAR_DATA_MAX_MEV
+    with caplog.at_level("WARNING"):
+        _warn_above_nuclear_data(260.0)
+    assert "nuclear tables" in caplog.text

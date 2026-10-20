@@ -28,6 +28,7 @@ from src.evaluation.cli import SET_OVERRIDE_HELP, apply_set_overrides, load_yaml
 from src.mc_generation.geometry import reduce_vacuum_to_air, resample_to_isotropic
 from src.mc_generation.mcsquare_runner import MCSquareRunner
 from src.mc_generation.sweep import build_angle_grid, resolve_gantries, robustness_config_from_dict
+from src.pencil_beam.commissioning import check_energies_simulable
 from src.pencil_beam.comparison import ComparisonSettings, compare_block, summarize
 from src.pencil_beam.engine import PencilBeamEngine
 from src.pencil_beam.metrics import criteria_from_config
@@ -52,6 +53,7 @@ def main(
     dataset = build_dataset_from_config({"datasets": cfg["datasets"], "name": cfg.get("name", "engine_comparison")})
     rcfg = robustness_config_from_dict(cfg.get("robustness", {}), num_primaries=num_primaries,
                                        default_prefix="engine_comparison")
+    check_energies_simulable(rcfg.energies)          # MC is the reference: it must be defined there
     grid = build_angle_grid(rcfg.theta_x_range, rcfg.theta_y_range, rcfg.grid_n, rcfg.angles)
     plan = [(i, g) for i in range(len(dataset)) for g in resolve_gantries(rcfg, dataset.record(i).uid)]
     logger.info("%d patient-fields x %d energies x %d beamlets = %d beamlets (%.0e primaries each)",

@@ -35,6 +35,11 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   `/home/mstryja/tools/dosecuda`). New output formats: the commissioned model directory,
   `water_validation.csv`, `engine_comparison.csv`, and the per-beamlet `_engines.npz`
   (see `scripts/docs/compare_engines.md`).
+- **`src.mc_generation.mcsquare_runner.MCSQUARE_NUCLEAR_DATA_MAX_MEV`** (250 MeV, the end of
+  MCsquare's ICRU nuclear tables): `MCSquareRunner.run_beamlet` / `run_beamlet_field` now log a
+  warning above it, where MCsquare's nuclear physics reads past the tables (undefined, and a
+  segmentation fault from ~259 MeV). `src.pencil_beam.commissioning.check_energies_simulable`
+  refuses such energies in the commissioning and the engine comparison.
 - **`src.mc_generation.robustness.process_beamlet`**: the per-beamlet crop / QA / save step is
   public, so the engine comparison writes ADoTA's input exactly as the dataset does. The old
   private name `_process_beamlet` remains as an alias.

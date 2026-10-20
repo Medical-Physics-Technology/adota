@@ -99,4 +99,5 @@ on disk is scored again but not re-simulated.
 The MCsquare install, the DoseCUDA kernels and a commissioned model, a CUDA GPU for
 the PBA and ADoTA, and the ADoTA checkpoint
 (`models/DoTA_v3_grid_search_v11` by default). Every energy must lie inside the
-commissioned span.
+commissioned span, and at most 250 MeV: above that MCsquare's nuclear data ends, so there is
+no valid MC reference (the script refuses it).
