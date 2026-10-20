@@ -15,6 +15,30 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 
 ### Added
 
+- **`src/pencil_beam/`**: the DoseCUDA proton pencil beam, commissioned against MCsquare.
+  `kernels.load_dose_kernels` (the compiled extension, loaded by path);
+  `rlsp.hu_to_rlsp_table` / `write_rlsp_csv` (HU -> RLSP from MCsquare's scanner and Geant4
+  stopping powers); `beam_model.PencilBeamModel` (DoseCUDA lookup-table layout, `read` / `write`,
+  `at_energy` range-scaled interpolation, `kernel_model`), `read_rlsp_curve`, `hu_to_rlsp`;
+  `commissioning.CommissioningConfig`, `commissioning_phantom`, `run_commissioning_beamlets`,
+  `depth_profile`, `kernel_halo`, `fit_primary_sigma`, `kernel_sigma_profile`, `distal_r80`,
+  `physical_to_wet`, `fit_energy_node`, `fit_model`; `pipeline.fit_from_runs`, `validate_water`,
+  `provenance`, `write_rows_csv`; `model_card.write_model_card` (the `README.md` of a commissioned
+  model: beam, units, usage, measured accuracy); `engine.PencilBeamEngine`, `mc_frame_to_dosecuda`;
+  `metrics.criteria_from_config`, `dose_bbox`, `gamma_pass_rates`, `dose_agreement`;
+  `comparison.ComparisonSettings`, `compare_block`, `summarize`.
+- **`src/figures/pencil_beam.py`**: `commissioning_run_figure`, `commissioning_summary_figure`,
+  `engine_comparison_figure` (N engines over one CT crop, differences, IDD and lateral profiles).
+- **`scripts/pencil_beam/commission_dosecuda.py`** (stages `rlsp,simulate,fit,validate`),
+  **`scripts/pencil_beam/compare_engines.py`** (MC vs pencil beam vs ADoTA on one CT grid), and
+  **`scripts/pencil_beam/provision_dosecuda.sh`** (builds the kernels for adota's Python into
+  `/home/mstryja/tools/dosecuda`). New output formats: the commissioned model directory,
+  `water_validation.csv`, `engine_comparison.csv`, and the per-beamlet `_engines.npz`
+  (see `scripts/docs/compare_engines.md`).
+- **`src.mc_generation.robustness.process_beamlet`**: the per-beamlet crop / QA / save step is
+  public, so the engine comparison writes ADoTA's input exactly as the dataset does. The old
+  private name `_process_beamlet` remains as an alias.
+
 - **`src/datasets/beamlet_record.py`**: the pinned per-record recipe for v3 builds.
   Exports `load_raw_record` (load and parse), `flux_inputs` and `flux_batch` (flux
   projection), `downsample_grid` (average, linear, or trilinear), `preprocess_ct_dose`
