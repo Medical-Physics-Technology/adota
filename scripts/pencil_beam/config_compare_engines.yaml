@@ -47,7 +47,7 @@ engine:
 
 pencil_beam:
   dosecuda_kernels: /home/mstryja/tools/dosecuda/current/dose_kernels.so
-  model_dir: /home/mstryja/tools/dosecuda/models/hptc_rsnone_mcsquare_v1
+  model_dir: /home/mstryja/tools/dosecuda/models/hptc_rsnone_mcsquare_v2
   gpu_id: 0
 
 adota:

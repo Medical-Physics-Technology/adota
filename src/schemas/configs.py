@@ -166,6 +166,9 @@ class TrainingConfig:
     # ── Data ────────────────────────────────────────────────────────────
     dataset_path: str = ""
     excluded_indexes_file: str = ""
+    # Drop beamlets above this energy before the split: MCsquare's nuclear data ends
+    # at 250 MeV, so their Monte Carlo is undefined. ``null`` reproduces pre-cut runs.
+    max_energy_mev: Optional[float] = 250.0
     train_test_split: float = 0.2
     split_random_state: int = 42
     scale: dict = field(default_factory=lambda: DEFAULT_SCALE.copy())

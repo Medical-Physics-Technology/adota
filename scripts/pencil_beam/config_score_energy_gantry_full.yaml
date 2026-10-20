@@ -26,7 +26,7 @@ generation_config: scripts/mc/config_energy_gantry_full.yaml
 
 pencil_beam:
   dosecuda_kernels: /home/mstryja/tools/dosecuda/current/dose_kernels.so
-  model_dir: /home/mstryja/tools/dosecuda/models/hptc_rsnone_mcsquare_v1
+  model_dir: /home/mstryja/tools/dosecuda/models/hptc_rsnone_mcsquare_v1   # EXP-0018's model: these sources hold its PBA files
   gpu_id: 0
 
 adota:                          # used only for beamlets that have no _ds_pred.npy yet

@@ -114,7 +114,7 @@ def main(
         meta = {"provenance": provenance(install, bdl_file, scanner, kernels),
                 "rlsp_reference_energy_mev": e_ref, "sigma_fit": "primary + DoseCUDA halo (kernel form)"}
         model = fit_from_runs(runs_dir, ccfg, rlsp_water, rlsp_air, bdl.d_smx, bdl.d_smy, meta,
-                              n_workers=int(cfg.get("fit_workers", 16)))
+                              n_workers=int(cfg.get("fit_workers", 16)), bdl=bdl)
         model.write(model_dir)
         if not (model_dir / "HU_RLSP.csv").exists():
             write_rlsp_csv(model_dir / "HU_RLSP.csv", hu, rlsp)
@@ -128,28 +128,29 @@ def main(
         v = cfg.get("validation", {})
         criteria = criteria_from_config(v.get("gamma_criteria"))
         eng = PencilBeamEngine(kernels, model_dir, gpu_id=gpu)
+        vdir = out / v.get("results_subdir", "validation")   # the cached validation MC stays in validation/runs
         rows = validate_water(
             runner, eng, ccfg, [float(e) for e in v["energies"]], [float(s) for s in v["surface_to_iso_mm"]],
-            out / "validation", float(v.get("num_primaries", 1e7)), criteria, rlsp_water, rlsp_air,
+            vdir, float(v.get("num_primaries", 1e7)), criteria, rlsp_water, rlsp_air,
             gamma_backend=v.get("gamma_backend", "pymedphys"),
             gamma_backend_options=v.get("gamma_backend_options"),
-            make_figures=bool(v.get("make_figures", True)))
-        csv_path = write_rows_csv(rows, out / "validation" / "water_validation.csv")
-        (out / "validation" / "water_validation.json").write_text(json.dumps(
+            make_figures=bool(v.get("make_figures", True)), runs_dir=out / "validation" / "runs")
+        csv_path = write_rows_csv(rows, vdir / "water_validation.csv")
+        (vdir / "water_validation.json").write_text(json.dumps(
             {"model_dir": str(model_dir), "criteria": [c.key for c in criteria], "rows": rows}, indent=2,
             default=float))
         from src.figures.pencil_beam import commissioning_summary_figure
 
-        commissioning_summary_figure(rows, str(out / "validation" / f"water_validation_summary_{criteria[0].key}"),
+        commissioning_summary_figure(rows, str(vdir / f"water_validation_summary_{criteria[0].key}"),
                                      gamma_key=f"gpr_{criteria[0].key}")
         # the model carries its own measured accuracy wherever it is copied
         import shutil
 
         keep = model_dir / "validation"
         (keep / "figures").mkdir(parents=True, exist_ok=True)
-        for f in (out / "validation").glob("water_validation*"):
+        for f in vdir.glob("water_validation*"):
             shutil.copy2(f, keep / f.name)
-        for f in (out / "validation" / "figures").glob("water_e*.png"):    # dose maps stay on /scratch
+        for f in (vdir / "figures").glob("water_e*.png"):    # dose maps stay on /scratch
             shutil.copy2(f, keep / "figures" / f.name)
         write_model_card(model_dir, rows, gamma_key=criteria[0].key)
         logger.info("validate: %d runs -> %s (copied into %s)", len(rows), csv_path, keep)

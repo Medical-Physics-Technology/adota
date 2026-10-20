@@ -44,7 +44,15 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   directory by exclusive creation: existing files are never modified. Also added per directory:
   `pba_provenance.json` (model fingerprint, kernel build, commit; a different model is refused) and,
   only where predictions were missing, `{id}_ds_pred.npy` + `adota_provenance.json`.
-  `src.pencil_beam.beam_model.model_fingerprint` identifies a model by its tables. `--dry-run`. `PencilBeamEngine.prepare_field`
+  `src.pencil_beam.beam_model.model_fingerprint` identifies a model by its tables. `--dry-run`.
+- **Pencil-beam model `dose_unit`** (`gy_mm2_per_mu` default, `mcsquare_per_weight_1000` for `_v1`):
+  `CommissioningConfig.dose_unit`, `commissioning.idd_unit_factor`, `PencilBeamModel.protons_per_mu`
+  (an extra `energies.csv` column; per-proton energy interpolation), `PencilBeamEngine.dose_unit` /
+  `mcsquare_spot_weight(E)` (the default spot weight: MCsquare's scale for every model unit).
+  `engine_comparison_figure(..., dose_scale, dose_unit)` replaces its internal unit conversion.
+  Model `hptc_rsnone_mcsquare_v2` (Gy mm^2 per MU) is the new default; `_v1` is unchanged.
+  `score_saved_beamlets.py` writes `run_config.json` once and appends every invocation to
+  `invocations.jsonl`; validation `results_subdir`. `PencilBeamEngine.prepare_field`
   / `dose_in_window` / `PreparedField`: one ray trace per field, dose per beamlet window.
 - **`src.mc_generation.mcsquare_runner.MCSQUARE_NUCLEAR_DATA_MAX_MEV`** (250 MeV, the end of
   MCsquare's ICRU nuclear tables): `MCSquareRunner.run_beamlet` / `run_beamlet_field` now log a
@@ -179,6 +187,33 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   pipeline in minutes. Guide: `scripts/docs/al_loop.md`.
 - `src.evaluation.sources.MultiDirSource`: a `DirSource` spanning several
   directories, which is what any set assembled across patients looks like.
+
+### Fixed
+
+- **Beamlet dose unit.** MCsquare writes eV/g per simulated proton, and
+  `src.utils.unit_conversions.to_gy` (x 1.60218e-10, documented as MeV/g) therefore
+  returned the dose of exactly 1e6 protons, not Gy.
+  - New: `mcsquare_to_gy_per_mu(dose, energy, bdl)` gives Gy per MU, with MCsquare's
+    own protons per MU (`mcsquare_protons_per_mu`: linear, and extrapolated beyond the
+    BDL nodes as MCsquare does). Also `mcsquare_to_gy_per_proton` and `EV_PER_G_TO_GY`.
+  - The old factor is kept as `legacy_to_gy_per_1e6_protons`, which **every existing
+    caller (14 files) now names explicitly**, so the RMSE values reported as `rmse_gy` and
+    every earlier figure reproduce unchanged. `to_gy` remains a deprecated alias that
+    warns.
+  - The pencil-beam figures now show Gy per MU. See `docs/dose_units.md`.
+- **No MCsquare data above 250 MeV.**
+  - `MCSquareRunner` now *refuses* beamlets above
+    `MCSQUARE_NUCLEAR_DATA_MAX_MEV` (it warned), and so do `RobustnessConfig` (every
+    MC generator) and the active-learning `CandidateConfig`, via
+    `src.mc_generation.mcsquare_runner.check_energies_simulable` (moved there from
+    `src.pencil_beam.commissioning`, which re-exports it).
+  - New `src.datasets.energy_cut` (`drop_above_energy`, `record_energies_mev`).
+    Training (`load_record_ids(..., max_energy_mev)`, `TrainingConfig.max_energy_mev`
+    = 250), retrospective active-learning split draws (`max_energy_mev` = 250) and
+    `run_model_h5py` (`max_energy_mev` = 250) drop records above 250 MeV by id: 853 of
+    the v3 file's 70,146.
+  - Splits already frozen are not touched; `max_energy_mev: null` reproduces earlier
+    runs.
 
 ### Fixed
 

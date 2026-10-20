@@ -29,6 +29,7 @@ from src.adota.models import DoTA3D_v3
 from src.adota.utils import (
     load_model,
 )
+from src.datasets.energy_cut import drop_above_energy
 from src.evaluation.cli import resolve_device
 from src.evaluation.engine import InferenceContext, evaluate
 from src.evaluation.outputs import CsvColumn
@@ -45,7 +46,7 @@ from src.metrics.classic import (
 from src.schemas.configs import EvaluationConfig
 from src.schemas.results import H5EvaluationResult as EvaluationResult
 from src.utils.scallers import inverse_minmax
-from src.utils.unit_conversions import to_gy
+from src.utils.unit_conversions import legacy_to_gy_per_1e6_protons
 
 PROJECT_ROOT = Path(__file__).parent.parent
 logger = logging.getLogger(__name__)
@@ -77,7 +78,7 @@ def _make_per_sample_fn(config: EvaluationConfig):
         # ── Metrics ─────────────────────────────────────────────────────
 
         # RMSE
-        rmse = calculate_rmse(to_gy(y_pred_np), to_gy(y_np))
+        rmse = calculate_rmse(legacy_to_gy_per_1e6_protons(y_pred_np), legacy_to_gy_per_1e6_protons(y_np))
 
         # MAPE at the 10% ground-truth-dose threshold. Canonical run_model.py
         # form: mask on the ground truth, calculate_pure_mape(predicted, reference).
@@ -85,7 +86,7 @@ def _make_per_sample_fn(config: EvaluationConfig):
         mape = calculate_pure_mape(y_pred_np[mask], y_np[mask])
 
         # Relative Dose Error
-        rde = calculate_relative_dose_error(to_gy(y_pred_np), to_gy(y_np))
+        rde = calculate_relative_dose_error(legacy_to_gy_per_1e6_protons(y_pred_np), legacy_to_gy_per_1e6_protons(y_np))
 
         # ── CT-based variability metrics ────────────────────────────────
         ct_norm = ctx.x[0].cpu().numpy()  # (D, H, W) – CT channel
@@ -559,10 +560,9 @@ def main(
     logger.info(f"Total records in HDF5: {len(all_record_ids)}")
 
     record_ids = [rid for rid in all_record_ids if rid not in excluded_indexes]
-    logger.info(
-        f"Records after exclusion: {len(record_ids)} "
-        f"(excluded {len(all_record_ids) - len(record_ids)})"
-    )
+    # MCsquare's nuclear data ends at 250 MeV: beamlets above have no valid ground truth (logged)
+    record_ids, _ = drop_above_energy(h5_path, record_ids, yaml_config.get("max_energy_mev", 250.0), eval_config.scale)
+    logger.info(f"Records after exclusion: {len(record_ids)} (excluded {len(all_record_ids) - len(record_ids)})")
 
     if not record_ids:
         logger.error("No samples remaining after exclusion")

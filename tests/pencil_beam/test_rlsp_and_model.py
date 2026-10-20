@@ -83,3 +83,33 @@ def test_kernel_model_layout():
     assert k.divergence_params.shape == (1, 5) and k.divergence_params.dtype == np.float32
     assert k.divergence_params[0, :2].tolist() == pytest.approx([150.0, 158.0])
     assert k.lut_depths.shape == k.lut_idds.shape == k.lut_sigmas.shape == (1, LUT_LENGTH)
+
+
+def test_per_mu_model_interpolates_per_proton():
+    """A gy_mm2_per_mu model interpolated between nodes equals the per-proton model times protons/MU."""
+    per_proton = _model()
+    ppm = np.array([2.0e6, 3.5e6])
+    per_mu = _model()
+    per_mu.idds = per_mu.idds * ppm[:, None]
+    per_mu.protons_per_mu = ppm
+    for energy in (110.0, 125.0, 149.0):
+        w = (energy - 100.0) / 50.0
+        a = per_proton.at_energy(energy).idds[0] * ((1 - w) * ppm[0] + w * ppm[1])
+        b = per_mu.at_energy(energy).idds[0]
+        assert np.allclose(a, b, rtol=1e-12)
+    assert np.array_equal(per_mu.at_energy(100.0).idds[0], per_mu.idds[0])        # nodes unchanged
+
+
+def test_protons_per_mu_column_roundtrips(tmp_path):
+    m = _model()
+    m.protons_per_mu = np.array([2.0e6, 3.5e6])
+    m.write(tmp_path)
+    assert "protons_per_mu" in (tmp_path / "RS0" / "energies.csv").read_text().splitlines()[0]
+    back = PencilBeamModel.read(tmp_path)
+    assert np.allclose(back.protons_per_mu, m.protons_per_mu)
+    assert PencilBeamModel.read(_write(_model(), tmp_path / "plain")).protons_per_mu is None
+
+
+def _write(model, path):
+    model.write(path)
+    return path

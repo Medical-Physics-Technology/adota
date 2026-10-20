@@ -18,7 +18,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from src.figures.axes_utils import aligned_colorbar, save_figure_as_publication_formats
-from src.utils.unit_conversions import to_gy
 
 __all__ = ["commissioning_run_figure", "commissioning_summary_figure", "engine_comparison_figure"]
 
@@ -119,6 +118,8 @@ def engine_comparison_figure(
     spacing_mm: float = 1.0,
     title: str = "",
     metrics_text: Optional[Mapping[str, str]] = None,
+    dose_scale: float = 1.0,
+    dose_unit: str = "MCsquare eV/g per proton",
 ) -> List[Path]:
     """N dose engines over the same CT crop, with differences to ``reference``.
 
@@ -128,12 +129,12 @@ def engine_comparison_figure(
     (integrated depth dose and the lateral profile at the reference's Bragg peak).
     All arrays are ``(z, y, x)`` with the beam along x.
 
-    Doses arrive in MCsquare's beamlet units (all three engines share that scale:
-    the pencil beam is commissioned onto it, ADoTA is trained on it) and are shown
-    in Gy through :func:`src.utils.unit_conversions.to_gy`, the conversion every
-    single-beamlet figure in the repository uses.
+    Doses arrive on MCsquare's beamlet scale (eV/g per simulated proton: ADoTA is
+    trained on it, the pencil beam runs at :meth:`~src.pencil_beam.engine.PencilBeamEngine.mcsquare_spot_weight`)
+    and are displayed as ``dose * dose_scale`` in ``dose_unit``; for Gy per MU pass
+    ``dose_scale = mcsquare_to_gy_per_mu(1.0, energy, bdl)`` and ``dose_unit = "Gy per MU"``.
     """
-    doses = {label: to_gy(np.asarray(dose, dtype=np.float64)) for label, dose in doses.items()}
+    doses = {label: np.asarray(dose, dtype=np.float64) * dose_scale for label, dose in doses.items()}
     labels = list(doses)
     others = [k for k in labels if k != reference]
     ref = doses[reference]
@@ -153,7 +154,8 @@ def engine_comparison_figure(
                            aspect="auto", extent=extent)
             ax.set_title(f"{label} | {plane_names[c]}", fontsize=11)
             if c == 1:
-                aligned_colorbar(fig, im, ax, "dose (Gy)", label_fontsize=10, tick_fontsize=8, label_coords=(3.5, 0.5))
+                aligned_colorbar(fig, im, ax, f"dose ({dose_unit})", label_fontsize=10, tick_fontsize=8,
+                                 label_coords=(3.5, 0.5))
     for k, label in enumerate(others):
         r = len(labels) + k
         diff = doses[label] - ref
@@ -162,7 +164,7 @@ def engine_comparison_figure(
             im = ax.imshow(plane, cmap="RdBu_r", vmin=-dmax, vmax=dmax, aspect="auto", extent=extent)
             ax.set_title(f"{label} - {reference} | {plane_names[c]}", fontsize=11)
             if c == 1:
-                aligned_colorbar(fig, im, ax, "dose diff. (Gy)", label_fontsize=10, tick_fontsize=8,
+                aligned_colorbar(fig, im, ax, f"dose diff. ({dose_unit})", label_fontsize=10, tick_fontsize=8,
                                  label_coords=(3.5, 0.5))
     depth = (np.arange(ref.shape[2]) + 0.5) * spacing_mm
     lateral = (np.arange(ref.shape[1]) + 0.5 - (iy + 0.5)) * spacing_mm
@@ -172,9 +174,9 @@ def engine_comparison_figure(
         ax_idd.plot(depth, doses[label].sum(axis=(0, 1)) * spacing_mm ** 2, label=label, **st)
         ax_lat.plot(lateral, doses[label][iz, :, ix], label=label, **st)
     ax_idd.set_xlabel("depth along the beam (mm)")
-    ax_idd.set_ylabel("integrated depth dose (Gy mm$^2$)")
+    ax_idd.set_ylabel(f"integrated depth dose ({dose_unit} x mm$^2$)")
     ax_lat.set_xlabel(f"lateral position at the {reference} Bragg peak (mm)")
-    ax_lat.set_ylabel("dose (Gy)")
+    ax_lat.set_ylabel(f"dose ({dose_unit})")
     for ax in (ax_idd, ax_lat):
         ax.grid(alpha=0.3)
         ax.legend()
