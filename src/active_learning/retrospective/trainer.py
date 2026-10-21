@@ -18,7 +18,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import torch
 from torch.utils.data import DataLoader
@@ -203,8 +203,14 @@ def _sync(device: torch.device) -> None:
 
 def train_cycle(state: TrainState, train_loader: DataLoader, validation: ValidationBundle,
                 spec: CycleSpec, *, run_dir: Path, metrics_log: MetricsLog,
-                checkpoint_dir: Path, checkpoint_every: int) -> Dict[str, Any]:
-    """Train ``spec.epochs`` epochs from the current state; returns the cycle summary."""
+                checkpoint_dir: Path, checkpoint_every: int,
+                on_epoch: Optional[Callable[[int, Dict[str, Any]], None]] = None) -> Dict[str, Any]:
+    """Train ``spec.epochs`` epochs from the current state; returns the cycle summary.
+
+    ``on_epoch(epoch, record)``, when given, is called after every epoch has been
+    logged and checkpointed, with the record written to ``metrics_log``. It may
+    raise to end the cycle early, e.g. a hyperparameter search pruning a trial.
+    """
     config, device = state.config, state.device
     manager = CheckpointManager(checkpoint_dir, save_every_n_epochs=checkpoint_every)
     val_dir = run_dir / "validation"
@@ -295,6 +301,9 @@ def train_cycle(state: TrainState, train_loader: DataLoader, validation: Validat
                      is_best=is_best,
                      extra={"cycle": spec.cycle, "cumulative_epoch": cumulative,
                             "n_train": spec.n_train, "strategy": spec.strategy})
+
+        if on_epoch is not None:
+            on_epoch(epoch, record)
 
         summary = (f"train {train_stats.get('loss_combined_mean', float('nan')):.4e} | "
                    f"val {val_loss['loss_combined_mean']:.4e}")

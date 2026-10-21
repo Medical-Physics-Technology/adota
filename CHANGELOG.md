@@ -15,6 +15,24 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 
 ### Added
 
+- **`src/model_search/`**: hyperparameter optimisation and training of a single
+  ADoTA model. `space` (`validate_space`, `suggest`, `build_candidate`,
+  `rejection`, `Candidate`: a YAML search space over `TrainingConfig` fields to
+  Optuna suggestions to a checked configuration), `runs` (`resolve_ids`,
+  `prepare_ids`, `scan_overlap`, `RunSpec`, `train_run`, `select_winner`: record
+  sets and one warmup-plus-cosine training run through `train_cycle`), `study`
+  (`open_study`, `fail_stale_trials`, `make_objective`, `stop_at_budget`,
+  `n_trained`, `top_trials`, `SearchContext`: the Optuna study on a journal file).
+- **`scripts/model_hpo_training.py`** with `scripts/config_model_hpo_training.yaml`:
+  commands `search`, `confirm`, `final`, `test`. New output format: a
+  `model_hpo_<ts>/` run directory with `ids/`, `search/study.journal`,
+  `search/trials.csv`, `confirm/results.csv`, `confirm/selection.json`,
+  `final/checkpoints/last.pth`, `test/summary.json`. Guide:
+  `scripts/docs/model_hpo_training.md`.
+- `src.active_learning.retrospective.trainer.train_cycle` takes an optional
+  `on_epoch(epoch, record)` callback, called after each epoch is logged and
+  checkpointed; existing callers are unchanged.
+- Dependency: `optuna>=4,<5`.
 - **`src/pencil_beam/`**: the DoseCUDA proton pencil beam, commissioned against MCsquare.
   `kernels.load_dose_kernels` (the compiled extension, loaded by path);
   `rlsp.hu_to_rlsp_table` / `write_rlsp_csv` (HU -> RLSP from MCsquare's scanner and Geant4

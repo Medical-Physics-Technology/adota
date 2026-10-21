@@ -1,0 +1,121 @@
+# HPO, confirmation, final training and test of one ADoTA model
+# (scripts/model_hpo_training.py; guide scripts/docs/model_hpo_training.md)
+# ============================================================================
+#   uv run python scripts/model_hpo_training.py search --config scripts/config_model_hpo_training.yaml
+#   uv run python scripts/model_hpo_training.py confirm --run-dir <output_dir>/model_hpo_<ts>
+#   uv run python scripts/model_hpo_training.py final   --run-dir <run>
+#   uv run python scripts/model_hpo_training.py test    --run-dir <run>
+#
+# Every stage writes into one timestamped run directory under output_dir; this
+# file is frozen there at the start of the search. Smoke test: --set overrides,
+# listed in the guide.
+experiment: null              # the EXP record id, once the record exists
+output_dir: /scratch/mstryja/adota_runs/model_hpo
+dataset_path: /scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5
+exclude_indexes_path: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
+max_energy_mev: 250.0         # MCsquare's nuclear tables end at 250 MeV (src/datasets/energy_cut.py)
+devices: [0, 1, 2]            # one search worker (and one confirmation run) per GPU
+
+# Record sets, patient-level. Each is a CSV with a sample_id column, or a filter
+# {table, column, values} on a table; relative paths are under partition_dir.
+# Here: the EXP-0014 partition. Search on its HPO split of R (30 / 8 scans); the
+# final model on every scan outside the frozen test set F; test on F, once.
+partition_dir: /scratch/mstryja/adota_runs/exp0014/partition
+id_sets:
+  search_train: hpo/hpo_train_ids.csv
+  search_val: hpo/hpo_val_ids.csv
+  final_train: {table: records.csv, column: role, values: [R, V]}
+  test: {table: records.csv, column: role, values: [F, F+V]}
+scan_table: {table: records.csv, column: scan}   # the run refuses sets that share a scan
+
+# Per-epoch loss (and the pruning signal) on a fixed, seeded subsample of the
+# search validation records; the objective is the last checkpoint's loss on all
+# of them. The final run monitors the same-size subsample of its own training
+# records (in-sample, for the curves only).
+epoch_val_size: 3000
+subsample_seed: 20261021
+max_records: null             # smoke tests only: cap every record set at this many records
+
+search:
+  n_trials: 40                # trials that train; configurations rejected before training do not count
+  epochs: 20                  # per trial, warmup then cosine decay to zero over these epochs
+  sampler_seed: 20261021      # + the worker index, so the workers' start-up trials differ
+  n_startup_trials: 10        # random trials before TPE models the space
+  pruner_startup_trials: 8    # trials that finish before the median pruner acts
+  pruner_warmup_steps: 5      # epochs of a trial before it can be pruned
+  # 2 x the reference model v11 (models/DoTA_v3_grid_search_v11, 14,927,651 parameters)
+  max_params: 29855302
+
+confirm:
+  top_k: 3                    # the best completed trials, trained again at full length
+  epochs: 60
+  # The lowest final validation loss wins, unless another candidate's mean gamma
+  # pass rate (gamma_params below) is higher by more than this many points.
+  gpr_guard_pp: 0.5
+
+final:
+  epochs: 60
+
+# The search space (src/model_search/space.py). Names are TrainingConfig fields,
+# plus warmup_epochs (the run's warmup) and dim_feedforward_factor (feed-forward
+# width as a multiple of the token size). A `when` entry is sampled only if the
+# named earlier parameters took those values; otherwise it is `otherwise`.
+space:
+  num_levels: {choices: [3, 4]}
+  enc_features: {choices: [16, 32, 48, 64]}
+  kernel_size: {choices: [3, 5]}
+  convolutional_steps: {choices: [1, 2, 3]}
+  conv_hidden_channels: {choices: [32, 48, 64, 96]}
+  num_transformers: {int: [1, 4]}
+  num_heads: {choices: [2, 4, 8]}
+  dim_feedforward_factor: {choices: [1, 2, 4]}
+  dropout_rate: {uniform: [0.0, 0.3]}
+  num_forward: {choices: [0, 1, 2, 4]}
+  norm_layer: {choices: [batch, group, none]}
+  weight_standardization: {choices: [false, true], when: {norm_layer: group}, otherwise: false}
+  weight_init: {choices: [default, kaiming, xavier]}
+  learning_rate: {loguniform: [1.0e-4, 1.0e-3]}
+  weight_decay: {loguniform: [1.0e-5, 1.0e-2]}
+  warmup_epochs: {int: [0, 3]}
+
+# Everything not searched, identical for every run: the EXP-0012 recipe. causal,
+# both residual paths, zero padding, the output activation, the batch size and
+# the static loss weights are fixed on purpose (guide, "What is fixed and why").
+training:
+  seed: 1234
+  scale: {min_ds: 0.0, max_ds: 25277028.0, min_ct: -1024, max_ct: 3071, min_energy: 70.0, max_energy: 270.0}
+  batch_size: 56
+  num_workers: 8
+  augmentation: true
+  normalize_flux_only: true
+  compile: true
+  compile_mode: default
+  allow_tf32: true
+  loss_mode: mse_idd
+  initial_weight_mse: 0.7
+  initial_weight_ps: 0.3
+  adaptive_after_epoch: 10000
+  lps_dx_mm: 2.0
+  lps_dy_mm: 2.0
+  input_shape: [2, 160, 30, 30]
+  causal: true
+  transformer_residual: true
+  conv_residual: true
+  zero_padding: true
+  last_activation: false
+
+# Metrics: the confirmation runs (and the trials' last epoch) at 2%/2mm; the test
+# at every criterion of test_gamma ([dose %, distance mm]).
+gamma_params:
+  dose_percent_threshold: 2
+  distance_mm_threshold: 2
+  interp_fraction: 10
+  max_gamma: 2
+  lower_percent_dose_cutoff: 10
+  random_subset: null
+  local_gamma: false
+  quiet: true
+gamma_resolution_mm: [2.0, 2.0, 2.0]
+gamma_cutoff_percent: 10.0
+gamma_backend: torch
+test_gamma: [[2, 2], [3, 3]]
