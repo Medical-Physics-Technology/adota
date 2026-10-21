@@ -219,6 +219,19 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   `cross_fit_partition.py` and `ensemble_hpo.py`.
 - `src.evaluation.cli.on_root_filesystem`: whether an output path would land on
   the root disk, for scripts that refuse it.
+- **`src/figures/hpo.py`**: `hpo_learning_curves_figure` (loss per epoch of every
+  HPO trial, one column per mixer, rungs and selected checkpoints marked),
+  `finalist_beamlet_figure` (one beamlet through every finalist: axial and
+  coronal planes, depth doses, lateral profiles), and the helpers `search_tier`,
+  `beamlet_planes`, `depth_dose`, `lateral_profile`, `shown_depth`.
+- **`scripts/active_learning/hpo_figures.py`** with `config_hpo_figures.yaml`.
+  New output format: `hpo_figures_<ts>/learning_curves{,_trials}.csv`,
+  `finalists_beamlet_<pick>_<id>_<gamma>{,_idd,_profile}.csv` and
+  `finalists_beamlets_<gamma>.csv` beside the figures. Guide:
+  `scripts/docs/hpo_figures.md`. The finalists' error agreement runs through
+  `ensemble_agreement.py` with the new `config_ensemble_agreement_hpo.yaml`.
+- `src.figures.al_curves.draw_cycle_rules` takes an optional `text` callable
+  for boundaries that are not AL cycles; the default labels are unchanged.
 
 ### Added (retrospective active learning)
 

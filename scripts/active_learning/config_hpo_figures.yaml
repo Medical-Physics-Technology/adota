@@ -1,0 +1,24 @@
+# Figures of a finished per-mixer HPO run (scripts/active_learning/hpo_figures.py)
+# ==============================================================================
+#   uv run python scripts/active_learning/hpo_figures.py \
+#       --config scripts/active_learning/config_hpo_figures.yaml
+#
+# Learning curves of every trial, and one validation beamlet through all the
+# finalists per entry of sample_ids (or per rule of picks). Writes into a
+# timestamped hpo_figures_<ts>/ under output_dir (default <hpo_dir>/analysis).
+experiment: EXP-0014
+hpo_dir: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308
+output_dir: null
+
+# Beamlets to draw. sample_ids wins when set; otherwise one beamlet per rule:
+#   typical      mean pass rate over the finalists closest to its median
+#   disagreement largest spread of pass rate across the finalists
+#   hardest      lowest mean pass rate over the finalists
+sample_ids: []
+picks: [typical, disagreement, hardest]
+
+device_index: null            # null: first GPU, else CPU; -1 forces CPU
+voxel_mm: 2.0                 # the model grid (2 x 2 x 2 mm)
+margin_mm: 30.0               # depth shown beyond the end of the ground-truth dose
+overlay_floor_pct: 5.0        # dose below this share of the GT maximum is not drawn
+loss_check_rtol: 0.01         # rebuilt model vs its finalist CSV, per beamlet
