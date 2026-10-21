@@ -15,6 +15,11 @@ dataset_path: /scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_
 exclude_indexes_path: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
 max_energy_mev: 250.0         # MCsquare's nuclear tables end at 250 MeV (src/datasets/energy_cut.py)
 devices: [0, 1, 2]            # one search worker (and one confirmation run) per GPU
+# Learning-rate schedule of every run (src/active_learning/retrospective/lr_schedule.py):
+# a linear warmup of warmup_epochs (searched) from lr0 / (warmup + 1), then a cosine
+# that stays above zero, so every epoch trains. A stage may override it
+# (search.lr_schedule, confirm.lr_schedule, final.lr_schedule).
+lr_schedule: warmup_cosine
 
 # Record sets, patient-level. Each is a CSV with a sample_id column, or a filter
 # {table, column, values} on a table; relative paths are under partition_dir.
@@ -45,6 +50,14 @@ search:
   pruner_warmup_steps: 5      # epochs of a trial before it can be pruned
   # 2 x the reference model v11 (models/DoTA_v3_grid_search_v11, 14,927,651 parameters)
   max_params: 29855302
+  # Configurations trained first, ahead of the sampler's own; they count towards
+  # n_trials. v11's architecture is recorded in its hyperparams.json; its learning
+  # rate and weight decay are not, so these are the repository defaults.
+  fixed_trials:
+    - label: v11 (models/DoTA_v3_grid_search_v11)
+      params: {num_levels: 4, enc_features: 32, kernel_size: 3, convolutional_steps: 1,
+               conv_hidden_channels: 64, num_transformers: 1, num_heads: 4, dim_feedforward_factor: 1,
+               dropout_rate: 0.1, learning_rate: 5.0e-4, weight_decay: 1.0e-3, warmup_epochs: 0}
 
 confirm:
   top_k: 3                    # the best completed trials, trained again at full length
@@ -64,23 +77,21 @@ space:
   num_levels: {choices: [3, 4]}
   enc_features: {choices: [16, 32, 48, 64]}
   kernel_size: {choices: [3, 5]}
-  convolutional_steps: {choices: [1, 2, 3]}
+  convolutional_steps: {choices: [1, 2]}
   conv_hidden_channels: {choices: [32, 48, 64, 96]}
   num_transformers: {int: [1, 4]}
   num_heads: {choices: [2, 4, 8]}
   dim_feedforward_factor: {choices: [1, 2, 4]}
-  dropout_rate: {uniform: [0.0, 0.3]}
-  num_forward: {choices: [0, 1, 2, 4]}
-  norm_layer: {choices: [batch, group, none]}
-  weight_standardization: {choices: [false, true], when: {norm_layer: group}, otherwise: false}
-  weight_init: {choices: [default, kaiming, xavier]}
+  dropout_rate: {uniform: [0.0, 0.2]}
   learning_rate: {loguniform: [1.0e-4, 1.0e-3]}
   weight_decay: {loguniform: [1.0e-5, 1.0e-2]}
   warmup_epochs: {int: [0, 3]}
 
 # Everything not searched, identical for every run: the EXP-0012 recipe. causal,
-# both residual paths, zero padding, the output activation, the batch size and
-# the static loss weights are fixed on purpose (guide, "What is fixed and why").
+# both residual paths, zero padding, the output activation, the batch size, the
+# static loss weights, and (after the model-code review of 2026-10-21) the
+# normalisation, the attention look-ahead and the weight init are fixed on
+# purpose (guide, "What is fixed and why").
 training:
   seed: 1234
   scale: {min_ds: 0.0, max_ds: 25277028.0, min_ct: -1024, max_ct: 3071, min_energy: 70.0, max_energy: 270.0}
@@ -103,6 +114,10 @@ training:
   conv_residual: true
   zero_padding: true
   last_activation: false
+  norm_layer: batch             # "none" gives an all-zero output at init; "group" normalises the 1-channel output
+  weight_standardization: false
+  num_forward: 2                # v11's look-ahead; nearly a no-op (the convolutions already see 4 to 30 slices ahead)
+  weight_init: default          # with normalisation on, the init only rescales the step size (confounded with lr)
 
 # Metrics: the confirmation runs (and the trials' last epoch) at 2%/2mm; the test
 # at every criterion of test_gamma ([dose %, distance mm]).

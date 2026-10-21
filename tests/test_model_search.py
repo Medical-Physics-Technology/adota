@@ -115,3 +115,12 @@ def test_trained_count_and_top_trials():
             study.tell(trial, value)
     assert n_trained(study) == 3
     assert [t.value for t in top_trials(study, 2)] == [0.1, 0.2]
+
+
+def test_schedule_from_config_with_legacy_fallback():
+    from scripts.model_hpo_training import LEGACY_LR_SCHEDULE, lr_schedule
+
+    assert lr_schedule({}, "search") == LEGACY_LR_SCHEDULE == "cosine_per_cycle"   # run frozen before the key
+    cfg = {"lr_schedule": "warmup_cosine", "confirm": {"lr_schedule": "constant"}}
+    assert lr_schedule(cfg, "search") == "warmup_cosine"
+    assert lr_schedule(cfg, "confirm") == "constant"

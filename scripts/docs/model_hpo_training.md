@@ -62,10 +62,16 @@ set F (R and V), and testing on F.
 ## The learning-rate schedule, and why
 
 Every run, trial or final, trains from scratch with a linear warmup of
-`warmup_epochs` epochs and a cosine decay of the learning rate to zero over the
-run's own epochs (`cosine_per_cycle` in
+`warmup_epochs` epochs and a cosine decay of the learning rate over the run's own
+epochs (`lr_schedule: warmup_cosine`, in
 `src.active_learning.retrospective.lr_schedule.fixed_lr`), and keeps the **last**
-checkpoint. The reasons are measured, not assumed:
+checkpoint. The rate is set once per epoch; warmup epoch `e` trains at
+`lr0 * (e + 1) / (W + 1)` and the cosine stops one step short of zero, so every
+epoch trains. (The AL loop's `cosine_per_cycle` starts its warmup and ends its
+cycle at exactly the minimum rate, which is right for a cycle that continues a
+trained model but costs a from-scratch run two epochs at a learning rate of 0. A
+run directory frozen before `lr_schedule` became a key keeps that legacy schedule
+when resumed.) The reasons for the schedule are measured, not assumed:
 
 - **A constant learning rate was unstable at the rates that win.** In the
   EXP-0014 ensemble HPO (constant rate), the training loss blew up to more than
@@ -98,6 +104,9 @@ full length.
 
 | Fixed | Why |
 |---|---|
+| `norm_layer: batch` | without normalisation and with several conv steps the output is exactly zero at initialisation (a loss of 1.0 with no gradient); `group` would apply GroupNorm to the single output channel, standardising each sample's whole dose field (`src/adota/layers/encoder_decoder.py`, last decoder block) |
+| `num_forward: 2` | v11's attention look-ahead; nearly a no-op, since the 3D convolutions already see 4 to 30 slices downstream |
+| `weight_init: default` | with normalisation after every convolution, the init only rescales the effective step size, confounded with the learning rate |
 | `causal: true` | the beam-direction prior of ADoTA: a slice attends only upstream |
 | `transformer_residual`, `conv_residual` | ablation switches; turning them off is known to hurt |
 | `zero_padding`, `last_activation` | shape plumbing and the output clamp, not capacity |
@@ -116,6 +125,14 @@ uv run python scripts/model_hpo_training.py search --config scripts/config_model
 ```
 
 `search.epochs` must exceed the largest `warmup_epochs` of the space.
+
+**Fixed trials.** `search.fixed_trials` lists configurations (a `label` and a value
+for every searched parameter) queued ahead of the sampler's own when a search
+starts; they count towards `n_trials`. The default config queues v11's
+architecture. **The parameter cap** counts all trainable parameters; most of them
+are the element-wise LayerNorm weights of the conv blocks (92% of v11's
+14.9M), so in practice the cap bounds the conv hidden width and the model size,
+not the conv or transformer capacity.
 
 ## Outputs
 

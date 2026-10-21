@@ -48,7 +48,7 @@ from src.evaluation.cli import (
     setup_run_directory,
 )
 from src.model_search.runs import RunSpec, prepare_ids, resolve_ids, scan_overlap, select_winner, train_run
-from src.model_search.space import build_candidate, validate_space
+from src.model_search.space import build_candidate, rejection, validate_space
 from src.model_search.study import (
     SearchContext,
     fail_stale_trials,
@@ -65,6 +65,10 @@ from src.training.run_dir import write_manifest
 app = typer.Typer(help="HPO, confirmation, final training and test of one ADoTA model.", add_completion=False)
 logger = logging.getLogger("model_hpo_training")
 SETS = ("search_train", "search_val", "final_train", "test")
+# A run directory frozen before the schedule became a config key trained with
+# "cosine_per_cycle" (its first warmup epoch and its last epoch at a learning rate
+# of 0); without the key, that run keeps its schedule so a resume reproduces it.
+LEGACY_LR_SCHEDULE = "cosine_per_cycle"
 STAGES = ("ids", "search", "confirm", "final", "test")
 
 
@@ -96,6 +100,12 @@ def metric_settings(cfg: Dict[str, Any], gamma_params: Optional[Dict] = None) ->
                           gamma_cutoff_percent=float(cfg["gamma_cutoff_percent"]),
                           gamma_backend=str(cfg["gamma_backend"]),
                           lps_dx_mm=float(t.get("lps_dx_mm", 2.0)), lps_dy_mm=float(t.get("lps_dy_mm", 2.0)))
+
+
+def lr_schedule(cfg: Dict[str, Any], stage: str) -> str:
+    """The schedule of ``stage`` (search, confirm, final): the stage's own
+    ``lr_schedule`` if set, else the run's, else the legacy one."""
+    return str(cfg.get(stage, {}).get("lr_schedule") or cfg.get("lr_schedule") or LEGACY_LR_SCHEDULE)
 
 
 def _ids(run: Path, name: str) -> List[str]:
@@ -154,6 +164,22 @@ def _study(run: Path, cfg: Dict[str, Any], worker: int = 0):
                       pruner_warmup_steps=int(s["pruner_warmup_steps"]))
 
 
+def _enqueue_fixed_trials(study, cfg: Dict[str, Any]) -> None:
+    """Queue the configurations of ``search.fixed_trials`` ahead of the sampler's
+    own, each checked against the space's parameters and the cap first."""
+    for entry in cfg["search"].get("fixed_trials") or []:
+        params, label = dict(entry["params"]), str(entry["label"])
+        missing = sorted(set(cfg["space"]) - set(params) - {"weight_standardization"})
+        extra = sorted(set(params) - set(cfg["space"]))
+        if missing or extra:
+            raise typer.BadParameter(f"fixed trial {label}: no value for {missing}; not in the space {extra}")
+        reason = rejection(build_candidate(base_config(cfg), params), cfg["search"].get("max_params"))
+        if reason:
+            raise typer.BadParameter(f"fixed trial {label}: {reason}")
+        study.enqueue_trial(params, user_attrs={"fixed": label})
+        logger.info("fixed trial queued: %s", label)
+
+
 def write_trials_table(run: Path, cfg: Dict[str, Any]) -> pd.DataFrame:
     frame = _study(run, cfg).trials_dataframe(attrs=("number", "value", "state", "params", "user_attrs",
                                                      "duration"))
@@ -184,6 +210,7 @@ def search(config: Annotated[Optional[Path], typer.Option(help="YAML config (new
         write_manifest(run, config=base_config(cfg), dataset_path=Path(cfg["dataset_path"]),
                        excluded_indexes_path=Path(cfg["exclude_indexes_path"]), extra={"run_config": cfg})
         _prepare(run, cfg)
+        _enqueue_fixed_trials(_study(run, cfg), cfg)
     else:
         run = Path(run_dir)
         cfg = _read_run(run)
@@ -212,7 +239,8 @@ def worker(run_dir: Annotated[Path, typer.Option()], worker: Annotated[int, type
                         epochs=int(s["epochs"]), train_ids=_ids(run, "search_train"),
                         epoch_val_ids=_ids(run, "search_val_subsample"), final_val_ids=_ids(run, "search_val"),
                         trials_dir=run / "search" / "trials", device=resolve_device(0),
-                        settings=metric_settings(cfg), target_trained=int(s["n_trials"]))
+                        settings=metric_settings(cfg), target_trained=int(s["n_trials"]),
+                        lr_schedule=lr_schedule(cfg, "search"))
     import optuna
     optuna.logging.set_verbosity(optuna.logging.INFO)
     _study(run, cfg, worker).optimize(make_objective(ctx), callbacks=[stop_at_budget(ctx.target_trained)],
@@ -266,14 +294,14 @@ def candidate(run_dir: Annotated[Path, typer.Option()], trial: Annotated[int, ty
         spec = RunSpec(label=f"confirm_trial_{trial:04d}", config=built.config, warmup_epochs=built.warmup_epochs,
                        epochs=int(cfg["confirm"]["epochs"]), train_ids=_ids(run, "search_train"),
                        epoch_val_ids=_ids(run, "search_val_subsample"), final_val_ids=_ids(run, "search_val"),
-                       final_metrics=True)
+                       final_metrics=True, lr_schedule=lr_schedule(cfg, "confirm"))
     elif stage == "final":
         out = run / "final"
         # No held-out records: the per-epoch loss is on a subsample of the training
         # records (in-sample, for monitoring only); nothing is selected on it.
         spec = RunSpec(label=f"final_trial_{trial:04d}", config=built.config, warmup_epochs=built.warmup_epochs,
                        epochs=int(cfg["final"]["epochs"]), train_ids=_ids(run, "final_train"),
-                       epoch_val_ids=_ids(run, "final_train_monitor"))
+                       epoch_val_ids=_ids(run, "final_train_monitor"), lr_schedule=lr_schedule(cfg, "final"))
     else:
         raise typer.BadParameter(f"unknown stage {stage!r}")
     out.mkdir(parents=True, exist_ok=True)

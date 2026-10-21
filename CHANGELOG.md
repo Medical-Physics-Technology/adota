@@ -33,6 +33,12 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   `on_epoch(epoch, record)` callback, called after each epoch is logged and
   checkpointed; existing callers are unchanged.
 - Dependency: `optuna>=4,<5`.
+- `src.active_learning.retrospective.lr_schedule.fixed_lr` gains the
+  `"warmup_cosine"` schedule for runs that start from scratch: warmup epoch `e`
+  of `W` at `lr0 * (e + 1) / (W + 1)` and a cosine that ends above `lr_min`, so
+  no epoch trains at a learning rate of 0. `"cosine_per_cycle"` is unchanged.
+  `model_hpo_training.py` reads `lr_schedule` from its config (per stage
+  optionally) and defaults to `"cosine_per_cycle"` for runs frozen without it.
 - **`src/pencil_beam/`**: the DoseCUDA proton pencil beam, commissioned against MCsquare.
   `kernels.load_dose_kernels` (the compiled extension, loaded by path);
   `rlsp.hu_to_rlsp_table` / `write_rlsp_csv` (HU -> RLSP from MCsquare's scanner and Geant4

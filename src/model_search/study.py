@@ -86,6 +86,7 @@ class SearchContext:
     device: torch.device
     settings: MetricSettings
     target_trained: int
+    lr_schedule: str = "warmup_cosine"
 
 
 def make_objective(ctx: SearchContext):
@@ -125,7 +126,8 @@ def make_objective(ctx: SearchContext):
 
         spec = RunSpec(label=f"trial_{trial.number:04d}", config=candidate.config,
                        warmup_epochs=candidate.warmup_epochs, epochs=ctx.epochs, train_ids=ctx.train_ids,
-                       epoch_val_ids=ctx.epoch_val_ids, final_val_ids=ctx.final_val_ids)
+                       epoch_val_ids=ctx.epoch_val_ids, final_val_ids=ctx.final_val_ids,
+                       lr_schedule=ctx.lr_schedule)
         try:
             result = train_run(spec, out, ctx.device, ctx.settings, on_epoch=on_epoch)
         except optuna.TrialPruned:

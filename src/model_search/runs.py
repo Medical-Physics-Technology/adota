@@ -2,9 +2,10 @@
 
 A run is one cycle of the retrospective trainer
 (:func:`src.active_learning.retrospective.trainer.train_cycle`): fresh weights,
-a linear warmup and a cosine decay of the learning rate to zero over the run's
-own epochs (``cosine_per_cycle``), the loss on ``epoch_val_ids`` after every
-epoch, and the last checkpoint kept. Nothing here is a new training loop.
+a linear warmup and a cosine decay of the learning rate over the run's own
+epochs (``warmup_cosine``, in which every epoch trains; see
+:func:`src.active_learning.retrospective.lr_schedule.fixed_lr`), the loss on
+``epoch_val_ids`` after every epoch, and the last checkpoint kept. Nothing here is a new training loop.
 """
 from __future__ import annotations
 
@@ -100,6 +101,8 @@ class RunSpec:
     """When set, the last checkpoint's loss on these records is the run's objective."""
     final_metrics: bool = False
     """Also the gamma pass rate and the other metrics on ``final_val_ids``."""
+    lr_schedule: str = "warmup_cosine"
+    """A fixed schedule of :mod:`src.active_learning.retrospective.lr_schedule`."""
 
 
 def train_run(spec: RunSpec, out_dir: Path, device: torch.device, settings: MetricSettings,
@@ -109,7 +112,7 @@ def train_run(spec: RunSpec, out_dir: Path, device: torch.device, settings: Metr
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     save_resolved_config(spec.config, out_dir / "config.yaml")
-    state = build_train_state(spec.config, device, lr_schedule="cosine_per_cycle", lr_min=0.0,
+    state = build_train_state(spec.config, device, lr_schedule=spec.lr_schedule, lr_min=0.0,
                               warmup_epochs=spec.warmup_epochs)
     loaders: List[Any] = []
     try:
@@ -123,6 +126,7 @@ def train_run(spec: RunSpec, out_dir: Path, device: torch.device, settings: Metr
                               checkpoint_dir=out_dir / "checkpoints", checkpoint_every=10 ** 9,
                               on_epoch=on_epoch)
         result: Dict[str, Any] = {"label": spec.label, "epochs": spec.epochs, "warmup_epochs": spec.warmup_epochs,
+                                  "lr_schedule": spec.lr_schedule,
                                   "n_train": len(spec.train_ids), "n_epoch_val": len(spec.epoch_val_ids),
                                   "summary": summary}
         if spec.final_val_ids:
