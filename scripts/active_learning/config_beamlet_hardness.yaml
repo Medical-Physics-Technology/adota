@@ -32,7 +32,7 @@ tables_dir: null              # a previous run's tables/ to skip the tables stag
 stages: [tables, analyse, examples, report]
 
 device_index: 0
-device_indices: [0, 1, 2]   # table B scoring is sharded over these GPUs
+device_indices: null          # e.g. [0, 1, 2] to shard table B over several GPUs; null: device_index only
 feature_workers: 16
 block_batch_size: 16
 block_num_workers: 6
