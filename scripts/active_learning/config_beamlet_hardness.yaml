@@ -1,0 +1,100 @@
+# What makes a beamlet hard, per dose engine (scripts/active_learning/beamlet_hardness.py)
+# =========================================================================================
+#   uv run python scripts/active_learning/beamlet_hardness.py \
+#       --config scripts/active_learning/config_beamlet_hardness.yaml --device-index 0
+#
+# EXP-0014, the C1 test in small: which input-only physics metrics of the
+# difficulty score are associated with every engine's error (the consensus),
+# which only with the U-Net's or the pencil beam's (their residuals). Table A is
+# the 3,000 HPO validation beamlets with the six finalists' existing errors;
+# table B the 11,531 engine-comparison beamlets, where every neural engine is run
+# on the saved inputs and the pencil beam and the published ADoTA are read from
+# their saved doses, all scored on the 2 mm grid by one metric function.
+# No Monte Carlo, no training. The frozen test scans (role F) are not touched:
+# table A is the HPO validation split of R, table B the leakage-safe tail of
+# the collections (checked against the training HDF5's scan grids).
+#
+# To rerun on retrained members: replace the `trial` entries by
+# `checkpoint` + `model_config` (+ `errors_csv` for table A if it exists).
+experiment: EXP-0014
+stage: beamlet_hardness
+hpo_dir: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308
+output_dir: null              # -> <hpo_dir>/analysis
+
+dataset_path: /scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5
+index_csv: null               # -> <dataset stem>_index.csv
+records_csv: /scratch/mstryja/adota_runs/exp0014/partition/records.csv   # anatomy per record
+record_ids: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/ids/val_ids.csv
+training_ids: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/ids/train_ids.csv
+comparison_csv: /scratch/mstryja/pencil_beam/engine_comparison/energy_gantry_full/all_beamlets.csv
+comparison_file_prefixes: {PBA: pba, ADoTA-v11: adota}   # the file's own 1 mm errors, kept as a cross-check
+tables_dir: null              # a previous run's tables/ to skip the tables stage
+stages: [tables, analyse, examples, report]
+
+device_index: 0
+device_indices: [0, 1, 2]   # table B scoring is sharded over these GPUs
+feature_workers: 16
+block_batch_size: 16
+block_num_workers: 6
+
+# The engines. `consensus: true` marks the members whose mean within-cell error
+# rank is "hard for everyone" (C1 is left out: it stopped at 9 epochs).
+engines:
+  - {label: C0, trial: transformer_021, family: transformer, consensus: true}
+  - {label: C1, trial: transformer_016, family: transformer, note: "9 epochs only"}
+  - {label: T012, trial: transformer_012, family: transformer}
+  - {label: X0, trial: mlstm_004, family: mlstm, consensus: true}
+  - {label: U0, trial: none_029, family: none, consensus: true}
+  - {label: N017, trial: none_017, family: none}
+  - {label: PBA, saved_dose: _ds_pba, family: pencil_beam, note: "DoseCUDA, model hptc_rsnone_mcsquare_v1"}
+  - {label: ADoTA-v11, saved_dose: _ds_pred, family: published, note: "published model, saved prediction"}
+residuals: [U0, PBA, ADoTA-v11]    # engines whose rank minus the consensus is fitted
+
+# The finalists' criteria (they also name the finalist CSVs).
+gamma_params:
+  dose_percent_threshold: 2
+  distance_mm_threshold: 2
+  interp_fraction: 10
+  max_gamma: 2
+  lower_percent_dose_cutoff: 10
+  random_subset: null
+  local_gamma: false
+  quiet: true
+gamma_resolution_mm: [2.0, 2.0, 2.0]
+gamma_cutoff_percent: 10.0
+gamma_backend: torch
+
+metrics: [gamma_fail, rde_pct, mape_pct, abs_dr80_mm]
+primary_metric: gamma_fail
+min_cell_size: 10             # the agreement analysis's cells
+n_bootstrap: 2000
+n_bootstrap_coef: 500
+n_perm_repeats: 5
+seed: 20261023
+ci: 0.95
+
+# The deployed score's population: analytic peak inside the 320 mm crop, and no
+# energy above MCsquare's 250 MeV nuclear-data limit. `all` refits the
+# consensus and residuals on every beamlet as a sensitivity check.
+population: inside_crop
+sensitivity_populations: [all]
+max_energy_mev: 250
+energy_terciles: [[70, 110], [110, 152], [152, 270]]
+
+# Metrics closer than this in 1 - |within-cell Spearman| share a cluster
+# (average linkage): a cluster is a set of near duplicates, |rho| >= 0.7 on
+# average. Fixed on the metric correlations of a smoke run, where 0.5 merged
+# fourteen metrics (edges, interfaces, lateral HU variance) down to |rho| 0.41.
+cluster_threshold: 0.3
+cluster_method: average
+
+agreement_check: {pair: [C0, X0], metric: gamma_fail, expected: 0.82, tolerance: 0.01}
+
+slide:
+  top: 8
+  bars:
+    - {table: A, target: consensus, label: "Hard for every engine (consensus, table A)"}
+    - {table: A, target: U0 residual, label: "Specific to the U-Net (U0 residual, table A)"}
+    - {table: B, target: PBA residual, label: "Specific to the pencil beam (PBA residual, table B)"}
+
+examples: {table: A, n: 3, n_clusters: 2, engines: [C0, X0, U0], cell: null}

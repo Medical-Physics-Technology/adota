@@ -53,16 +53,19 @@ def read_stored_record(group: h5py.Group, sample_id: str, scale: Dict[str, float
 
 
 def record_features(record: StoredRecord, mode: str, config: FeatureConfig = FeatureConfig(),
-                    ) -> Optional[Dict[str, float]]:
+                    max_energy_mev: Optional[float] = 250.0) -> Optional[Dict[str, float]]:
     """The thirty metrics of a stored record, located by the ground truth
     (``mode="gt"``) or by the analytic surrogate (``mode="analytic"``).
 
     In both modes the 30x30 lateral crop is centred where that dose peaks, as the
     training loader does, so the two modes differ in exactly one input: which
     dose located the peak and weighted the edges. Returns ``None`` for the
-    records the reference run skipped (no flux, or energy above 250 MeV).
+    records the reference run skipped: no flux, or an energy above
+    ``max_energy_mev`` (250 MeV, the reference run's cut; ``None`` keeps every
+    energy, beyond the 244 MeV end of the vendored energy-spread table).
     """
-    if record.energy_mev > 250.0 or not np.any(record.flux):
+    too_high = max_energy_mev is not None and record.energy_mev > max_energy_mev
+    if too_high or not np.any(record.flux):
         return None
     dz_mm = float(config.resolution_mm[0])
     if mode == "gt":
