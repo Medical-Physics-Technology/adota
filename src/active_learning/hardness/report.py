@@ -116,26 +116,40 @@ def _direction(res: Path, table: str, metric: str, target: str, cluster_name: st
 
 def sentence(res: Path, table: str, metric: str, target: str, clusters: MetricClusters, opening: str,
              max_clusters: int = 2) -> str:
-    """One of the three sentences: the target's leading clusters (importance
-    interval above zero), each with its direction and univariate Spearman, then
-    the out-of-fold Spearman of the whole score."""
+    """One of the three sentences: the target's leading clusters, each with its
+    direction and univariate Spearman, then the out-of-fold Spearman of the
+    whole score.
+
+    A cluster leads only when both its importance interval and its own
+    within-cell Spearman interval exclude zero, in importance order. Importance
+    alone is not enough: a cluster that matters in opposite directions for
+    different engines (peak depth for the U-Net against the attention models)
+    can help the multivariate fit while its own association with the target is
+    nil, and naming it would misstate what is hard.
+    """
     imp = _importance(res, table, metric, target)
     ev = _evaluation(res, table, metric, target)
     if imp.empty or ev is None:
         return f"{opening} ... (no result for {target} on table {table})."
-    lead = imp[imp["ci_lo"] > 0].head(max_clusters)
-    if lead.empty:
-        lead = imp.head(1)
-    parts = []
-    for row in lead.itertuples():
-        medoid = clusters.medoid[int(row.cluster)]
+    rows = []
+    for row in imp[imp["ci_lo"] > 0].itertuples():
         direction, uni = _direction(res, table, metric, target, row.cluster_name)
-        size = len(clusters.members(int(row.cluster)))
+        if uni["ci_lo"] > 0 or uni["ci_hi"] < 0:
+            rows.append((row, direction, uni))
+    weak = ""
+    if not rows:
+        row = imp.iloc[0]
+        rows = [(row, *_direction(res, table, metric, target, row["cluster_name"]))]
+        weak = " (no cluster is both important and individually associated; the leading one is shown)"
+    parts = []
+    for row, direction, uni in rows[:max_clusters]:
+        row = pd.Series(row._asdict()) if hasattr(row, "_asdict") else row
+        medoid = clusters.medoid[int(row["cluster"])]
+        size = len(clusters.members(int(row["cluster"])))
         family = f" and {size - 1} correlated metrics" if size > 1 else ""
         parts.append(f"the {METRIC_TEXT.get(medoid, medoid)} is {direction} ({medoid}{family}; within-cell "
                      f"Spearman {_fmt(uni['median_cell_spearman'], uni['ci_lo'], uni['ci_hi'])}, importance "
-                     f"{_fmt(row.importance, row.ci_lo, row.ci_hi, 3)})")
-    weak = "" if (imp["ci_lo"] > 0).any() else " (no cluster's importance interval excludes zero)"
+                     f"{_fmt(row['importance'], row['ci_lo'], row['ci_hi'], 3)})")
     return (f"{opening} " + "; and when ".join(parts) + f"{weak}. The thirty-metric score fitted to it reaches an "
             f"out-of-fold within-cell Spearman of {_fmt(ev['median_cell_spearman'], ev['ci_lo'], ev['ci_hi'])} "
             f"(table {table}, {int(ev['n_records'])} beamlets, {int(ev['n_scans'])} scans).")
