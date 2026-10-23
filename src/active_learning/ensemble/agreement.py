@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import itertools
 import logging
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -153,6 +153,22 @@ def _level_means(values: np.ndarray, levels: np.ndarray, names: Sequence[str]) -
         return {name: float(np.nanmean(values[levels == name])) for name in names}
 
 
+def scan_resamples(cell_scans: Sequence[str], n_boot: int, seed: int) -> Iterator[np.ndarray]:
+    """``n_boot`` bootstrap draws over scans, as row indices into the cells.
+
+    Scans are drawn with replacement and every drawn scan brings all of its
+    cells, as often as it was drawn. The one resampling scheme behind every
+    interval of the agreement and hardness analyses, so one seed gives one
+    sequence of draws everywhere.
+    """
+    scans, scan_of_cell = np.unique(np.asarray(cell_scans), return_inverse=True)
+    rng = np.random.default_rng(seed)
+    cells = np.arange(len(scan_of_cell))
+    for _ in range(n_boot):
+        counts = np.bincount(rng.integers(0, len(scans), len(scans)), minlength=len(scans))
+        yield np.repeat(cells, counts[scan_of_cell])
+
+
 def scan_bootstrap(corr: np.ndarray, cell_scans: Sequence[str], levels: Sequence[str],
                    n_boot: int, seed: int, ci: float = 0.95) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Resample scans with replacement; every drawn scan brings all its cells.
@@ -161,16 +177,13 @@ def scan_bootstrap(corr: np.ndarray, cell_scans: Sequence[str], levels: Sequence
     level the mean over its pairs with an interval, plus the contrast
     ``data - seed_only`` when both levels are present.
     """
-    scans, scan_of_cell = np.unique(np.asarray(cell_scans), return_inverse=True)
+    scans = np.unique(np.asarray(cell_scans))
     levels = np.asarray(levels)
     names = [n for n in (LEVEL_SEED, LEVEL_DATA, LEVEL_UNKNOWN) if (levels == n).any()]
-    rng = np.random.default_rng(seed)
     pair_draws = np.empty((n_boot, corr.shape[1]))
     level_draws: Dict[str, List[float]] = {n: [] for n in names}
     contrast: List[float] = []
-    for i in range(n_boot):
-        counts = np.bincount(rng.integers(0, len(scans), len(scans)), minlength=len(scans))
-        rows = np.repeat(np.arange(corr.shape[0]), counts[scan_of_cell])
+    for i, rows in enumerate(scan_resamples(cell_scans, n_boot, seed)):
         with np.errstate(all="ignore"):
             pair_draws[i] = np.nanmedian(corr[rows], axis=0) if rows.size else np.nan
         means = _level_means(pair_draws[i], levels, names)

@@ -76,6 +76,8 @@ select = ["E", "F", "I"]
 # Pins BLAS to one thread before numpy loads, so its feature-extraction process
 # pool does not oversubscribe the cores.
 "scripts/analysis/acquisition_input_only_features.py" = ["E402"]
+# Same reason: the metrics of both hardness tables are computed in a process pool.
+"scripts/active_learning/beamlet_hardness.py" = ["E402"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

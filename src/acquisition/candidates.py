@@ -80,9 +80,30 @@ def extract_candidate_voi(geom: FieldGeometry, candidate: BeamletCandidate, bdl:
     re_proj = [float(entrance[1]), float(entrance[2]), float(entrance[0])]
     flux = flux_projection(re_proj, beamlet_angles, sigmas, cropped_ct.shape,
                            spacing=np.asarray([1, 1, 1], dtype=np.float32))
-    x, _ = prepare_input_from_arrays(cropped_ct, flux, candidate.energy_mev, scale=dict(scale))
+    return model_grid_inputs(cropped_ct, flux, candidate.energy_mev, scale)
+
+
+def model_grid_inputs(cropped_ct: np.ndarray, flux: np.ndarray, energy_mev: float,
+                      scale: Mapping[str, float] = DEFAULT_SCALE) -> Tuple[np.ndarray, np.ndarray]:
+    """A beam's-eye CT crop (HU) and its flux on the 1 mm extraction grid, as the
+    CT (HU) and normalised flux of the ``(D, H, W)`` 2 mm model grid.
+
+    The arrays are those the generator writes as ``{id}_ct.npy`` and
+    ``{id}_flux.npy``, so a saved beamlet and a candidate go through one path.
+    """
+    x, _ = prepare_input_from_arrays(cropped_ct, flux, energy_mev, scale=dict(scale))
     ct_hu = inverse_minmax(x[0].numpy(), scale["min_ct"], scale["max_ct"])
     return ct_hu, x[1].numpy()
+
+
+def analytic_features(ct_hu: np.ndarray, flux: np.ndarray, energy_mev: float,
+                      feature_config: FeatureConfig = FeatureConfig()) -> Tuple[Dict[str, float], bool]:
+    """The thirty metrics on the model grid, located by the analytic dose, and
+    whether that dose peaks inside the crop (the score's validity gate)."""
+    dz_mm = float(feature_config.resolution_mm[0])
+    dose = analytic_dose(ct_hu, flux, energy_mev, dz_mm)
+    features = compute_features(ct_hu, flux, energy_mev, dose, feature_config)
+    return features, bool(peak_inside_crop(features, MODEL_DEPTH_VOXELS, dz_mm))
 
 
 def _group_by_gantry(candidates: Iterable[BeamletCandidate]) -> Dict[float, List[BeamletCandidate]]:
@@ -120,7 +141,6 @@ def score_candidates(
         NaN metrics and scores.
     """
     ct = image if prepared else prepare_ct(image, config.iso_spacing_mm)
-    dz_mm = float(feature_config.resolution_mm[0])
     order = {id(c): i for i, c in enumerate(candidates)}
     rows: List[Dict] = []
     for gantry, group in _group_by_gantry(candidates).items():
@@ -133,10 +153,7 @@ def score_candidates(
                 row.update(valid=False, reason="roi_out_of_bounds")
                 rows.append(row)
                 continue
-            ct_hu, flux = voi
-            dose = analytic_dose(ct_hu, flux, candidate.energy_mev, dz_mm)
-            features = compute_features(ct_hu, flux, candidate.energy_mev, dose, feature_config)
-            inside = peak_inside_crop(features, MODEL_DEPTH_VOXELS, dz_mm)
+            features, inside = analytic_features(*voi, candidate.energy_mev, feature_config)
             row.update(features)
             row.update(valid=inside, reason="" if inside else "peak_outside_crop")
             for name, scorer in scorers.items():
