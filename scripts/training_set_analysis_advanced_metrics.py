@@ -73,7 +73,7 @@ from src.schemas.configs import AdvancedAnalysisConfig as AnalysisConfig
 from src.schemas.results import SampleRecord
 from src.utils.dose_grid_utils import estimate_bp_range
 from src.utils.scallers import inverse_minmax
-from src.utils.unit_conversions import to_gy
+from src.utils.unit_conversions import legacy_to_gy_per_1e6_protons
 
 PROJECT_ROOT = Path(__file__).parent.parent
 logger = logging.getLogger(__name__)
@@ -331,7 +331,8 @@ def _make_per_sample_fn(
 
         # ── Model-accuracy metrics (single inference, from the engine) ──
         # RDE from the de-normalised physical-unit doses.
-        record.rde = calculate_relative_dose_error(to_gy(pred_dose), to_gy(gt_dose))
+        record.rde = calculate_relative_dose_error(
+            legacy_to_gy_per_1e6_protons(pred_dose), legacy_to_gy_per_1e6_protons(gt_dose))
 
         # GPR from the normalised tensors still on-device (matches run_model.py).
         scale = config.scale

@@ -69,7 +69,7 @@ from src.schemas.configs import EvaluationConfig, MetricsConfig
 from src.schemas.results import SampleResult
 from src.tables.results import print_results_table
 from src.utils.scallers import inverse_minmax
-from src.utils.unit_conversions import to_gy
+from src.utils.unit_conversions import legacy_to_gy_per_1e6_protons
 
 PROJECT_ROOT = Path(__file__).parent.parent
 logger = logging.getLogger(__name__)
@@ -302,10 +302,10 @@ def evaluate_single_sample(
     )
 
     # Model performance metrics
-    rmse = calculate_rmse(to_gy(y_pred_np), to_gy(y_np))
+    rmse = calculate_rmse(legacy_to_gy_per_1e6_protons(y_pred_np), legacy_to_gy_per_1e6_protons(y_np))
     mask_mape = y_pred_np > 0.1 * np.max(y_pred_np)
     mape = calculate_pure_mape(y_np[mask_mape], y_pred_np[mask_mape])
-    rde = calculate_relative_dose_error(to_gy(y_pred_np), to_gy(y_np))
+    rde = calculate_relative_dose_error(legacy_to_gy_per_1e6_protons(y_pred_np), legacy_to_gy_per_1e6_protons(y_np))
 
     scale_gpr = {"y_min": scale["min_ds"], "y_max": scale["max_ds"]}
     gpr_result = gamma_index_torch(
@@ -838,7 +838,7 @@ def generate_publication_figures(
         )
 
         # Calculate metrics
-        rmse = calculate_rmse(to_gy(pred), to_gy(gt))
+        rmse = calculate_rmse(legacy_to_gy_per_1e6_protons(pred), legacy_to_gy_per_1e6_protons(gt))
         mask = gt > 0.1 * np.max(gt)
         mape = calculate_pure_mape(pred[mask], gt[mask])
 

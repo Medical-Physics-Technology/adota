@@ -65,7 +65,7 @@ def plot_bp_estimation_diagnostic(
         method_colors: Optional colour overrides per method name.
     """
     from src.utils.dose_grid_utils import estimate_bragg_peak
-    from src.utils.unit_conversions import to_gy
+    from src.utils.unit_conversions import legacy_to_gy_per_1e6_protons
 
     D, H, W = ct_hu.shape
 
@@ -73,7 +73,7 @@ def plot_bp_estimation_diagnostic(
     bp_d, bp_y, bp_x = estimate_bragg_peak(gt_dose)
 
     # ── Dose in Gy for display ──────────────────────────────────────────
-    dose_gy = to_gy(gt_dose)
+    dose_gy = legacy_to_gy_per_1e6_protons(gt_dose)
     dose_max = dose_gy.max()
     if dose_max < 1e-15:
         dose_max = 1.0

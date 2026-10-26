@@ -56,7 +56,7 @@ from src.schemas.configs import RunRef, ValidationExperimentConfig
 from src.tables.results import render_comparison_table
 from src.training.data import collate_h5, load_record_ids, train_val_split
 from src.training.losses import LMSE
-from src.utils.unit_conversions import to_gy
+from src.utils.unit_conversions import legacy_to_gy_per_1e6_protons
 
 logger = logging.getLogger(__name__)
 app = typer.Typer(help="ADoTA cross-run validation experiment (inference only).")
@@ -287,8 +287,8 @@ def compute_sample_metrics(
     mape = (
         float(calculate_pure_mape(y_np[mask], y_pred_np[mask])) if mask.any() else 0.0
     )
-    y_gt_gy = to_gy(y_np)
-    y_pred_gy = to_gy(y_pred_np)
+    y_gt_gy = legacy_to_gy_per_1e6_protons(y_np)
+    y_pred_gy = legacy_to_gy_per_1e6_protons(y_pred_np)
     rmse = float(calculate_rmse(y_pred_gy, y_gt_gy))
     rde = float(calculate_relative_dose_error(y_pred_gy, y_gt_gy))
 

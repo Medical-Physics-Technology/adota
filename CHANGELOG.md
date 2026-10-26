@@ -15,6 +15,60 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 
 ### Added
 
+- **DoseCUDA source and citation**: `docs/pencil_beam.md` gains a "Source, version,
+  licence and citation" section (the repository, the pinned commit `0d4db1f4f736`,
+  GPL-2.0, and the citation the DoseCUDA authors ask for, Bhattacharya et al., J Appl
+  Clin Med Phys 2025, doi:10.1002/acm2.70093, with BibTeX); the three pencil-beam
+  guides, both READMEs, `src/pencil_beam/__init__.py` and `provision_dosecuda.sh`
+  link the repository and give the citation.
+- **`src/pencil_beam/`**: the DoseCUDA proton pencil beam, commissioned against MCsquare.
+  `kernels.load_dose_kernels` (the compiled extension, loaded by path);
+  `rlsp.hu_to_rlsp_table` / `write_rlsp_csv` (HU -> RLSP from MCsquare's scanner and Geant4
+  stopping powers); `beam_model.PencilBeamModel` (DoseCUDA lookup-table layout, `read` / `write`,
+  `at_energy` range-scaled interpolation, `kernel_model`), `read_rlsp_curve`, `hu_to_rlsp`;
+  `commissioning.CommissioningConfig`, `commissioning_phantom`, `run_commissioning_beamlets`,
+  `depth_profile`, `kernel_halo`, `fit_primary_sigma`, `kernel_sigma_profile`, `distal_r80`,
+  `physical_to_wet`, `fit_energy_node`, `fit_model`; `pipeline.fit_from_runs`, `validate_water`,
+  `provenance`, `write_rows_csv`; `model_card.write_model_card` (the `README.md` of a commissioned
+  model: beam, units, usage, measured accuracy); `engine.PencilBeamEngine`, `mc_frame_to_dosecuda`;
+  `metrics.criteria_from_config`, `dose_bbox`, `gamma_pass_rates`, `dose_agreement`;
+  `comparison.ComparisonSettings`, `compare_block`, `summarize`.
+- **`src/figures/pencil_beam.py`**: `commissioning_run_figure`, `commissioning_summary_figure`,
+  `engine_comparison_figure` (N engines over one CT crop, differences, IDD and lateral profiles).
+- **`scripts/pencil_beam/commission_dosecuda.py`** (stages `rlsp,simulate,fit,validate`),
+  **`scripts/pencil_beam/compare_engines.py`** (MC vs pencil beam vs ADoTA on one CT grid), and
+  **`scripts/pencil_beam/provision_dosecuda.sh`** (builds the kernels for adota's Python into
+  `/home/mstryja/tools/dosecuda`). New output formats: the commissioned model directory,
+  `water_validation.csv`, `engine_comparison.csv`, and the per-beamlet `_engines.npz`
+  (see `scripts/docs/compare_engines.md`).
+- **`src/pencil_beam/saved_beamlets.py`** (`survey_dirs`, `SourceDir`, `mirror_inputs`,
+  `field_windows`, `compute_field_pba`, `write_missing_predictions`, `save_new_file`, `save_new_npy`,
+  `check_or_write_provenance`, `load_triplet`, `score_beamlet`, `rank_beamlets`) and
+  **`scripts/pencil_beam/score_saved_beamlets.py`**: the pencil beam and ADoTA on saved MC beamlet
+  grids, scored with the saved MC and ADoTA and ranked by gamma. New per-beamlet output
+  `{id}_ds_pba.npy` (pencil-beam dose in the `_ds.npy` crop layout), added to the source
+  directory by exclusive creation: existing files are never modified. Also added per directory:
+  `pba_provenance.json` (model fingerprint, kernel build, commit; a different model is refused) and,
+  only where predictions were missing, `{id}_ds_pred.npy` + `adota_provenance.json`.
+  `src.pencil_beam.beam_model.model_fingerprint` identifies a model by its tables. `--dry-run`.
+- **Pencil-beam model `dose_unit`** (`gy_mm2_per_mu` default, `mcsquare_per_weight_1000` for `_v1`):
+  `CommissioningConfig.dose_unit`, `commissioning.idd_unit_factor`, `PencilBeamModel.protons_per_mu`
+  (an extra `energies.csv` column; per-proton energy interpolation), `PencilBeamEngine.dose_unit` /
+  `mcsquare_spot_weight(E)` (the default spot weight: MCsquare's scale for every model unit).
+  `engine_comparison_figure(..., dose_scale, dose_unit)` replaces its internal unit conversion.
+  Model `hptc_rsnone_mcsquare_v2` (Gy mm^2 per MU) is the new default; `_v1` is unchanged.
+  `score_saved_beamlets.py` writes `run_config.json` once and appends every invocation to
+  `invocations.jsonl`; validation `results_subdir`. `PencilBeamEngine.prepare_field`
+  / `dose_in_window` / `PreparedField`: one ray trace per field, dose per beamlet window.
+- **`src.mc_generation.mcsquare_runner.MCSQUARE_NUCLEAR_DATA_MAX_MEV`** (250 MeV, the end of
+  MCsquare's ICRU nuclear tables): `MCSquareRunner.run_beamlet` / `run_beamlet_field` now log a
+  warning above it, where MCsquare's nuclear physics reads past the tables (undefined, and a
+  segmentation fault from ~259 MeV). `src.pencil_beam.commissioning.check_energies_simulable`
+  refuses such energies in the commissioning and the engine comparison.
+- **`src.mc_generation.robustness.process_beamlet`**: the per-beamlet crop / QA / save step is
+  public, so the engine comparison writes ADoTA's input exactly as the dataset does. The old
+  private name `_process_beamlet` remains as an alias.
+
 - **`src/datasets/beamlet_record.py`**: the pinned per-record recipe for v3 builds.
   Exports `load_raw_record` (load and parse), `flux_inputs` and `flux_batch` (flux
   projection), `downsample_grid` (average, linear, or trilinear), `preprocess_ct_dose`
@@ -160,6 +214,33 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   pipeline in minutes. Guide: `scripts/docs/al_loop.md`.
 - `src.evaluation.sources.MultiDirSource`: a `DirSource` spanning several
   directories, which is what any set assembled across patients looks like.
+
+### Fixed
+
+- **Beamlet dose unit.** MCsquare writes eV/g per simulated proton, and
+  `src.utils.unit_conversions.to_gy` (x 1.60218e-10, documented as MeV/g) therefore
+  returned the dose of exactly 1e6 protons, not Gy.
+  - New: `mcsquare_to_gy_per_mu(dose, energy, bdl)` gives Gy per MU, with MCsquare's
+    own protons per MU (`mcsquare_protons_per_mu`: linear, and extrapolated beyond the
+    BDL nodes as MCsquare does). Also `mcsquare_to_gy_per_proton` and `EV_PER_G_TO_GY`.
+  - The old factor is kept as `legacy_to_gy_per_1e6_protons`, which **every existing
+    caller (14 files) now names explicitly**, so the RMSE values reported as `rmse_gy` and
+    every earlier figure reproduce unchanged. `to_gy` remains a deprecated alias that
+    warns.
+  - The pencil-beam figures now show Gy per MU. See `docs/dose_units.md`.
+- **No MCsquare data above 250 MeV.**
+  - `MCSquareRunner` now *refuses* beamlets above
+    `MCSQUARE_NUCLEAR_DATA_MAX_MEV` (it warned), and so do `RobustnessConfig` (every
+    MC generator) and the active-learning `CandidateConfig`, via
+    `src.mc_generation.mcsquare_runner.check_energies_simulable` (moved there from
+    `src.pencil_beam.commissioning`, which re-exports it).
+  - New `src.datasets.energy_cut` (`drop_above_energy`, `record_energies_mev`).
+    Training (`load_record_ids(..., max_energy_mev)`, `TrainingConfig.max_energy_mev`
+    = 250), retrospective active-learning split draws (`max_energy_mev` = 250) and
+    `run_model_h5py` (`max_energy_mev` = 250) drop records above 250 MeV by id: 853 of
+    the v3 file's 70,146.
+  - Splits already frozen are not touched; `max_energy_mev: null` reproduces earlier
+    runs.
 
 ### Fixed
 

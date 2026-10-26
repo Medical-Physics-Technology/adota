@@ -205,7 +205,7 @@ def main(
     )
 
     log_phase("INIT", f"Dataset   : {dataset_path.name}")
-    record_ids = load_record_ids(dataset_path, excluded_path)
+    record_ids = load_record_ids(dataset_path, excluded_path, cfg.max_energy_mev, cfg.scale)
     n_total_after_exclusion = len(record_ids)
     if max_records is not None and max_records < len(record_ids):
         rng = np.random.RandomState(cfg.seed)
@@ -236,7 +236,7 @@ def main(
         config=cfg,
         dataset_path=dataset_path,
         excluded_indexes_path=excluded_path,
-        extra={"n_train": len(train_ids), "n_val": len(val_ids)},
+        extra={"n_train": len(train_ids), "n_val": len(val_ids), "max_energy_mev": cfg.max_energy_mev},
     )
 
     # ── Smoke-test overrides ─────────────────────────────────────────
