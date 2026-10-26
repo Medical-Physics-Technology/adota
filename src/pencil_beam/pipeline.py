@@ -28,6 +28,7 @@ from src.pencil_beam.commissioning import (
     distal_r80,
     fit_energy_node,
     fit_model,
+    idd_unit_factor,
     kernel_sigma_profile,
     physical_to_wet,
     run_commissioning_beamlets,
@@ -58,8 +59,12 @@ def _kernel_sigma_task(task):
 
 
 def fit_from_runs(runs_dir: Path, cfg: CommissioningConfig, rlsp_water: float, rlsp_air: float,
-                  vsadx: float, vsady: float, meta: dict, n_workers: int = 8) -> "PencilBeamModel":  # noqa: F821
-    """Fit every energy node found in ``runs_dir`` (all SSDs of an energy together)."""
+                  vsadx: float, vsady: float, meta: dict, n_workers: int = 8, bdl=None) -> "PencilBeamModel":  # noqa: F821
+    """Fit every energy node found in ``runs_dir`` (all SSDs of an energy together).
+
+    ``bdl`` (the BDL the runs used) converts the IDD to ``cfg.dose_unit`` when that
+    needs protons per MU.
+    """
     groups = group_runs(runs_dir)
     if not groups:
         raise FileNotFoundError(f"no commissioning runs (e*_s*.npz) in {runs_dir}")
@@ -79,12 +84,17 @@ def fit_from_runs(runs_dir: Path, cfg: CommissioningConfig, rlsp_water: float, r
     for energy, (runs, profs, wets) in loaded.items():
         sigmas = [next(sig_iter) for _ in runs]
         node = fit_energy_node(energy, profs, wets, [s for s, _ in runs], cfg.air_front_mm,
-                               source_distance, cfg, sigmas=sigmas)
+                               source_distance, cfg, sigmas=sigmas,
+                               idd_scale=idd_unit_factor(cfg.dose_unit, energy, cfg.spot_weight, bdl))
+        if cfg.dose_unit == "gy_mm2_per_mu":
+            from src.utils.unit_conversions import mcsquare_protons_per_mu
+
+            node["protons_per_mu"] = mcsquare_protons_per_mu(energy, bdl.nominal_energy, bdl.protons_mu)
         res = node["diagnostics"]["sigma_air_fit_residual_mm"]
         logger.info("  E=%6.1f MeV: R80 %.2f mm (spread %.2f), sigma_air residual max %.3f mm", energy,
                     node["r80"], np.ptp(node["diagnostics"]["r80_per_ssd"]), float(np.max(np.abs(res))))
         nodes.append(node)
-    meta = dict(meta, rlsp_water=rlsp_water, rlsp_air=rlsp_air,
+    meta = dict(meta, dose_unit=cfg.dose_unit, rlsp_water=rlsp_water, rlsp_air=rlsp_air,
                 commissioning=dataclasses.asdict(cfg), runs_dir=str(runs_dir))
     return fit_model(nodes, vsadx, vsady, meta)
 
@@ -99,6 +109,7 @@ def validate_water(
     out_dir: Path, num_primaries: float, criteria: Sequence[GammaCriterion],
     rlsp_water: float, rlsp_air: float, gamma_backend: str = "pymedphys",
     gamma_backend_options: Optional[dict] = None, make_figures: bool = True,
+    runs_dir: Optional[Path] = None,
 ) -> List[dict]:
     """Score the commissioned pencil beam against fresh MC water beamlets.
 
@@ -108,7 +119,8 @@ def validate_water(
     out_dir = Path(out_dir)
     (out_dir / "figures").mkdir(parents=True, exist_ok=True)
     vcfg = dataclasses.replace(cfg, num_primaries=float(num_primaries))
-    paths = run_commissioning_beamlets(runner, vcfg, out_dir / "runs", energies=energies, surfaces=surfaces)
+    paths = run_commissioning_beamlets(runner, vcfg, Path(runs_dir) if runs_dir else out_dir / "runs",
+                                       energies=energies, surfaces=surfaces)
     nodes = np.asarray(engine.model.energies)
     rows = []
     for path in paths:
@@ -116,7 +128,7 @@ def validate_water(
         energy, s = float(m["e"]), float(m["s"])
         data = np.load(path)
         ct, iso = commissioning_phantom(cfg, s)
-        pb = engine.dose(ct, energy, [(0.0, 0.0)], iso, weights=[cfg.spot_weight])
+        pb = engine.dose(ct, energy, [(0.0, 0.0)], iso)             # on MCsquare's scale, any model unit
         mc = data["dose"]
         prof_mc = DepthProfile.from_dict(data)
         prof_pb = depth_profile(pb.dose, weight=cfg.spot_weight, min_slice_fraction=cfg.min_slice_fraction)
@@ -156,8 +168,9 @@ def validate_water(
                 # save_figure_as_publication_formats swaps the suffix
                 title=f"water, E = {energy:g} MeV, surface {s:g} mm before isocenter "
                       f"({'node' if row['node'] else 'interpolated'}), {num_primaries:.0e} primaries")
-            # the dose distributions themselves, MC vs PBA over the phantom, in Gy
+            # the dose distributions themselves, MC vs PBA over the phantom, in Gy per MU
             from src.figures.pencil_beam import engine_comparison_figure
+            from src.utils.unit_conversions import mcsquare_to_gy_per_mu
 
             head = criteria[0]
             engine_comparison_figure(
@@ -166,7 +179,8 @@ def validate_water(
                 title=f"water, E = {energy:g} MeV ({'node' if row['node'] else 'interpolated'}), surface {s:g} mm "
                       f"before isocenter, {num_primaries:.0e} primaries; gamma {head.dose:g}%/{head.dist:g}mm, "
                       f"{head.cutoff:g}% cutoff (global)",
-                metrics_text={"PBA": f"{head.key} = {row[f'gpr_{head.key}']:.1f}%  dR80 = {row['dr80_mm']:+.2f} mm"})
+                metrics_text={"PBA": f"{head.key} = {row[f'gpr_{head.key}']:.1f}%  dR80 = {row['dr80_mm']:+.2f} mm"},
+                dose_scale=float(mcsquare_to_gy_per_mu(1.0, energy, engine.bdl_path)), dose_unit="Gy per MU")
     return rows
 
 

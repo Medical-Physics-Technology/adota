@@ -54,6 +54,10 @@ class PencilBeamModel:
         sigmas: ``sigma_mcs`` on that grid, mm (``sigma - sigma(0.7 R80)``).
         idds: Integrated depth dose per unit spot weight on that grid.
         reference_sigma: In-air spot sigma at the isocenter, mm (DICOM export only).
+        protons_per_mu: For ``gy_mm2_per_mu`` models, MCsquare's protons per MU at each
+            node (written as an extra ``energies.csv`` column DoseCUDA ignores). Between
+            nodes the IDD is blended per proton and rescaled with these, so the energy
+            interpolation does not mix in the protons-per-MU curve.
         meta: Provenance written to ``commissioning.json``.
     """
 
@@ -67,12 +71,15 @@ class PencilBeamModel:
     idds: np.ndarray
     reference_sigma: np.ndarray
     meta: dict = field(default_factory=dict)
+    protons_per_mu: Optional[np.ndarray] = None
 
     def __post_init__(self) -> None:
         order = np.argsort(self.energies)
         for name in ("energies", "r80", "sigma_air_coef", "depths", "sigmas", "idds",
                      "reference_sigma"):
             setattr(self, name, np.asarray(getattr(self, name), dtype=float)[order])
+        if self.protons_per_mu is not None:
+            self.protons_per_mu = np.asarray(self.protons_per_mu, dtype=float)[order]
         if self.depths.shape[1] != LUT_LENGTH:
             raise ValueError(f"depth grid must have {LUT_LENGTH} points, got {self.depths.shape[1]}")
 
@@ -112,12 +119,20 @@ class PencilBeamModel:
             b = np.interp(depths / r80 * self.r80[hi], self.depths[hi], table[hi])
             return (1 - w) * a + w * b
 
+        ppm = None
+        if self.protons_per_mu is not None:
+            # blend per proton, then back to per MU: MCsquare's protons/MU is linear between nodes
+            ppm = (1 - w) * self.protons_per_mu[lo] + w * self.protons_per_mu[hi]
+            idds = blend(self.idds / self.protons_per_mu[:, None]) * ppm
+        else:
+            idds = blend(self.idds)
         return PencilBeamModel(
             vsadx=self.vsadx, vsady=self.vsady, energies=np.array([energy]), r80=np.array([r80]),
             sigma_air_coef=((1 - w) * self.sigma_air_coef[lo] + w * self.sigma_air_coef[hi])[None],
-            depths=depths[None], sigmas=blend(self.sigmas)[None], idds=blend(self.idds)[None],
+            depths=depths[None], sigmas=blend(self.sigmas)[None], idds=idds[None],
             reference_sigma=np.array([(1 - w) * self.reference_sigma[lo] + w * self.reference_sigma[hi]]),
             meta={"interpolated_from": [float(e[lo]), float(e[hi])]},
+            protons_per_mu=None if ppm is None else np.array([ppm]),
         )
 
     def _subset(self, index: int) -> "PencilBeamModel":
@@ -125,7 +140,8 @@ class PencilBeamModel:
         return PencilBeamModel(
             vsadx=self.vsadx, vsady=self.vsady, energies=self.energies[sl], r80=self.r80[sl],
             sigma_air_coef=self.sigma_air_coef[sl], depths=self.depths[sl], sigmas=self.sigmas[sl],
-            idds=self.idds[sl], reference_sigma=self.reference_sigma[sl], meta={})
+            idds=self.idds[sl], reference_sigma=self.reference_sigma[sl], meta={},
+            protons_per_mu=None if self.protons_per_mu is None else self.protons_per_mu[sl])
 
     def kernel_model(self) -> SimpleNamespace:
         """The object ``dose_kernels.proton_*_cuda`` reads its model from.
@@ -152,8 +168,13 @@ class PencilBeamModel:
         (model_dir / "machine_geometry.csv").write_text(f"VSADX,{self.vsadx}\nVSADY,{self.vsady}\n")
         (model_dir / "rangeshifter_labels.csv").write_text(
             f"dicom_rangeshifter_label,folder_rangeshifter_label\n{_RS_LABEL},{_RS_FOLDER}\n")
-        rows = ["index,energy_label,sigma"] + [
-            f"{i},{e:.2f},{s:.4f}" for i, (e, s) in enumerate(zip(self.energies, self.reference_sigma))]
+        if self.protons_per_mu is None:
+            rows = ["index,energy_label,sigma"] + [
+                f"{i},{e:.2f},{s:.4f}" for i, (e, s) in enumerate(zip(self.energies, self.reference_sigma))]
+        else:
+            rows = ["index,energy_label,sigma,protons_per_mu"] + [
+                f"{i},{e:.2f},{s:.4f},{p:.8e}"
+                for i, (e, s, p) in enumerate(zip(self.energies, self.reference_sigma, self.protons_per_mu))]
         (rs / "energies.csv").write_text("\n".join(rows) + "\n")
         for i in range(len(self.energies)):
             a, b, c = self.sigma_air_coef[i]
@@ -190,6 +211,8 @@ class PencilBeamModel:
             r80=np.array(r80), sigma_air_coef=np.array(coef), depths=np.array(depths),
             sigmas=np.array(sigmas), idds=np.array(idds), reference_sigma=np.asarray(table["sigma"]),
             meta=json.loads(meta_path.read_text()) if meta_path.exists() else {},
+            protons_per_mu=(np.asarray(table["protons_per_mu"]) if "protons_per_mu" in table.dtype.names
+                            else None),
         )
 
 

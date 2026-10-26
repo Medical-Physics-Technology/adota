@@ -24,7 +24,7 @@ from src.schemas.configs import AdvancedAnalysisConfig as AnalysisConfig
 from src.schemas.results import SampleRecord
 from src.utils.dose_grid_utils import estimate_bp_range
 from src.utils.scallers import inverse_minmax
-from src.utils.unit_conversions import to_gy
+from src.utils.unit_conversions import legacy_to_gy_per_1e6_protons
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +136,7 @@ def generate_figures_for_records(
 
         gt_sq = y_np.squeeze()
         pred_sq = y_pred_np.squeeze()
-        rmse = calculate_rmse(to_gy(pred_sq), to_gy(gt_sq))
+        rmse = calculate_rmse(legacy_to_gy_per_1e6_protons(pred_sq), legacy_to_gy_per_1e6_protons(gt_sq))
         mask = gt_sq > 0.1 * np.max(gt_sq)
         mape = calculate_pure_mape(gt_sq[mask], pred_sq[mask])
 

@@ -11,7 +11,10 @@
 output_dir: /scratch/mstryja/pencil_beam/commissioning_hptc_rsnone   # MC runs (~2-3 GB), validation
 # The deliverable: the PBA model of our beam, small (~2 MB), kept next to the engines for reuse.
 # Bump the version suffix rather than overwrite a model something else already uses.
-model_dir: /home/mstryja/tools/dosecuda/models/hptc_rsnone_mcsquare_v1
+# _v2: IDD in Gy mm^2 per MU (MCsquare's protons per MU). _v1 (EXP-0018) was on MCsquare's scale at
+# weight 1000; reproduce it with --set model_dir=.../hptc_rsnone_mcsquare_v1
+# --set commissioning.dose_unit=mcsquare_per_weight_1000 --set validation.results_subdir=validation
+model_dir: /home/mstryja/tools/dosecuda/models/hptc_rsnone_mcsquare_v2
 
 engine:
   mcsquare_install: /home/mstryja/tools/mcsquare
@@ -50,6 +53,7 @@ commissioning:
   sigma_reference_fraction: 0.7
   min_slice_fraction: 0.01
   nozzle_distance_mm: 420.0       # must match the BDL
+  dose_unit: gy_mm2_per_mu        # spot weight in MU -> Gy (DoseCUDA's convention)
 
 validation:
   # Held out of the fit: a different SSD, energies halfway between nodes, and a few
@@ -57,6 +61,7 @@ validation:
   energies: [70, 72.5, 92.5, 117.5, 120, 142.5, 167.5, 170, 192.5, 217.5, 220, 242.5, 247.5, 250]
   surface_to_iso_mm: [210.0]
   num_primaries: 1.0e7
+  results_subdir: validation_v2   # the validation MC itself is cached in validation/runs
   gamma_criteria:                 # 3%/3mm/10% is the headline (global, MC max)
     - {dose: 3, dist: 3, cutoff: 10}
     - {dose: 2, dist: 2, cutoff: 10}

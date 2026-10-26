@@ -93,6 +93,7 @@ hard-coded in the kernel as functions of `z_w` and R80.
 | `VSADX`, `VSADY` | the BDL's `SMX/SMY to Isocenter distance` (2014.9 / 2584.1 mm) |
 | HU -> RLSP | MCsquare's own scanner and materials (`src/pencil_beam/rlsp.py`) |
 | `IDD`, `sigma_mcs`, `A,B,C`, `R80` per energy | MCsquare water-phantom beamlets (`src/pencil_beam/commissioning.py`) |
+| IDD unit | `dose_unit`: `gy_mm2_per_mu` (model `_v2`; weight in MU gives Gy, with MCsquare's protons per MU) or `mcsquare_per_weight_1000` (`_v1`: weight 1000 = MCsquare's eV/g per proton). See [dose_units.md](dose_units.md). |
 | beam geometry | the MC beamlet frame, mapped once (`src/pencil_beam/engine.py`) |
 
 ### HU -> RLSP
@@ -172,10 +173,12 @@ Consequences:
   reference, and both scripts refuse such energies.
 - `MCSquareRunner` logs a warning for any beamlet above 250 MeV. The limit is
   `src.mc_generation.mcsquare_runner.MCSQUARE_NUCLEAR_DATA_MAX_MEV`.
-- **Open question for the training data:** the v3 HDF5 index lists 853 beamlets above
-  250 MeV, 422 of them above 258.4 MeV, all with this BDL. This engine cannot produce
-  the latter with nuclear interactions on. How they were simulated needs checking before
-  they are trusted.
+- **Training data:** the v3 HDF5 holds 853 beamlets above 250 MeV, 422 of them above
+  258.4 MeV, which this engine cannot produce at all with nuclear interactions on.
+  Since 2026-10-20, training, active-learning splits and evaluation drop every beamlet
+  above 250 MeV (`src.datasets.energy_cut`, config `max_energy_mev`, default 250), and
+  MC generation and the candidate space refuse such energies. See
+  [dose_units.md](dose_units.md).
 
 ### MCsquare nozzle transport: a geometry trap
 

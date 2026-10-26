@@ -60,8 +60,16 @@ uv run python scripts/pencil_beam/commission_dosecuda.py --stages rlsp,simulate,
   phantom size, primaries, threads, LUT span (`lut_depth_factor`), `z_ref` fraction.
   `air_front_mm + surface_to_iso_mm` must lie in [120, 420] mm, because MCsquare
   misplaces the entrance outside that range; this is guarded.
+  `dose_unit` sets the IDD table's unit: `gy_mm2_per_mu` (the default and `_v2`; a
+  spot of weight w MU gives Gy) or `mcsquare_per_weight_1000` (`_v1`). With
+  `gy_mm2_per_mu` the nodes' protons per MU are stored in `energies.csv`, and between
+  nodes the IDD is blended per proton. The two units give the same MCsquare-scale
+  dose to float precision (measured on the 14 validation runs: R80 within 6e-6 mm,
+  gamma within 8e-6 percentage points).
 - `validation`: `energies`, `surface_to_iso_mm`, `num_primaries`, `gamma_criteria`,
-  `gamma_backend`, `make_figures`.
+  `gamma_backend`, `make_figures`, `results_subdir` (results folder under `output_dir`;
+  the validation MC itself is always cached in `validation/runs`, so validating a new
+  model reuses it).
 
 ## Outputs
 

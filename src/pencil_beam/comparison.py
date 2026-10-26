@@ -113,7 +113,7 @@ def _adota_on_region(block_dir: Path, stem: str, grid_shape, region, crp, roi_si
 
 
 def _score_cell(block_dir: Path, info: dict, grid_shape, roi_size, settings: ComparisonSettings,
-                title: str) -> dict:
+                title: str, gy_per_mu: float = 1.0) -> dict:
     data = np.load(block_dir / f"{info['stem']}_engines.npz")
     region = tuple(slice(int(s), int(s) + n) for s, n in zip(data["region_start"], data["mc"].shape))
     doses = {"MC": data["mc"], "PBA": data["pba"]}
@@ -149,7 +149,7 @@ def _score_cell(block_dir: Path, info: dict, grid_shape, roi_size, settings: Com
             data["ct"], doses, str(block_dir / "figures" / f"{info['stem']}_engines_{head.key}_{kind}"),
             title=f"{title}  {info['stem']} (theta {info['theta_x']:+.2f}, {info['theta_y']:+.2f})  "
                   f"gamma {head.dose:g}%/{head.dist:g}mm, {head.cutoff:g}% cutoff ({kind})",
-            metrics_text=text)
+            metrics_text=text, dose_scale=gy_per_mu, dose_unit="Gy per MU")
     return row
 
 
@@ -188,8 +188,11 @@ def compare_block(rec, ct: sitk.Image, field_gantry: float, energy: float, cells
     title = f"{rec.anatomy} {rec.patient_id}  E={energy:g} MeV  gantry={field_gantry:.1f}"
     rows = []
     grid_shape = tuple(geom.ct_array.shape)
+    from src.utils.unit_conversions import mcsquare_to_gy_per_mu
+
+    gy_per_mu = float(mcsquare_to_gy_per_mu(1.0, energy, bdl))      # figures in Gy per MU of this beamlet
     for info in infos:
-        row = _score_cell(block_dir, info, grid_shape, rcfg.roi_size, settings, title)
+        row = _score_cell(block_dir, info, grid_shape, rcfg.roi_size, settings, title, gy_per_mu)
         row.update({"anatomy": rec.anatomy, "patient_id": rec.patient_id, "provenance_uid": rec.uid,
                     "field_gantry": float(field_gantry), "energy": float(energy),
                     "adota_seconds_per_beamlet": adota_seconds, "block_dir": block_dir.name})

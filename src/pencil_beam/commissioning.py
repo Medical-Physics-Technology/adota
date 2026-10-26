@@ -36,7 +36,7 @@ from scipy.optimize import curve_fit
 
 from src.datasets.phantom import PhantomSpec, build_phantom_image
 from src.mc_generation.geometry import mc_isocenter
-from src.mc_generation.mcsquare_runner import MCSQUARE_NUCLEAR_DATA_MAX_MEV
+from src.mc_generation.mcsquare_runner import MCSQUARE_NUCLEAR_DATA_MAX_MEV, check_energies_simulable  # noqa: F401
 from src.pencil_beam.beam_model import LUT_LENGTH, PencilBeamModel
 
 logger = logging.getLogger(__name__)
@@ -77,6 +77,11 @@ class CommissioningConfig:
     sigma_reference_fraction: float = 0.7  # z_ref = fraction * R80 (DoseCUDA: 0.7)
     min_slice_fraction: float = 0.01       # fit a slice only above this share of the peak slice
     nozzle_distance_mm: float = 420.0      # BDL "Nozzle exit to Isocenter distance"
+    dose_unit: str = "gy_mm2_per_mu"
+    """Unit of the IDD table. ``gy_mm2_per_mu``: a spot of weight w MU gives Gy (w MU of
+    that beamlet, with MCsquare's protons per MU), DoseCUDA's own convention.
+    ``mcsquare_per_weight_1000`` (model _v1): weight 1000 reproduces MCsquare's
+    eV/g per simulated proton."""
 
 
 # MCsquare starts each proton at the nozzle exit and moves it through vacuum to the
@@ -141,20 +146,6 @@ def commissioning_phantom(cfg: CommissioningConfig, surface_to_iso_mm: float
     iso = mc_isocenter(ct)
     iso[0] = float(cfg.air_front_mm + surface_to_iso_mm)
     return ct, iso
-
-
-def check_energies_simulable(energies: Sequence[float]) -> None:
-    """Refuse energies MCsquare cannot simulate correctly (above its nuclear data).
-
-    Raises:
-        ValueError: Naming the offending energies and the reason.
-    """
-    bad = [float(e) for e in energies if float(e) > MCSQUARE_NUCLEAR_DATA_MAX_MEV]
-    if bad:
-        raise ValueError(
-            f"energies {bad} MeV exceed {MCSQUARE_NUCLEAR_DATA_MAX_MEV:.0f} MeV, where MCsquare's ICRU "
-            "nuclear tables end; MCsquare's dose there is undefined (and it crashes from ~259 MeV), so "
-            "it cannot serve as the reference")
 
 
 def run_commissioning_beamlets(runner, cfg: CommissioningConfig, out_dir: Path,
@@ -325,10 +316,13 @@ def fit_energy_node(
     source_distance: float,
     cfg: CommissioningConfig,
     sigmas: Optional[Sequence[np.ndarray]] = None,
+    idd_scale: float = 1.0,
 ) -> dict:
     """Fit one energy's tables from its SSD runs (same order in all sequences).
 
     Args:
+        idd_scale: Factor from the profiles' IDD unit to the table's
+            (:func:`idd_unit_factor`).
         sigmas: Per-run primary sigma per slice (:func:`kernel_sigma_profile`);
             defaults to the single-Gaussian ``profile.sigma``.
 
@@ -353,7 +347,7 @@ def fit_energy_node(
     coef[2 - deg:] = np.polyfit(d_ref, sig_ref, deg)
 
     depths = np.linspace(0.0, cfg.lut_depth_factor * r80, LUT_LENGTH)
-    idds = np.mean([np.interp(depths, w, p.idd, right=0.0) for p, w in zip(profiles, wets)], axis=0)
+    idds = idd_scale * np.mean([np.interp(depths, w, p.idd, right=0.0) for p, w in zip(profiles, wets)], axis=0)
     sigma_mcs = np.mean([np.interp(depths, w[ok], sig[ok] - sr)
                          for sig, w, ok, sr in zip(sigmas, wets, valid, sig_ref)], axis=0)
     d_iso = source_distance + z_ref                           # in air at the isocenter
@@ -369,6 +363,24 @@ def fit_energy_node(
     }
 
 
+def idd_unit_factor(dose_unit: str, energy_mev: float, spot_weight: float, bdl) -> float:
+    """Factor from a profile's IDD (MCsquare dose x mm^2 / ``spot_weight``) to ``dose_unit``.
+
+    MCsquare's dose is eV/g per simulated proton whatever the spot weight, so the
+    profile IDD times ``spot_weight`` is eV/g mm^2 per proton; one MU of that energy
+    is ``mcsquare_protons_per_mu`` protons.
+    """
+    if dose_unit == "mcsquare_per_weight_1000":
+        if spot_weight != 1000.0:
+            raise ValueError("mcsquare_per_weight_1000 needs spot_weight 1000")
+        return 1.0
+    if dose_unit == "gy_mm2_per_mu":
+        from src.utils.unit_conversions import mcsquare_to_gy_per_mu
+
+        return float(spot_weight * mcsquare_to_gy_per_mu(1.0, energy_mev, bdl))
+    raise ValueError(f"unknown dose_unit {dose_unit!r}")
+
+
 def fit_model(nodes: Sequence[dict], vsadx: float, vsady: float, meta: dict) -> PencilBeamModel:
     """Assemble fitted energy nodes into a :class:`PencilBeamModel`."""
     nodes = sorted(nodes, key=lambda n: n["energy"])
@@ -380,4 +392,5 @@ def fit_model(nodes: Sequence[dict], vsadx: float, vsady: float, meta: dict) -> 
         sigma_air_coef=np.array([n["sigma_air_coef"] for n in nodes]),
         depths=np.array([n["depths"] for n in nodes]), sigmas=np.array([n["sigmas"] for n in nodes]),
         idds=np.array([n["idds"] for n in nodes]),
-        reference_sigma=np.array([n["reference_sigma"] for n in nodes]), meta=meta)
+        reference_sigma=np.array([n["reference_sigma"] for n in nodes]), meta=meta,
+        protons_per_mu=(np.array([n["protons_per_mu"] for n in nodes]) if "protons_per_mu" in nodes[0] else None))

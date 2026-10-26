@@ -53,6 +53,17 @@ def write_model_card(model_dir: Path, validation_rows: Optional[Sequence[dict]] 
     com = meta.get("commissioning", {})
     energies = [float(e) for e in meta.get("nodes", {})]
     build = prov.get("dosecuda_build") or {}
+    dose_unit = meta.get("dose_unit", "mcsquare_per_weight_1000")
+    unit_text = {
+        "gy_mm2_per_mu": ("`idd` is Gy mm^2 per MU: a spot of weight `w` MU gives Gy for `w` MU of that "
+                          "beamlet, with MCsquare's own protons per MU from the BDL (`ProtonsMU`, interpolated "
+                          "and extrapolated linearly as MCsquare does). This is DoseCUDA's convention, so DICOM "
+                          "plan MU can be used directly."),
+        "mcsquare_per_weight_1000": ("`idd` is on MCsquare's scale: a spot of weight 1000 reproduces MCsquare's "
+                                     "eV/g per simulated proton (weights are *not* MU). Convert to Gy per MU "
+                                     "with `src.utils.unit_conversions.mcsquare_to_gy_per_mu`."),
+    }.get(dose_unit, "unknown")
+    weights_text = "Gy for mu MU per spot" if dose_unit == "gy_mm2_per_mu" else "not MU for this model; see Dose unit"
     e_ref = meta.get("rlsp_reference_energy_mev", "?")
     ssds = ", ".join(f"{s:g}" for s in com.get("surface_to_iso_mm", []))
     e_lo, e_hi = min(energies, default=float("nan")), max(energies, default=float("nan"))
@@ -81,9 +92,7 @@ adota's `docs/pencil_beam.md`.
 
 - **Energies:** {len(energies)} nodes, {e_lo:g}-{e_hi:g} MeV.
 - **Depths** are water-equivalent, mm, on a 400-point grid per energy.
-- **Dose unit:** `idd` is per unit spot weight (MU), in MCsquare's dose unit. A spot of weight `w`
-  lands on the dose scale of an MCsquare spot of weight `w` with the same BDL. adota converts
-  that unit to Gy with `src.utils.unit_conversions.to_gy`.
+- **Dose unit ({dose_unit}):** {unit_text}
 
 ## Using it
 
@@ -92,7 +101,8 @@ adota's `docs/pencil_beam.md`.
 ```python
 from src.pencil_beam.engine import PencilBeamEngine
 eng = PencilBeamEngine("{prov.get('dosecuda_kernels', '<dose_kernels.so>')}", "{model_dir}")
-result = eng.dose(ct_hu_image, energy_mev, spots_xy, iso_mc)   # MC beamlet frame, gantry 90
+result = eng.dose(ct_hu_image, energy_mev, spots_xy, iso_mc)              # MCsquare scale (eV/g per proton)
+result = eng.dose(ct_hu_image, energy_mev, spots_xy, iso_mc, weights=mu)  # {weights_text}
 ```
 
 `src.pencil_beam.beam_model.PencilBeamModel.read(...)` gives the tables themselves.
