@@ -7,7 +7,8 @@ assembled from the building blocks in :mod:`src.adota.layers`.
 Flow (``forward``):
 1. Encode the (CT, flux) volume into per-slice tokens, keeping skip tensors.
 2. Add positional information and the projected beam energy.
-3. Run the transformer stack over the slice sequence.
+3. Run the sequence mixer over the slice sequence (``sequence_mixer``: the
+   transformer stack by default, an mLSTM stack, or none).
 4. Decode back to a dose volume, consuming the skip tensors.
 
 Both residual pathways (convolutional skips, transformer residuals) are
@@ -27,8 +28,8 @@ from src.adota.layers import (
     LinearProj,
     PositionalEmbedding,
     ReshapeLayer,
-    TransformerEncoderLayerDoTA,
 )
+from src.adota.layers.mixers import build_sequence_mixer
 
 logger = logging.getLogger(__name__)
 
@@ -75,9 +76,17 @@ class DoTA3D_v3(nn.Module):
                 per encoder/decoder block. Defaults to 2.
             conv_hidden_channels (int, optional): Number of hidden channels per
                 convolutional block. Defaults to 64.
-            num_transformers (int, optional): Number of stacked transformer
-                encoder layers. Defaults to 1.
-            num_heads (int, optional): Number of attention heads. Defaults to 8.
+            sequence_mixer (str, optional): The mixer over the slice sequence:
+                "transformer" (causal attention, the original), "mlstm" (an
+                mLSTM stack read in the beam direction) or "none" (a plain 3D
+                U-Net). See :mod:`src.adota.layers.mixers`. Defaults to
+                "transformer", so existing hyperparameter files and
+                checkpoints are unchanged.
+            num_transformers (int, optional): Number of stacked sequence-mixer
+                blocks, whichever the mixer (the name is historical). Ignored
+                for "none". Defaults to 1.
+            num_heads (int, optional): Number of attention heads, or of mLSTM
+                memory heads. Defaults to 8.
             dim_feedforward (int, optional): Hidden dimensionality of the Linear
                 feed-forward sub-block inside each transformer layer. If unset
                 (None), defaults to ``token_size`` (the original behavior).
@@ -86,7 +95,11 @@ class DoTA3D_v3(nn.Module):
             causal (bool, optional): If True, applies a causal attention mask so
                 each slice only attends to previous slices. Defaults to True.
             num_forward (int, optional): Number of look-ahead slices allowed by
-                the causal mask. Defaults to 0.
+                the causal mask; the mLSTM matches it. Defaults to 0.
+            mlstm_proj_factor (float, optional): Inner width of an mLSTM block
+                as a multiple of the token size. Defaults to 2.0.
+            mlstm_conv_kernel (int, optional): Width of the causal depthwise
+                convolution of an mLSTM block. Defaults to 4.
             transformer_residual (bool, optional): If True, the transformer
                 encoder layers use additive residual (skip) connections around
                 the attention and feed-forward sub-blocks. Set to False to
@@ -126,7 +139,10 @@ class DoTA3D_v3(nn.Module):
         self.convolutional_steps = kwargs.get("convolutional_steps", 2)
         self.conv_hidden_channels = kwargs.get("conv_hidden_channels", 64)
 
-        # TransformerEncoderLayer attributes
+        # Sequence-mixer attributes (the transformer's names are historical).
+        self.sequence_mixer = kwargs.get("sequence_mixer", "transformer")
+        self.mlstm_proj_factor = float(kwargs.get("mlstm_proj_factor", 2.0))
+        self.mlstm_conv_kernel = int(kwargs.get("mlstm_conv_kernel", 4))
         self.num_transformers = kwargs.get("num_transformers", 1)
         self.num_heads = kwargs.get("num_heads", 8)
         self.dropout_rate = kwargs.get("dropout_rate", 0.1)
@@ -180,22 +196,21 @@ class DoTA3D_v3(nn.Module):
             self.input_shape[1] + 1, self.token_size
         )
 
-        self.transformer_layer = nn.Sequential()
-
-        for i in range(self.num_transformers):
-            self.transformer_layer.add_module(
-                f"transformer_{i}",
-                TransformerEncoderLayerDoTA(
-                    embeded_dim=self.token_size,
-                    num_heads=self.num_heads,
-                    dim_feedforward=self.dim_feedforward,
-                    dropout=self.dropout_rate,
-                    batch_first=True,
-                    causal=self.causal,
-                    num_forward=self.num_forward,
-                    residual=self.transformer_residual,
-                ),
-            )
+        # Named ``transformer_layer`` whatever the mixer, so the state-dict keys
+        # of every existing transformer checkpoint stay unchanged.
+        self.transformer_layer = build_sequence_mixer(
+            self.sequence_mixer,
+            self.num_transformers,
+            self.token_size,
+            num_heads=self.num_heads,
+            dim_feedforward=self.dim_feedforward,
+            dropout=self.dropout_rate,
+            causal=self.causal,
+            num_forward=self.num_forward,
+            residual=self.transformer_residual,
+            mlstm_proj_factor=self.mlstm_proj_factor,
+            mlstm_conv_kernel=self.mlstm_conv_kernel,
+        )
 
         self.reshape_layer = ReshapeLayer(
             (-1, self.input_shape[1] + 1, *self.latent_space_dimension)
@@ -235,7 +250,8 @@ class DoTA3D_v3(nn.Module):
         x = self.positional_embedding_layer(e, x)
 
         # attn_weights stays None during training (the layers do not compute the
-        # per-head weights) and holds the last block's weights during eval.
+        # per-head weights) and holds the last block's weights during eval; a
+        # mixer without attention (mLSTM, none) leaves it None.
         attn_weights = None
         for transformer_block in self.transformer_layer:
             x, attn_weights = transformer_block(x)
@@ -259,9 +275,10 @@ class DoTA3D_v3(nn.Module):
             ]
 
         # Uniform return: (dose, attention). attention is None during training,
-        # the per-head weights during eval. For the degenerate no-transformer
-        # case in eval, return a zero placeholder so consumers still get a tensor.
-        if not self.training and len(self.transformer_layer) == 0:
+        # the per-head weights during eval. For a mixer without attention (none
+        # or mLSTM) in eval, return a zero placeholder so consumers still get a
+        # tensor.
+        if not self.training and attn_weights is None:
             attn_weights = torch.zeros(
                 [1, sequence_length, sequence_length], dtype=torch.float16
             )
@@ -337,6 +354,9 @@ class DoTA3D_v3(nn.Module):
             "kernel_size": self.kernel_size,
             "convolutional_steps": self.convolutional_steps,
             "conv_hidden_channels": self.conv_hidden_channels,
+            "sequence_mixer": self.sequence_mixer,
+            "mlstm_proj_factor": self.mlstm_proj_factor,
+            "mlstm_conv_kernel": self.mlstm_conv_kernel,
             "num_transformers": self.num_transformers,
             "num_heads": self.num_heads,
             "dim_feedforward": self.dim_feedforward,
