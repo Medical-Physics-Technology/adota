@@ -10,6 +10,41 @@ scripts are documented in
 [scripts/docs/commission_dosecuda.md](../scripts/docs/commission_dosecuda.md) and
 [scripts/docs/compare_engines.md](../scripts/docs/compare_engines.md).
 
+## Source, version, licence and citation
+
+- **Source:** [jhu-som-radiation-oncology/DoseCUDA](https://github.com/jhu-som-radiation-oncology/DoseCUDA), developed at Johns
+  Hopkins University School of Medicine, Department of Radiation Oncology.
+- **Version:** commit
+  [`0d4db1f4f736`](https://github.com/jhu-som-radiation-oncology/DoseCUDA/commit/0d4db1f4f736361b1c93ada457148c6d8fe9e896). It is recorded in
+  every build's `BUILD_INFO.json` and in every commissioned model's model card, so a
+  result can always be traced to the DoseCUDA code that produced it.
+- **What adota uses:** only DoseCUDA's CUDA kernels (the compiled `dose_kernels`
+  extension), built **unmodified** from a `git archive` of that commit by
+  `scripts/pencil_beam/provision_dosecuda.sh`. DoseCUDA's Python package is never
+  imported; the beam model, HU -> RLSP and geometry are adota's own
+  (`src/pencil_beam/`).
+- **Licence:** DoseCUDA is distributed under the GNU General Public License,
+  version 2. adota does not include or redistribute any of its source code; the
+  kernels are compiled locally from the user's own clone.
+- **Citation:** the DoseCUDA authors ask that work using it cite their paper. Any
+  result, figure or publication that uses the pencil beam must cite:
+
+  > Bhattacharya M, Reamy C, Li H, Lee J, Hrinivich WT. A Python package for fast
+  > GPU-based proton pencil beam dose calculation. *Journal of Applied Clinical
+  > Medical Physics.* 2025:e70093. [doi:10.1002/acm2.70093](https://doi.org/10.1002/acm2.70093)
+
+  ```bibtex
+  @article{bhattacharya2025dosecuda,
+    author  = {Bhattacharya, Mahasweta and Reamy, Clayton and Li, Heng and Lee, Junghoon and Hrinivich, William T.},
+    title   = {A Python package for fast GPU-based proton pencil beam dose calculation},
+    journal = {Journal of Applied Clinical Medical Physics},
+    year    = {2025},
+    pages   = {e70093},
+    doi     = {10.1002/acm2.70093},
+    note    = {Code: https://github.com/jhu-som-radiation-oncology/DoseCUDA}
+  }
+  ```
+
 ## Install: only the CUDA kernels, built for adota
 
 ```

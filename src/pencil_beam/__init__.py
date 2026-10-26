@@ -1,6 +1,8 @@
 """DoseCUDA pencil-beam algorithm (PBA), commissioned against MCsquare.
 
-DoseCUDA (https://github.com/jhu-som-radiation-oncology/DoseCUDA) is a GPU
+DoseCUDA (https://github.com/jhu-som-radiation-oncology/DoseCUDA, used at commit
+0d4db1f4f736, GPL-2.0; cite Bhattacharya M, Reamy C, Li H, Lee J, Hrinivich WT,
+J Appl Clin Med Phys 2025:e70093, doi:10.1002/acm2.70093) is a GPU
 pencil-beam dose engine whose proton model is entirely table-driven: per energy an
 integrated depth dose IDD(z_w), a multiple-Coulomb-scattering width sigma_mcs(z_w),
 a quadratic in-air spot width sigma_air(distance to source) and R80, plus the

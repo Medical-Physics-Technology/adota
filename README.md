@@ -22,6 +22,7 @@ Beyond single beamlets, ADoTA assembles these per-spot predictions into a **full
 | Training losses | Normalised MSE (`LMSE`) + Integral Depth Dose (`LPS`), balanced adaptively |
 | Validation metrics | RMSE, MAPE, RDE, Gamma Pass Rate (2%/2mm), per-energy breakdowns |
 | Plan pipeline | `scripts/run_plan_opentps.py` (`src/beamlets/`) -- OpenTPS plan to accumulated ADoTA dose + DVH / gamma vs MCsquare |
+| Pencil-beam baseline | `scripts/pencil_beam/` (`src/pencil_beam/`) -- the [DoseCUDA](https://github.com/jhu-som-radiation-oncology/DoseCUDA) GPU pencil beam (Bhattacharya et al., J Appl Clin Med Phys 2025 ([doi:10.1002/acm2.70093](https://doi.org/10.1002/acm2.70093))), commissioned against MCsquare; MC vs pencil beam vs ADoTA. Source, licence and citation: [docs/pencil_beam.md](docs/pencil_beam.md#source-version-licence-and-citation) |
 
 ---
 

@@ -5,6 +5,9 @@ Builds a DoseCUDA proton beam model whose beamlets reproduce MCsquare's (BDL
 own lookup-table layout and validates it against fresh MC in water. Method,
 decisions and limitations: [docs/pencil_beam.md](../../docs/pencil_beam.md).
 
+The pencil beam is [DoseCUDA](https://github.com/jhu-som-radiation-oncology/DoseCUDA) (Bhattacharya et al., J Appl Clin Med Phys 2025 ([doi:10.1002/acm2.70093](https://doi.org/10.1002/acm2.70093))); its source, the pinned version, the licence and the citation to use are in
+[docs/pencil_beam.md](../../docs/pencil_beam.md#source-version-licence-and-citation).
+
 ```bash
 # once: build the CUDA kernels for adota's Python
 scripts/pencil_beam/provision_dosecuda.sh
