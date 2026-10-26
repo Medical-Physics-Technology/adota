@@ -43,10 +43,12 @@ def _rng_state() -> Dict[str, Any]:
 
 
 def _restore_rng_state(state: Dict[str, Any]) -> None:
+    # The generator states are ByteTensors that must live on the CPU; a snapshot
+    # loaded with map_location=cuda:N arrives on the device and is moved back.
     if "torch" in state and state["torch"] is not None:
-        torch.set_rng_state(state["torch"])
+        torch.set_rng_state(state["torch"].cpu())
     if "cuda" in state and state["cuda"] is not None and torch.cuda.is_available():
-        torch.cuda.set_rng_state_all(state["cuda"])
+        torch.cuda.set_rng_state_all([s.cpu() for s in state["cuda"]])
     if "numpy" in state and state["numpy"] is not None:
         np.random.set_state(state["numpy"])
     if "python" in state and state["python"] is not None:
@@ -171,7 +173,13 @@ class CheckpointManager:
         fresh training run (fresh schedule, epoch counter at 0) from a prior
         set of weights. Unwraps ``torch.compile`` so a compiled model loads an
         eager checkpoint and vice versa.
+
+        Accepts either shape of file: a training snapshot, which keeps the
+        weights under ``"model"``, or a bare ``state_dict`` as the deployed
+        checkpoints under ``models/`` are stored. Warm-starting the active-learning
+        loop from a deployed model needs the second.
         """
         map_location = device if device is not None else "cpu"
         state = torch.load(path, map_location=map_location, weights_only=False)
-        _unwrap_compiled(model).load_state_dict(state["model"])
+        weights = state["model"] if isinstance(state, dict) and "model" in state else state
+        _unwrap_compiled(model).load_state_dict(weights)

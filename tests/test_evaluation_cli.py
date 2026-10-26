@@ -1,10 +1,11 @@
-"""Unit tests for src/evaluation/cli.py (config merge + device resolution)."""
+"""Unit tests for src/evaluation/cli.py (config merge, --set overrides, device resolution)."""
 
 from __future__ import annotations
 
+import pytest
 import torch
 
-from src.evaluation.cli import merge_config, resolve_device
+from src.evaluation.cli import apply_set_overrides, merge_config, resolve_device
 
 # ── merge_config ─────────────────────────────────────────────────────────────
 
@@ -64,6 +65,70 @@ def test_falsy_but_not_none_cli_wins():
         defaults={},
     )
     assert merged["device_index"] == 0
+
+
+# ── apply_set_overrides ──────────────────────────────────────────────────────
+
+
+def test_set_top_level_key_with_yaml_scalar_parsing():
+    out = apply_set_overrides({"n_cycles": 5, "data_fraction": 0.3},
+                              ["n_cycles=2", "data_fraction=1.0", "max_records=400"])
+    assert out == {"n_cycles": 2, "data_fraction": 1.0, "max_records": 400}
+    assert isinstance(out["n_cycles"], int) and isinstance(out["data_fraction"], float)
+
+
+def test_set_dotted_key_reaches_nested_mapping():
+    cfg = {"training": {"compile": True, "allow_tf32": True}, "scorer": {"n_workers": 12}}
+    out = apply_set_overrides(cfg, ["training.compile=false", "scorer.n_workers=8"])
+    assert out["training"] == {"compile": False, "allow_tf32": True}
+    assert out["scorer"]["n_workers"] == 8
+
+
+def test_set_creates_missing_intermediate_mappings():
+    out = apply_set_overrides({"loop": {"n_cycles": 2}},
+                              ["loop.train_overrides.compile=false",
+                               "loop.train_overrides.num_epochs=1"])
+    assert out["loop"] == {"n_cycles": 2,
+                           "train_overrides": {"compile": False, "num_epochs": 1}}
+
+
+def test_set_parses_null_lists_and_quoted_strings():
+    out = apply_set_overrides({}, ["arm=null", "energies=[80.0, 105.0]",
+                                   "variant='full (ridge)'", "path=/scratch/x/y", "empty="])
+    assert out["arm"] is None
+    assert out["energies"] == [80.0, 105.0]
+    assert out["variant"] == "full (ridge)"
+    assert out["path"] == "/scratch/x/y"
+    assert out["empty"] is None
+
+
+def test_set_does_not_mutate_input_and_later_entries_win():
+    cfg = {"training": {"compile": True}}
+    out = apply_set_overrides(cfg, ["training.compile=false", "training.compile=true"])
+    assert cfg == {"training": {"compile": True}}
+    assert out["training"]["compile"] is True
+
+
+def test_set_no_overrides_is_a_copy():
+    cfg = {"a": {"b": 1}}
+    out = apply_set_overrides(cfg, [])
+    assert out == cfg and out is not cfg and out["a"] is not cfg["a"]
+
+
+@pytest.mark.parametrize("entry", ["n_cycles", "=5", "  =5", "a..b=1", ".a=1"])
+def test_set_refuses_malformed_entries(entry):
+    with pytest.raises(ValueError, match="--set"):
+        apply_set_overrides({}, [entry])
+
+
+def test_set_refuses_walking_through_a_non_mapping():
+    with pytest.raises(ValueError, match="not a mapping"):
+        apply_set_overrides({"n_cycles": 5}, ["n_cycles.x=1"])
+
+
+def test_set_value_may_contain_equals_sign():
+    out = apply_set_overrides({}, ["comment=a=b"])
+    assert out["comment"] == "a=b"
 
 
 # ── resolve_device ───────────────────────────────────────────────────────────

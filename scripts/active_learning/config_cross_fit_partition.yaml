@@ -1,0 +1,34 @@
+# EXP-0014 scan partition (scripts/active_learning/cross_fit_partition.py)
+# ========================================================================
+#   uv run python scripts/active_learning/cross_fit_partition.py \
+#       --config scripts/active_learning/config_cross_fit_partition.yaml
+#
+# Written once and referenced by EXP-0014 to EXP-0017; the script refuses an
+# existing output_dir unless --overwrite is given.
+experiment: EXP-0014
+output_dir: /scratch/mstryja/adota_runs/exp0014/partition
+
+# D: every record of the HDF5 not on the exclusion list (70,146 on v3).
+dataset_path: /scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5
+exclude_indexes_path: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
+# Supplies the anatomy (thorax | pelvic_abdominal) and the patient string per record.
+record_provenance_csv: /scratch/mstryja/adota_runs/20260707_124010/figures/acquisition/uuid_provenance_map.csv
+
+# F: the EXP-0004 frozen test set, as record ids; every scan holding one is in F.
+frozen_test_ids: /scratch/mstryja/adota_runs/20260707_124010/figures/acquisition/frozen_test_ids.csv
+# V: the 12 EXP-0012 held-out scans, as provenance patient strings.
+held_out_patients: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/splits/scorer_excluded_patients.txt
+
+group_column: patient_key     # one CT scan
+stratify_column: anatomy
+
+# Cross-fitting: all of D in scan folds, stratified by anatomy, independent of F / V / R.
+n_folds: 4
+fold_seed: 20261019
+
+# HPO sees R only (38 scans: 11 pelvic_abdominal, 27 thorax). About 20 percent of
+# them per anatomy are held out for HPO validation.
+hpo_val_scans_per_stratum:
+  pelvic_abdominal: 2
+  thorax: 6
+hpo_seed: 20261019

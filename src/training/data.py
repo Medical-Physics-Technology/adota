@@ -51,17 +51,23 @@ def train_val_split(
 
 
 def load_record_ids(
-    dataset_path: Path, excluded_indexes_path: Optional[Path]
+    dataset_path: Path, excluded_indexes_path: Optional[Path],
+    max_energy_mev: Optional[float] = None, scale: Optional[dict] = None,
 ) -> List[str]:
-    """Read the H5 keys and remove anything listed in the exclusion file.
+    """Read the H5 keys, remove the exclusion file's ids and (optionally) high energies.
 
     Args:
         dataset_path: Path to the H5 dataset.
         excluded_indexes_path: Optional path to a text file of record ids to
             drop, one per line. Missing / ``None`` means no exclusion.
+        max_energy_mev: Drop records above this beam energy
+            (:func:`src.datasets.energy_cut.drop_above_energy`). ``None`` keeps all,
+            as before the 250 MeV cut; ``TrainingConfig.max_energy_mev`` sets it.
+        scale: The dataset scale, for files without an ``energy_mev`` attribute.
 
     Returns:
-        Record ids present in the dataset and not excluded, in file order.
+        Record ids present in the dataset, not excluded and within the energy cut,
+        in file order.
     """
     with h5py.File(str(dataset_path), "r") as ds:
         record_ids = list(ds.keys())
@@ -75,7 +81,12 @@ def load_record_ids(
         )
 
     excluded_set = set(excluded)
-    return [rid for rid in record_ids if rid not in excluded_set]
+    kept = [rid for rid in record_ids if rid not in excluded_set]
+    if max_energy_mev is not None:
+        from src.datasets.energy_cut import drop_above_energy
+
+        kept, _ = drop_above_energy(dataset_path, kept, max_energy_mev, scale)
+    return kept
 
 
 def collate_h5(batch):
@@ -101,7 +112,19 @@ def build_dataloaders(
     train_indexes: List[str],
     val_indexes: List[str],
 ) -> Tuple[DataLoader, DataLoader]:
-    """Build train / val dataloaders from the resolved training config."""
+    """Build train / val dataloaders from the resolved training config.
+
+    With ``al_dir_sources`` set, the training split is the H5 set concatenated with
+    the beamlets an active-learning cycle bought, sampled so a fixed share of every
+    batch is new material; validation stays the plain H5 split either way. The import
+    is local so training does not depend on the active-learning package unless a run
+    actually asks for it.
+    """
+    if config.al_dir_sources:
+        from src.active_learning.dataset import build_union_dataloaders
+
+        return build_union_dataloaders(config, train_indexes, val_indexes)
+
     train_ds = H5PYGenerator(
         file_path=config.dataset_path,
         indexes=train_indexes,

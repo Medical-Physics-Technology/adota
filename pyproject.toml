@@ -53,6 +53,9 @@ target-version = "py310"
 # files this refactor does not otherwise touch. 120 still catches the genuinely
 # unreadable ones (the longest line in the repository was 258 characters).
 line-length = 120
+# reports/ is the private phd-thesis submodule, a separate repository with its own
+# scripts; CI never checks it out, so a local `ruff check .` must not lint it either.
+extend-exclude = ["reports"]
 
 [tool.ruff.lint]
 # E/F: pycodestyle errors + pyflakes. I: import ordering, which PYTHON_CODE_STYLE
@@ -67,6 +70,9 @@ select = ["E", "F", "I"]
 # can scale across cores.
 "scripts/mc/plot_angle_robustness.py" = ["E402"]
 "scripts/mc/prototype_beamlet_mode.py" = ["E402"]
+# Pins BLAS to one thread before numpy loads, so the sigma-fit process pool scales.
+"scripts/pencil_beam/commission_dosecuda.py" = ["E402"]
+"scripts/pencil_beam/score_saved_beamlets.py" = ["E402"]
 # Preloads the CUDA shared objects via ctypes before torch imports them;
 # mutating LD_LIBRARY_PATH from inside Python is too late.
 "scripts/rotation_performance_analysis.py" = ["E402"]

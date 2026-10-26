@@ -42,6 +42,94 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 - **`scripts/analysis/report_gamma_acceleration.py`**: assembles both gamma
   benchmarks into the LaTeX tables, figure and CSVs of the gamma-acceleration
   technical report under `reports/technical-reports/gamma-pass-rate/`.
+- **DoseCUDA source and citation**: `docs/pencil_beam.md` gains a "Source, version,
+  licence and citation" section (the repository, the pinned commit `0d4db1f4f736`,
+  GPL-2.0, and the citation the DoseCUDA authors ask for, Bhattacharya et al., J Appl
+  Clin Med Phys 2025, doi:10.1002/acm2.70093, with BibTeX); the three pencil-beam
+  guides, both READMEs, `src/pencil_beam/__init__.py` and `provision_dosecuda.sh`
+  link the repository and give the citation.
+- **`src/pencil_beam/`**: the DoseCUDA proton pencil beam, commissioned against MCsquare.
+  `kernels.load_dose_kernels` (the compiled extension, loaded by path);
+  `rlsp.hu_to_rlsp_table` / `write_rlsp_csv` (HU -> RLSP from MCsquare's scanner and Geant4
+  stopping powers); `beam_model.PencilBeamModel` (DoseCUDA lookup-table layout, `read` / `write`,
+  `at_energy` range-scaled interpolation, `kernel_model`), `read_rlsp_curve`, `hu_to_rlsp`;
+  `commissioning.CommissioningConfig`, `commissioning_phantom`, `run_commissioning_beamlets`,
+  `depth_profile`, `kernel_halo`, `fit_primary_sigma`, `kernel_sigma_profile`, `distal_r80`,
+  `physical_to_wet`, `fit_energy_node`, `fit_model`; `pipeline.fit_from_runs`, `validate_water`,
+  `provenance`, `write_rows_csv`; `model_card.write_model_card` (the `README.md` of a commissioned
+  model: beam, units, usage, measured accuracy); `engine.PencilBeamEngine`, `mc_frame_to_dosecuda`;
+  `metrics.criteria_from_config`, `dose_bbox`, `gamma_pass_rates`, `dose_agreement`;
+  `comparison.ComparisonSettings`, `compare_block`, `summarize`.
+- **`src/figures/pencil_beam.py`**: `commissioning_run_figure`, `commissioning_summary_figure`,
+  `engine_comparison_figure` (N engines over one CT crop, differences, IDD and lateral profiles).
+- **`scripts/pencil_beam/commission_dosecuda.py`** (stages `rlsp,simulate,fit,validate`),
+  **`scripts/pencil_beam/compare_engines.py`** (MC vs pencil beam vs ADoTA on one CT grid), and
+  **`scripts/pencil_beam/provision_dosecuda.sh`** (builds the kernels for adota's Python into
+  `/home/mstryja/tools/dosecuda`). New output formats: the commissioned model directory,
+  `water_validation.csv`, `engine_comparison.csv`, and the per-beamlet `_engines.npz`
+  (see `scripts/docs/compare_engines.md`).
+- **`src/pencil_beam/saved_beamlets.py`** (`survey_dirs`, `SourceDir`, `mirror_inputs`,
+  `field_windows`, `compute_field_pba`, `write_missing_predictions`, `save_new_file`, `save_new_npy`,
+  `check_or_write_provenance`, `load_triplet`, `score_beamlet`, `rank_beamlets`) and
+  **`scripts/pencil_beam/score_saved_beamlets.py`**: the pencil beam and ADoTA on saved MC beamlet
+  grids, scored with the saved MC and ADoTA and ranked by gamma. New per-beamlet output
+  `{id}_ds_pba.npy` (pencil-beam dose in the `_ds.npy` crop layout), added to the source
+  directory by exclusive creation: existing files are never modified. Also added per directory:
+  `pba_provenance.json` (model fingerprint, kernel build, commit; a different model is refused) and,
+  only where predictions were missing, `{id}_ds_pred.npy` + `adota_provenance.json`.
+  `src.pencil_beam.beam_model.model_fingerprint` identifies a model by its tables. `--dry-run`.
+- **Pencil-beam model `dose_unit`** (`gy_mm2_per_mu` default, `mcsquare_per_weight_1000` for `_v1`):
+  `CommissioningConfig.dose_unit`, `commissioning.idd_unit_factor`, `PencilBeamModel.protons_per_mu`
+  (an extra `energies.csv` column; per-proton energy interpolation), `PencilBeamEngine.dose_unit` /
+  `mcsquare_spot_weight(E)` (the default spot weight: MCsquare's scale for every model unit).
+  `engine_comparison_figure(..., dose_scale, dose_unit)` replaces its internal unit conversion.
+  Model `hptc_rsnone_mcsquare_v2` (Gy mm^2 per MU) is the new default; `_v1` is unchanged.
+  `score_saved_beamlets.py` writes `run_config.json` once and appends every invocation to
+  `invocations.jsonl`; validation `results_subdir`. `PencilBeamEngine.prepare_field`
+  / `dose_in_window` / `PreparedField`: one ray trace per field, dose per beamlet window.
+- **`src.mc_generation.mcsquare_runner.MCSQUARE_NUCLEAR_DATA_MAX_MEV`** (250 MeV, the end of
+  MCsquare's ICRU nuclear tables): `MCSquareRunner.run_beamlet` / `run_beamlet_field` now log a
+  warning above it, where MCsquare's nuclear physics reads past the tables (undefined, and a
+  segmentation fault from ~259 MeV). `src.pencil_beam.commissioning.check_energies_simulable`
+  refuses such energies in the commissioning and the engine comparison.
+- **`src.mc_generation.robustness.process_beamlet`**: the per-beamlet crop / QA / save step is
+  public, so the engine comparison writes ADoTA's input exactly as the dataset does. The old
+  private name `_process_beamlet` remains as an alias.
+
+- **`src/datasets/beamlet_record.py`**: the pinned per-record recipe for v3 builds.
+  Exports `load_raw_record` (load and parse), `flux_inputs` and `flux_batch` (flux
+  projection), `downsample_grid` (average, linear, or trilinear), `preprocess_ct_dose`
+  (normalise and downsample), `preprocess_flux`, `finish_record` (compose to a
+  `PreprocessedRecord`), `skip_reason` (zero_dose, bad_shape, short_depth),
+  `spots_reason` (n_spots), plus the constants `RECORD_SUFFIXES`, `DOWNSAMPLE_METHODS`,
+  `FLUX_SPACING_MM`, `EXPECTED_LATERAL`, `MIN_DEPTH`, `REQUIRED_METADATA_KEYS`.
+- **`src/datasets/beamlet_h5.py`**: the v3 schema and writer. Exports `SCHEMA_VERSION`,
+  `V2_ATTRS`, `V3_ATTRS`, `DATASET_NAMES`, `DATASET_KWARGS`, `SKIP_REASONS`, plus
+  `RecordProvenance` (source, flux compute path, BDL file and hash, downsample method,
+  flux model); `derive_keys` (patient and spot key hash), `v2_attrs` (the six v2
+  attributes), `v3_attrs` (the v3-only attributes), `write_record` (create the HDF5
+  group), `is_complete_group` (has datasets and schema version), `write_file_attrs`,
+  `index_row` (CSV flattening), `write_index_csv`, `write_skip_csv`, `sha256_of`,
+  `plan_candidates` (apply exclusion filter and scope to ids-file).
+- **`scripts/build_beamlet_h5.py`**: rebuild the training HDF5 from raw Monte Carlo
+  records to v3 schema with full provenance. Takes `--raw-root`, `--source` (repeatable),
+  `--out`, `--bdl`, `--exclusion-list` (required, no default), `--device`, `--flux-batch`,
+  `--downsample`, `--limit`, `--ids-file`, `--resume`, `--workers`. Writes
+  `<out>.partial`, renames on success. Side outputs: index CSV, skip CSV, build log.
+  Process pool for load/screen, main process for GPU flux and HDF5 writes. Resume on
+  interrupt with `--resume`.
+- **`scripts/check_beamlet_h5.py`**: verify a rebuilt v3 against its v2 source. Takes
+  `--old` (v2), `--new` (v3), `--exclusion-list`, `--sample` (200), `--seed` (0),
+  `--ids-file` (scopes to partial builds), `--allow-new` (ids the old build lost to
+  read errors and the new one recovered), `--out`. Checks id-set arithmetic, dataset
+  storage and array equality, v2 attribute types and values, v3-only attributes present,
+  spot_key multiplicity (informational), H5PYGenerator equivalence on sampled records.
+  Writes JSON report with six checks (a-f) plus verdict and flux_equivalence. Exit code
+  1 on fail.
+- **`tests/utils/beamlet_records.py`**: test fixture for synthetic records. Exports
+  `make_metadata` (JSON structure with pinned defaults) and `write_synthetic_record`
+  (write npy arrays and JSON to a directory).
+
 - **`src/acquisition/`**: `bragg_curve` (Bortfeld 1997, straggled with the HPTC
   beam model's energy spread vendored under `data/hptc_energy_spread.csv`),
   `surrogate` (per-ray WEPL times the Bragg curve times the flux; the
@@ -59,6 +147,31 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 
 ### Changed
 
+- **`record_metadata` in `src/active_learning/retrospective/dataset.py`** reads the
+  v3 attributes when present and prefers the `<stem>_index.csv` next to the file when
+  it exists. On v3 records the returned frame gains `source_dataset`, `patient_key`,
+  `spot_key`, `isocenter_x_mm`, `isocenter_y_mm`, `isocenter_z_mm`, and `energy_mev`
+  comes from the attribute rather than being denormalised; without a provenance CSV,
+  `patient` is `patient_key` and `anatomy` is `source_dataset`. Unchanged on v2 files.
+- **The smoke configs are gone**: `scripts/config_al_retro_smoke.yaml`,
+  `scripts/config_al_smoke.yaml` and `scripts/config_al_train_smoke.yaml` are
+  removed. A smoke test is the main config plus the new repeatable
+  `--set KEY=VALUE` option (`src.evaluation.cli.apply_set_overrides`), which
+  overrides any key, dotted for nested blocks, with the value parsed as YAML,
+  before the config is validated; precedence is per-field option > `--set` >
+  YAML > defaults. `al_retro_loop.py` (`splits`, `cycle0`, `run`), `al_loop.py`,
+  `al_build_validation_set.py` and `al_build_pool.py` take it. The cycle
+  training config of `al_loop.py` is overridden through the existing
+  `loop.train_overrides` block (`--set loop.train_overrides.num_epochs=1`). The
+  retrospective smoke test is now
+  `al_retro_loop.py <stage> --config scripts/config_al_retro_loop.yaml --set
+  data_fraction=1.0 --set max_records=400 --set
+  splits_dir=/scratch/mstryja/adota_runs/al_retro_smoke/splits --set
+  runs_dir=/scratch/mstryja/adota_runs/al_retro_smoke --set n_cycles=2 --set
+  epochs_per_cycle=2 --set eval_every_n_epochs=1 --set eval_subsample_size=8
+  --set checkpoint_every_n_epochs=1 --set scorer.n_workers=8 --set
+  training.compile=false --set training.allow_tf32=false`; the full lists for
+  both loops are in `scripts/docs/al_retro_loop.md` and `scripts/docs/al_loop.md`.
 - **`analyse_density_regions` and `compute_advanced_metrics` moved** from
   `scripts/training_set_analysis_advanced_metrics.py` to
   `src.acquisition.features`, verbatim; the script imports them. Import from
@@ -66,6 +179,280 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 - `src.mc_generation.robustness`: `_FieldGeometry` / `_field_geometry` are now
   public as `FieldGeometry` / `field_geometry`; the underscore names remain as
   aliases.
+- **`generate_beamlets` is the generator's beamlet entry point.**
+  `src.mc_generation.robustness._generate_energy_block` now delegates to it.
+  It takes an explicit list of beamlets and optional output stems instead of a
+  lattice, so the active-learning oracle labels an arbitrary selection through
+  exactly the MC path and QA gates the reference datasets used. Lattice sweeps
+  are unaffected: with no `stems`, filenames stay `a{ix}_{iy}`.
+- `RobustnessConfig.beamlet_block_size` caps the spots per beamlet-mode MCsquare
+  call. `None` (the default) keeps the previous behaviour of sending a whole
+  block at once, which holds `len(spots) x grid` of dense dose on scratch -- over
+  100 GB for a 324-spot thoracic field.
+- `TrainingConfig` gains `al_dir_sources`, `al_oversample_fraction`,
+  `al_steps_per_epoch`, `al_preload_dir_records` and `max_val_batches`. With
+  `al_dir_sources` set, `build_dataloaders` returns the union loaders; unset,
+  every existing run is byte-identical.
+- `CheckpointManager.load_weights_only` and `src.adota.utils.load_model` now
+  accept either checkpoint shape: a training snapshot (weights under `"model"`)
+  or the bare `state_dict` the deployed checkpoints under `models/` are stored
+  as. Warm-starting the loop from `DoTA_v3_grid_search_v11` needs the second.
+- `src.loaders.dir_based` no longer pins its own logger to `DEBUG`. A library
+  module inherits the level the application configures; pinning it leaked a
+  per-record line into every caller's log. Set the level in your entry point to
+  get the old verbosity back.
+
+### Added (sequence mixer, EXP-0014)
+
+- **`DoTA3D_v3(sequence_mixer=...)`** and the `TrainingConfig` fields
+  `sequence_mixer` (`transformer` | `mlstm` | `none`), `mlstm_proj_factor` and
+  `mlstm_conv_kernel`, passed through `build_adota_model`. `to_dict()` (and so
+  `hyperparams.json`) gains the three keys; a file without them builds the
+  transformer, and existing checkpoints load unchanged. `num_transformers`
+  counts the blocks of whichever mixer runs.
+- **`src/adota/layers/mlstm.py`**: `MLSTMBlockDoTA`, `mlstm_parallel`,
+  `look_ahead`, a pure-PyTorch mLSTM read in the beam direction with the
+  transformer's `num_forward` look-ahead.
+- **`src/adota/layers/mixers.py`**: `build_sequence_mixer`, `SEQUENCE_MIXERS`;
+  both re-exported from `src.adota.layers` with `MLSTMBlockDoTA`.
+- Guide: `docs/sequence_mixers.md`.
+
+### Changed (sequence mixer, EXP-0014)
+
+- In eval mode `DoTA3D_v3` returns the zero attention placeholder whenever the
+  mixer computes no attention (`mlstm` or `none`), not only when there are no
+  transformer blocks; the transformer's output is unchanged.
+
+### Added (active learning)
+
+- **`src/active_learning/`**: `pool` (CT roles and the leakage rule, with the
+  selection recorded in `registry/al_pool_selection.csv`), `candidates`
+  (version-0 candidate generation and content-addressed ids; scoring a pool of
+  CTs one worker per CT), `sampling` (`random`, `score`, `score_topk`,
+  `stratified_score`, with per-patient and per-energy quotas), `oracle`
+  (Monte Carlo labelling of a selected batch, and the group-cost estimate),
+  `dataset` (`DirBeamletDataset` and the oversampled union with the HDF5 set),
+  `validation` (the difficulty-balanced recipe, and GPR / MAPE / RDE / **dR80**
+  on the frozen set), `training` (the retraining step) and `loop` (the cycle,
+  its manifest and its resume).
+- **`scripts/al_build_pool.py`, `scripts/al_build_validation_set.py`,
+  `scripts/al_loop.py`** with `config_al.yaml`, `config_al_train.yaml` and the
+  `config_al_smoke.yaml` / `config_al_train_smoke.yaml` pair that runs the whole
+  pipeline in minutes. Guide: `scripts/docs/al_loop.md`.
+- `src.evaluation.sources.MultiDirSource`: a `DirSource` spanning several
+  directories, which is what any set assembled across patients looks like.
+
+### Fixed
+
+- **Beamlet dose unit.** MCsquare writes eV/g per simulated proton, and
+  `src.utils.unit_conversions.to_gy` (x 1.60218e-10, documented as MeV/g) therefore
+  returned the dose of exactly 1e6 protons, not Gy.
+  - New: `mcsquare_to_gy_per_mu(dose, energy, bdl)` gives Gy per MU, with MCsquare's
+    own protons per MU (`mcsquare_protons_per_mu`: linear, and extrapolated beyond the
+    BDL nodes as MCsquare does). Also `mcsquare_to_gy_per_proton` and `EV_PER_G_TO_GY`.
+  - The old factor is kept as `legacy_to_gy_per_1e6_protons`, which **every existing
+    caller (14 files) now names explicitly**, so the RMSE values reported as `rmse_gy` and
+    every earlier figure reproduce unchanged. `to_gy` remains a deprecated alias that
+    warns.
+  - The pencil-beam figures now show Gy per MU. See `docs/dose_units.md`.
+- **No MCsquare data above 250 MeV.**
+  - `MCSquareRunner` now *refuses* beamlets above
+    `MCSQUARE_NUCLEAR_DATA_MAX_MEV` (it warned), and so do `RobustnessConfig` (every
+    MC generator) and the active-learning `CandidateConfig`, via
+    `src.mc_generation.mcsquare_runner.check_energies_simulable` (moved there from
+    `src.pencil_beam.commissioning`, which re-exports it).
+  - New `src.datasets.energy_cut` (`drop_above_energy`, `record_energies_mev`).
+    Training (`load_record_ids(..., max_energy_mev)`, `TrainingConfig.max_energy_mev`
+    = 250), retrospective active-learning split draws (`max_energy_mev` = 250) and
+    `run_model_h5py` (`max_energy_mev` = 250) drop records above 250 MeV by id: 853 of
+    the v3 file's 70,146.
+  - Splits already frozen are not touched; `max_energy_mev: null` reproduces earlier
+    runs.
+
+### Fixed
+
+- `CheckpointManager.load` restored the RNG state from the loaded snapshot as
+  is, so a resume with `device=cuda:N` failed with "RNG state must be a
+  torch.ByteTensor": `map_location` had moved the generator states to the
+  device. They are moved back to the CPU before `set_rng_state`.
+- `src.metrics.gamma_pass_rate`: the second entry of the pass-rate pair
+  returned by `gamma_index` and `gamma_index_torch` (`gpr[1]`) counted every
+  voxel the kernel had not evaluated as passing. The kernel marks those voxels
+  NaN; `nan_to_num` turned them into 0, and 0 satisfies `gamma <= 1`, so the
+  number rose with the fraction of low-dose voxels in the volume rather than with
+  agreement (on 100 random beamlets of the `energy_gantry_full` sweeps it was
+  inflated by 3.5 pp at 2%/2mm/10% and 10.2 pp at 1%/3mm/0.1%, up to 22 pp on a
+  single beamlet). `gpr[1]` is now passing over evaluated voxels, the pymedphys
+  definition. `gpr[0]`, which every consumer in this repository reads and which
+  the published robustness grids were scored with, is **unchanged**; it agrees
+  with the corrected `gpr[1]` to within 1e-4 pp except on voxels with gamma
+  exactly 0.
+
+### Added (ensemble agreement, EXP-0014)
+
+- **`src/active_learning/ensemble/`**: `members` (`Member`, `EvaluationSettings`,
+  `resolve_member`, `infer_errors`, `training_config_from_yaml`, `held_out_table`:
+  a trained model's per-record errors, reused from a CSV or inferred from its
+  checkpoint, and its training ids) and `agreement` (`ERROR_METRICS`,
+  `error_matrix`, `assign_cells`, `pair_levels`, `cell_correlations`, `pair_table`,
+  `scan_bootstrap`, `agreement_matrix`: within scan x 20 MeV cell rank agreement
+  per pair, the pair level read from the training ids, a bootstrap over scans).
+- **`scripts/active_learning/ensemble_agreement.py`** with
+  `config_ensemble_agreement.yaml` (stage 0b: the nine cycle-5 models of
+  EXP-0012). New output format: `pairs_<metric>.csv`, `levels_<metric>.csv`,
+  `cells_<metric>.csv`, `members.csv`, `held_out.csv`, `summary.json`. Guide:
+  `scripts/docs/ensemble_agreement.md`.
+- **`src/figures/ensemble_agreement.py`**: `agreement_matrix_figure`.
+- **`src/active_learning/ensemble/partition.py`**: `scans_from_frozen_ids`,
+  `scans_from_patients`, `scan_table`, `assign_folds`, `hpo_split`,
+  `record_table`, `check_partition`, `fold_ids`, `fold_summary`: the scan-level
+  F / V / R partition, anatomy-stratified cross-fitting folds and the HPO split
+  of R.
+- **`scripts/active_learning/cross_fit_partition.py`** with
+  `config_cross_fit_partition.yaml`. New output format: `partition.csv`,
+  `records.csv`, `folds/fold_<k>_{train,eval}_ids.csv`,
+  `hpo/hpo_{train,val}_ids.csv`, `fold_summary.csv`. Guide:
+  `scripts/docs/cross_fit_partition.md`.
+- `src.evaluation.cli.on_root_filesystem`: whether an output path would land on
+  the root disk, for scripts that refuse it.
+
+### Added (retrospective active learning)
+
+- **`src/active_learning/retrospective/`**: the retrospective benchmark on the
+  training HDF5 (EXP-0009). `dataset` (the exclusion list, the frozen validation
+  set and the cycle-0 set through `train_val_split`, the growth schedule),
+  `scoring` (the `PoolScorer` interface and `DifficultyPoolScorer`, which reads
+  the CT, the flux and the energy of a record and never its dose), `sampling`
+  (a strategy registry with `random`, `score_topk` and `stratified_score`, and
+  the selection fingerprint), `validation` (the fixed evaluation subsample; the
+  per-sample gamma on the torch backend, MAPE, RDE and dR80 with the plateau
+  guard), `trainer` (one cycle on top of `src.training`), `loop` (the splits
+  stage, the cycle-0 baseline, the strategy runs, their manifests and resume)
+  and `compare` (reading runs back, the boundary table, epochs to quality).
+- `RetroConfig.data_fraction` (with `data_fraction_seed`): the share of the
+  post-exclusion set the experiment uses, drawn once before any split, so the
+  benchmark scales from a 30 percent pilot to the full set by one config key.
+- **`scripts/al_retro_loop.py`** (`splits`, `cycle0`, `run`) and
+  **`scripts/al_compare.py`** with `config_al_retro_loop.yaml`,
+  `config_al_retro_smoke.yaml` and `config_al_compare.yaml`. Guide:
+  `scripts/docs/al_retro_loop.md`.
+- **`src/figures/al_curves.py`**: `training_curves_figure`,
+  `quality_curves_figure` and `selection_fingerprint_figure`, the multi-run
+  learning-curve and selection figures, saved through
+  `save_figure_as_publication_formats`.
+
+### Changed (retrospective active learning)
+
+- `src.active_learning.retrospective.sampling.energy_bin` is public (was
+  `_energy_bin`), so the ensemble cells use the selection fingerprint's 20 MeV bins.
+- **`src/active_learning/retrospective/sampling.py`**: `stratified_score`
+  (`stratified_score_strategy`) is removed from the retrospective registry.
+  EXP-0009 found that equal counts per score decile, uniform inside a decile, is
+  uniform sampling over the score distribution, i.e. a second `random` run
+  rather than the intended exploitation-plus-coverage strategy. `score_topk_mixed`
+  (`score_topk_mixed_strategy`) replaces it: a `top_fraction` share of the batch
+  is the top-scoring prefix of `score_topk`, the rest drawn uniformly from
+  everything else in the pool, scored or not. `select(pool, n, strategy, rng,
+  **params)` now forwards keyword parameters to the strategy.
+- **`RetroConfig` moved** from `src/active_learning/retrospective/loop.py` to
+  `src/active_learning/retrospective/config.py`, still importable as `from
+  src.active_learning.retrospective.loop import RetroConfig`. New fields:
+  `lr_schedule` (`plateau`, `constant` or `cosine_per_cycle`; default `plateau`
+  keeps old runs byte-for-byte reproducible), `lr_min` (the floor of
+  `cosine_per_cycle`) and `strategy_params` (keyword parameters forwarded to
+  the strategy, for example `{top_fraction: 0.5}` for `score_topk_mixed`).
+- **New module `src/active_learning/retrospective/lr_schedule.py`**: `fixed_lr`,
+  `FIXED_LR_SCHEDULES` and `ALL_LR_SCHEDULES`. `ReduceLROnPlateau` (`plateau`)
+  couples the learning rate to the validation loss, which couples it to the
+  active-learning strategy (EXP-0009: a run whose loss stalls gets its LR cut
+  and trains slower thereafter, so the scheduler amplifies whatever difference
+  the data made). `constant` and `cosine_per_cycle` are pure functions of the
+  epoch within the cycle, so they carry no scheduler state and a mid-cycle
+  resume is exact.
+- Output format: `metrics.jsonl` rows gain `lr_schedule` beside the existing
+  `lr`; run `manifest.json` files gain `lr_schedule` and `lr_min`.
+- **`src/active_learning/retrospective/compare.py`** reads three things off the
+  log that EXP-0010 had to read by hand: `divergence_table` (per run and cycle,
+  the largest epoch-to-epoch rise of the training loss, flagged above a ratio;
+  EXP-0009 and EXP-0010 each had one run diverge ten-fold mid-cycle),
+  `trajectory_table` (the median of the last k subsample evaluations of a
+  cycle, a boundary estimate independent of the boundary epoch) and
+  `aggregate_over_seeds` (mean with min-max range across the runs of one
+  strategy). `RunData` gains `seed`; `unique_labels` suffixes repeated labels
+  with the seed. `quality_curves_figure` in `src/figures/al_curves.py` draws a
+  band when a frame carries `<column>_min` / `<column>_max`.
+- Output format of `scripts/al_compare.py`: new `divergences.csv`,
+  `summary_trajectory_last<k>_gamma_<criteria>.csv`, and, when a strategy has
+  several runs, the `*_by_strategy` boundary and trajectory summaries and the
+  `F2`/`F3` `_by_strategy` figures; `consistency.json` gains `strategies`,
+  `seeds` and `diverged`. Config keys `divergence_ratio` (2.0) and
+  `trajectory_last_k` (3). `scripts/run_al_retro.sh` gains `SEEDS` and queues
+  (seed, strategy) jobs seed-major; its logs are named `<strategy>_seed<seed>.log`.
+- **Warmup for the fixed LR schedules (EXP-0012)**: new `RetroConfig` key
+  `warmup_epochs` (default 0, no warmup, so EXP-0010 and EXP-0011 configs
+  reproduce unchanged). With `warmup_epochs = W > 0` the learning rate rises
+  linearly from `lr_min` at epoch 0 of every cycle to `training.learning_rate`
+  at epoch W; `cosine_per_cycle` then decays to `lr_min` at the last epoch and
+  `constant` stays flat. It must be smaller than `epochs_per_cycle` and is
+  rejected under `plateau`. `fixed_lr` gains a `warmup_epochs` keyword,
+  `build_train_state` and `TrainState` a `warmup_epochs` field, and
+  `lr_schedule.py` exports `validate_warmup`. EXP-0011's warm restart (`lr_min`
+  straight back to `lr0`) was itself a 40 to 67-fold jump of the training loss
+  at cycle 2; the warmup removes the jump while staying a pure function of the
+  epoch. `scripts/config_al_retro_loop.yaml` is now EXP-0012 (EXP-0011 plus
+  `warmup_epochs: 5`, on v3 with a patient-held-out V; see below).
+- Output format: run `manifest.json` files gain `warmup_epochs` beside
+  `lr_schedule` and `lr_min`.
+- **`divergence_table` semantics changed**: the epoch-to-epoch rise is now taken
+  over the whole run, so the step from the last epoch of cycle c-1 (for cycle 1,
+  the inherited cycle-0 rows) into epoch 0 of cycle c counts for cycle c, and a
+  new column `at_restart` says whether the largest rise was that step. Grouping
+  by cycle alone had missed the EXP-0011 warm-restart shock. Rerunning
+  `al_compare.py` on EXP-0011 now flags cycle 2 of every run.
+- **New `restart_table`** in `compare.py`: per run and cycle >= 1,
+  `restart_ratio` (training loss at epoch 0 over the last epoch of the previous
+  cycle), `restart_peak_ratio` and `restart_peak_epoch` (the peak over the first
+  `restart_peak_epochs` epochs, since a warmup may delay the shock rather than
+  remove it), and the same three with a `val_` prefix for the validation loss.
+  Output format of `scripts/al_compare.py`: new `restart_ratios.csv`, plus
+  `restart_ratios_by_strategy.csv` when a strategy has several seeds; new config
+  key `restart_peak_epochs` (10). On the existing runs the cycle-2 mean
+  `restart_ratio` is 40 / 67 / 50 (EXP-0011 random / score_topk /
+  score_topk_mixed) and 0.92 to 1.01 (EXP-0010).
+- **`prepare_splits` in `src/active_learning/retrospective/loop.py`** gains
+  `overwrite: bool = False` and raises `FileExistsError` when `splits_dir`
+  already holds a `splits.json`; the `splits` stage of
+  `scripts/al_retro_loop.py` gains `--overwrite`. Frozen splits (the d30 splits
+  of EXP-0009 to EXP-0011 and the patient-held-out splits of EXP-0012) can no
+  longer be redrawn by a stray `splits` run or a launcher started without
+  `SKIP_SPLITS=1`.
+- **Patient-held-out validation split.** New module
+  `src/active_learning/retrospective/patient_split.py` (`select_held_out_groups`,
+  `build_patient_splits`, `assert_groups_disjoint`) and new `RetroConfig` keys
+  `val_split` (`record`, the default and unchanged, or `patient`),
+  `val_group_column` (`patient_key`), `val_stratify_column` (`source_dataset`)
+  and `val_groups_per_stratum`. Under `patient`, V is every record of a fixed
+  number of held-out groups per stratum, drawn with `split_seed`; `load_run_inputs`
+  re-checks that no group is in both V and T. Output format: `splits.json`
+  gains `val_split` and, under `patient`, `held_out_groups`,
+  `n_groups_validation` and `n_groups_training`.
+- **`scripts/run_al_retro.sh`** gains `CYCLE0_ARGS`, extra arguments for the
+  cycle-0 stage only (EXP-0012 trains cycle 0 at a constant 5e-4 while the
+  strategy runs use the warmed-up cosine).
+- **`scripts/config_al_retro_loop.yaml`** is EXP-0012 on the v3 HDF5 with 12
+  held-out CT scans (9 thorax, 3 pelvis) at d30, splits and runs under
+  `/scratch/mstryja/adota_runs/al_retro_v3/d30_patient/`.
+- **`scripts/analysis/acquisition_input_only_refit.py`** gains
+  `--exclude-patients` (provenance-map `patient_key` values whose records are
+  dropped from development and frozen test before fitting) and `--output-dir`
+  (defaults to `--features-dir`, the old behaviour); `analytic_scorer.json`
+  gains `excluded_patients`.
+- **New vendored scorer
+  `src/acquisition/data/analytic_scorer_exp0012_train_patients.json`**: the
+  EXP-0006 protocol refitted without EXP-0012's 12 held-out scans (the deployed
+  scorer was fitted on 11 of them). EXP-0012 loads it with `arm:
+  analytic/both_inside_crop`, `variant: full (ridge)`; the deployed
+  `analytic_scorer.json` is unchanged.
 
 ## [1.5.0] - 2026-09-03
 

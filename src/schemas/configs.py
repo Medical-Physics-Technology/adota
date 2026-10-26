@@ -166,6 +166,9 @@ class TrainingConfig:
     # ── Data ────────────────────────────────────────────────────────────
     dataset_path: str = ""
     excluded_indexes_file: str = ""
+    # Drop beamlets above this energy before the split: MCsquare's nuclear data ends
+    # at 250 MeV, so their Monte Carlo is undefined. ``null`` reproduces pre-cut runs.
+    max_energy_mev: Optional[float] = 250.0
     train_test_split: float = 0.2
     split_random_state: int = 42
     scale: dict = field(default_factory=lambda: DEFAULT_SCALE.copy())
@@ -255,9 +258,23 @@ class TrainingConfig:
     # for a fixed validation sample every K epochs.
     attention_every_n_epochs: int = 10
 
+    # ── Active-learning union training ─────────────────────────────────
+    # Set by the AL loop, absent from an ordinary run. Each source is a CSV of
+    # (dir, stem) beamlet directories written by src.active_learning; they are
+    # concatenated with the HDF5 training split and sampled so that
+    # al_oversample_fraction of every batch is new material. See
+    # src/active_learning/dataset.py for why a cycle is steps, not epochs.
+    al_dir_sources: List[str] = field(default_factory=list)
+    al_oversample_fraction: float = 0.25
+    al_steps_per_epoch: Optional[int] = None
+    al_preload_dir_records: bool = True
+
     # ── Run-control flags ──────────────────────────────────────────────
     max_hours: Optional[float] = None  # wall-time budget
     smoke_test: bool = False  # 2 epochs, 4 batches/epoch, exit cleanly
+    # Cap the per-epoch validation pass at N batches (the AL cycles validate on
+    # their own frozen set, so the HDF5 split only has to track overfitting).
+    max_val_batches: Optional[int] = None
     resume_from: Optional[str] = None  # path to a checkpoint .pth
     # Warm-start: load only the model weights from resume_from (fresh
     # optimizer / scheduler / epoch counter). Used to fine-tune a prior best
@@ -266,6 +283,11 @@ class TrainingConfig:
 
     # ── Model hyperparameters (passed verbatim to DoTA3D_v3) ───────────
     input_shape: Tuple[int, int, int, int] = (2, 160, 30, 30)
+    # The mixer over the slice sequence: "transformer" | "mlstm" | "none"
+    # (src/adota/layers/mixers.py). num_transformers counts its blocks.
+    sequence_mixer: str = "transformer"
+    mlstm_proj_factor: float = 2.0
+    mlstm_conv_kernel: int = 4
     num_transformers: int = 1
     num_heads: int = 4
     # Feed-forward hidden dim of the transformer layers. None -> defaults to the

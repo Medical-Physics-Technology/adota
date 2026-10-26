@@ -281,13 +281,17 @@ def _gamma_values(
 
 
 def _gamma_pass_rate(gamma_values: np.ndarray) -> tuple:
-    """The pass rate pair, extracted verbatim so both backends share it.
+    """The pass rate pair, shared by both backends.
 
-    Note the denominator: voxels with gamma exactly 0 -- which after
-    ``nan_to_num`` includes every voxel that was not evaluated -- are excluded
-    from both the numerator and the denominator of ``gamma_pass_rate[0]``.
-    Training runs are compared longitudinally against this exact definition, so
-    it is reproduced unchanged rather than corrected.
+    Two definitions are returned. ``[0]`` is the historical one: after
+    ``nan_to_num`` every voxel that was not evaluated has gamma 0, and voxels
+    with gamma exactly 0 are excluded from both the numerator and the
+    denominator. Training runs are compared longitudinally against this exact
+    definition, so it is reproduced unchanged. ``[1]`` is the standard
+    definition, passing voxels over evaluated (non-NaN) voxels; an unevaluated
+    voxel is never counted, as passing or otherwise. It used to be computed on
+    the NaN-zeroed array over the whole grid, which counted every unevaluated
+    voxel as a pass.
 
     Args:
         gamma_values: The raw gamma array, NaN where not evaluated.
@@ -295,13 +299,18 @@ def _gamma_pass_rate(gamma_values: np.ndarray) -> tuple:
     Returns:
         tuple: ``(gamma_values, gamma_pass_rate)`` with the NaNs zeroed.
     """
-    gamma_values = np.nan_to_num(gamma_values, 0)
+    evaluated = ~np.isnan(gamma_values)
+    n_evaluated = np.count_nonzero(evaluated)
 
     gamma_pass_rate = np.zeros(2)
+    gamma_pass_rate[1] = (
+        np.sum(gamma_values[evaluated] <= 1) / n_evaluated if n_evaluated else np.nan
+    )
+
+    gamma_values = np.nan_to_num(gamma_values, 0)
     gamma_pass_rate[0] = 1 - (
         np.count_nonzero(gamma_values > 1) / np.count_nonzero(gamma_values > 0)
     )
-    gamma_pass_rate[1] = np.sum(gamma_values <= 1) / np.prod(gamma_values.shape)
 
     return gamma_values, gamma_pass_rate
 
