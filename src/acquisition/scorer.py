@@ -26,6 +26,17 @@ N_GRID = 101
 DEPLOYED_SCORER = Path(__file__).parent / "data" / "analytic_scorer.json"
 
 
+def percentile_grids(frame: pd.DataFrame, metrics: Sequence[str]) -> Dict[str, np.ndarray]:
+    """The study's percentile grids: 101 quantiles of each metric over the rows a
+    score is fitted on (``acquisition_frozen_test.py::grids``)."""
+    return {m: np.quantile(frame[m].to_numpy(dtype=float), np.linspace(0.0, 1.0, N_GRID)) for m in metrics}
+
+
+def percentile_transform(grid: np.ndarray, values: np.ndarray) -> np.ndarray:
+    """The study's transform: right-side rank into the 101-point grid, over 101, clipped."""
+    return np.clip(np.searchsorted(grid, np.asarray(values, dtype=float), side="right") / N_GRID, 0.0, 1.0)
+
+
 @dataclass(frozen=True)
 class DifficultyScorer:
     """A frozen linear difficulty score."""
@@ -71,8 +82,7 @@ class DifficultyScorer:
 
     def percentile(self, metric: str, values: np.ndarray) -> np.ndarray:
         """The study's transform: right-side rank into the 101-point grid, over 101, clipped."""
-        return np.clip(np.searchsorted(self.grids[metric], np.asarray(values, dtype=float), side="right") / N_GRID,
-                       0.0, 1.0)
+        return percentile_transform(self.grids[metric], values)
 
     def score(self, features: Union[Mapping[str, float], pd.DataFrame]) -> Union[float, np.ndarray]:
         """Score one feature mapping or a frame of them. Higher is harder."""

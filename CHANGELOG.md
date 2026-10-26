@@ -288,6 +288,34 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   with the corrected `gpr[1]` to within 1e-4 pp except on voxels with gamma
   exactly 0.
 
+### Added (beamlet hardness per engine, EXP-0014)
+
+- **`src/active_learning/hardness/`**: `cells` (`cell_ranks`, `cell_spearman`,
+  `bootstrap_interval`, `cluster_metrics`, `cluster_composites`: within-cell
+  statistics and clusters of near-duplicate metrics), `fit` (`fit_score`,
+  `out_of_fold`, `coefficients`, `permutation_importance`, `transfer_summary`,
+  `scorer_json`: the difficulty score refit per engine, leave one scan out),
+  `engines` (`EngineSpec`, `parse_engines`, `score_blocks`, `score_blocks_sharded`,
+  `predict_h5_records`: dose engines as config entries, scored on saved beamlet
+  directories), `tables`, `analysis` and `report`.
+- **`src/figures/beamlet_hardness.py`**: `annotated_heatmap`, `cluster_importance_figure`.
+- **`scripts/active_learning/beamlet_hardness.py`** + `config_beamlet_hardness.yaml`;
+  guide `scripts/docs/beamlet_hardness.md`. New output directory
+  `beamlet_hardness_<ts>/` (tables, results, figures, examples, report).
+- Shared helpers, factored out of existing code with unchanged behaviour:
+  `src.active_learning.retrospective.validation.record_metrics` (one record's gamma,
+  MAPE, RDE, dR80; `evaluate_metrics` calls it),
+  `src.active_learning.ensemble.agreement.scan_resamples` (the scan bootstrap draws;
+  `scan_bootstrap` uses it, same draws for the same seed),
+  `src.acquisition.candidates.model_grid_inputs` and `analytic_features` (the
+  candidate feature path, now usable on saved beamlets),
+  `src.acquisition.scorer.percentile_grids` and `percentile_transform`.
+
+### Changed (beamlet hardness per engine, EXP-0014)
+
+- `src.acquisition.reference.record_features` takes `max_energy_mev` (default 250,
+  the previous fixed cut; `None` keeps every energy).
+
 ### Added (ensemble agreement, EXP-0014)
 
 - **`src/active_learning/ensemble/`**: `members` (`Member`, `EvaluationSettings`,
