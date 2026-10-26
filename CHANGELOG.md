@@ -15,6 +15,12 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 
 ### Added
 
+- **DoseCUDA source and citation**: `docs/pencil_beam.md` gains a "Source, version,
+  licence and citation" section (the repository, the pinned commit `0d4db1f4f736`,
+  GPL-2.0, and the citation the DoseCUDA authors ask for, Bhattacharya et al., J Appl
+  Clin Med Phys 2025, doi:10.1002/acm2.70093, with BibTeX); the three pencil-beam
+  guides, both READMEs, `src/pencil_beam/__init__.py` and `provision_dosecuda.sh`
+  link the repository and give the citation.
 - **`src/pencil_beam/`**: the DoseCUDA proton pencil beam, commissioned against MCsquare.
   `kernels.load_dose_kernels` (the compiled extension, loaded by path);
   `rlsp.hu_to_rlsp_table` / `write_rlsp_csv` (HU -> RLSP from MCsquare's scanner and Geant4

@@ -4,8 +4,10 @@ Runs the same proton beamlets through three dose engines and compares them voxel
 voxel on **one CT grid**:
 
 - **MC**: MCsquare, the reference.
-- **PBA**: the DoseCUDA pencil beam, commissioned with
-  [commission_dosecuda.md](commission_dosecuda.md).
+- **PBA**: the [DoseCUDA](https://github.com/jhu-som-radiation-oncology/DoseCUDA) pencil beam (Bhattacharya et al., J Appl Clin Med Phys 2025 ([doi:10.1002/acm2.70093](https://doi.org/10.1002/acm2.70093))),
+  commissioned with [commission_dosecuda.md](commission_dosecuda.md); source, version,
+  licence and citation in
+  [docs/pencil_beam.md](../../docs/pencil_beam.md#source-version-licence-and-citation).
 - **ADoTA**: the trained model.
 
 Background: [docs/pencil_beam.md](../../docs/pencil_beam.md).

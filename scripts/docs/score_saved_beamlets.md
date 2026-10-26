@@ -6,6 +6,9 @@ and the **saved** ADoTA prediction (`{id}_ds_pred.npy`) against the **saved** MC
 (`{id}_ds.npy`) by gamma pass rate, and renders the best and worst beamlets of each
 engine. No new MC and no new ADoTA inference are run.
 
+The pencil beam is [DoseCUDA](https://github.com/jhu-som-radiation-oncology/DoseCUDA) (Bhattacharya et al., J Appl Clin Med Phys 2025 ([doi:10.1002/acm2.70093](https://doi.org/10.1002/acm2.70093))); its source, the pinned version, the licence and the citation to use are in
+[docs/pencil_beam.md](../../docs/pencil_beam.md#source-version-licence-and-citation).
+
 **Source directories:** files are only ever added, each created exclusively (a
 temporary file hard-linked to the target, which fails if the target exists). No
 existing file is modified or replaced, by a rerun or by a crash. What may be added:

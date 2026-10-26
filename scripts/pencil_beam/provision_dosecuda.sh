@@ -3,6 +3,13 @@
 # into an independent, persistent home. Idempotent: an existing build of the same
 # commit is left as-is.
 #
+# DoseCUDA: https://github.com/jhu-som-radiation-oncology/DoseCUDA (GPL-2.0; adota's results were produced at
+# commit 0d4db1f4f736). The kernels are compiled unmodified from the given clone;
+# no DoseCUDA source is copied into adota. Work that uses the pencil beam must cite:
+#   Bhattacharya M, Reamy C, Li H, Lee J, Hrinivich WT. A Python package for fast
+#   GPU-based proton pencil beam dose calculation. J Appl Clin Med Phys.
+#   2025:e70093. doi:10.1002/acm2.70093
+#
 # Why not `pip install DoseCUDA` into the adota venv: DoseCUDA pins `numpy < 2`
 # (build and runtime) while adota runs numpy 2, and an extension compiled against
 # numpy 1 cannot be imported under numpy 2. Installing an unlocked package into
