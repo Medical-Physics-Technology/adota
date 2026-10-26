@@ -158,7 +158,7 @@ _FieldGeometry = FieldGeometry
 _field_geometry = field_geometry
 
 
-def _process_beamlet(
+def process_beamlet(
     rec: CTRecord, bdl: BeamDataLibrary, cfg: RobustnessConfig, geom: FieldGeometry,
     energy: float, cell: Tuple[int, int, float, float], spot, dose_img, sim_res: dict,
     out_dir: Path, fig_dir: Path, stem: Optional[str] = None,
@@ -169,7 +169,8 @@ def _process_beamlet(
     came from a per-spot call or from a beamlet-mode field. ``stem`` names the
     output files; the sweep leaves it unset and gets the lattice-cell name, while
     the active-learning oracle passes its own candidate id (its beamlets do not
-    sit on a lattice).
+    sit on a lattice). Public so the engine comparison
+    (:mod:`src.pencil_beam.comparison`) writes ADoTA's input exactly as the dataset does.
     """
     ix, iy, tx, ty = cell
     ct = geom.ct
@@ -294,7 +295,7 @@ def generate_beamlets(
                     geom.ct, energy=energy, gantry_angle=geom.mc_gantry, spots_xy=spots,
                     isocenter=geom.iso_mc, num_primaries=cfg.num_primaries,
                     num_threads=cfg.num_threads, rng_seed=cfg.rng_seed):
-                outcome = _process_beamlet(
+                outcome = process_beamlet(
                     rec, bdl, cfg, geom, energy, chunk[index][0], spots[index], dose_img,
                     sim_res, out_dir, fig_dir, stem=chunk[index][1])
                 n_saved += outcome == "saved"
@@ -306,12 +307,15 @@ def generate_beamlets(
                     isocenter=geom.iso_mc, num_primaries=cfg.num_primaries,
                     num_threads=cfg.num_threads, rng_seed=cfg.rng_seed,
                 )
-                outcome = _process_beamlet(rec, bdl, cfg, geom, energy, cell, spots[index],
+                outcome = process_beamlet(rec, bdl, cfg, geom, energy, cell, spots[index],
                                            dose_img, sim_res, out_dir, fig_dir, stem=stem)
                 n_saved += outcome == "saved"
                 n_qa += outcome == "qa"
 
     return {"saved": n_saved, "qa_skipped": n_qa, "existing": n_exist, "dir": out_dir.name}
+
+
+_process_beamlet = process_beamlet   # former private name
 
 
 def _generate_energy_block(

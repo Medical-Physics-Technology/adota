@@ -15,6 +15,52 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 
 ### Added
 
+- **DoseCUDA source and citation**: `docs/pencil_beam.md` gains a "Source, version,
+  licence and citation" section (the repository, the pinned commit `0d4db1f4f736`,
+  GPL-2.0, and the citation the DoseCUDA authors ask for, Bhattacharya et al., J Appl
+  Clin Med Phys 2025, doi:10.1002/acm2.70093, with BibTeX); the three pencil-beam
+  guides, both READMEs, `src/pencil_beam/__init__.py` and `provision_dosecuda.sh`
+  link the repository and give the citation.
+- **`src/pencil_beam/`**: the DoseCUDA proton pencil beam, commissioned against MCsquare.
+  `kernels.load_dose_kernels` (the compiled extension, loaded by path);
+  `rlsp.hu_to_rlsp_table` / `write_rlsp_csv` (HU -> RLSP from MCsquare's scanner and Geant4
+  stopping powers); `beam_model.PencilBeamModel` (DoseCUDA lookup-table layout, `read` / `write`,
+  `at_energy` range-scaled interpolation, `kernel_model`), `read_rlsp_curve`, `hu_to_rlsp`;
+  `commissioning.CommissioningConfig`, `commissioning_phantom`, `run_commissioning_beamlets`,
+  `depth_profile`, `kernel_halo`, `fit_primary_sigma`, `kernel_sigma_profile`, `distal_r80`,
+  `physical_to_wet`, `fit_energy_node`, `fit_model`; `pipeline.fit_from_runs`, `validate_water`,
+  `provenance`, `write_rows_csv`; `model_card.write_model_card` (the `README.md` of a commissioned
+  model: beam, units, usage, measured accuracy); `engine.PencilBeamEngine`, `mc_frame_to_dosecuda`;
+  `metrics.criteria_from_config`, `dose_bbox`, `gamma_pass_rates`, `dose_agreement`;
+  `comparison.ComparisonSettings`, `compare_block`, `summarize`.
+- **`src/figures/pencil_beam.py`**: `commissioning_run_figure`, `commissioning_summary_figure`,
+  `engine_comparison_figure` (N engines over one CT crop, differences, IDD and lateral profiles).
+- **`scripts/pencil_beam/commission_dosecuda.py`** (stages `rlsp,simulate,fit,validate`),
+  **`scripts/pencil_beam/compare_engines.py`** (MC vs pencil beam vs ADoTA on one CT grid), and
+  **`scripts/pencil_beam/provision_dosecuda.sh`** (builds the kernels for adota's Python into
+  `/home/mstryja/tools/dosecuda`). New output formats: the commissioned model directory,
+  `water_validation.csv`, `engine_comparison.csv`, and the per-beamlet `_engines.npz`
+  (see `scripts/docs/compare_engines.md`).
+- **`src/pencil_beam/saved_beamlets.py`** (`survey_dirs`, `SourceDir`, `mirror_inputs`,
+  `field_windows`, `compute_field_pba`, `write_missing_predictions`, `save_new_file`, `save_new_npy`,
+  `check_or_write_provenance`, `load_triplet`, `score_beamlet`, `rank_beamlets`) and
+  **`scripts/pencil_beam/score_saved_beamlets.py`**: the pencil beam and ADoTA on saved MC beamlet
+  grids, scored with the saved MC and ADoTA and ranked by gamma. New per-beamlet output
+  `{id}_ds_pba.npy` (pencil-beam dose in the `_ds.npy` crop layout), added to the source
+  directory by exclusive creation: existing files are never modified. Also added per directory:
+  `pba_provenance.json` (model fingerprint, kernel build, commit; a different model is refused) and,
+  only where predictions were missing, `{id}_ds_pred.npy` + `adota_provenance.json`.
+  `src.pencil_beam.beam_model.model_fingerprint` identifies a model by its tables. `--dry-run`. `PencilBeamEngine.prepare_field`
+  / `dose_in_window` / `PreparedField`: one ray trace per field, dose per beamlet window.
+- **`src.mc_generation.mcsquare_runner.MCSQUARE_NUCLEAR_DATA_MAX_MEV`** (250 MeV, the end of
+  MCsquare's ICRU nuclear tables): `MCSquareRunner.run_beamlet` / `run_beamlet_field` now log a
+  warning above it, where MCsquare's nuclear physics reads past the tables (undefined, and a
+  segmentation fault from ~259 MeV). `src.pencil_beam.commissioning.check_energies_simulable`
+  refuses such energies in the commissioning and the engine comparison.
+- **`src.mc_generation.robustness.process_beamlet`**: the per-beamlet crop / QA / save step is
+  public, so the engine comparison writes ADoTA's input exactly as the dataset does. The old
+  private name `_process_beamlet` remains as an alias.
+
 - **`src/datasets/beamlet_record.py`**: the pinned per-record recipe for v3 builds.
   Exports `load_raw_record` (load and parse), `flux_inputs` and `flux_batch` (flux
   projection), `downsample_grid` (average, linear, or trilinear), `preprocess_ct_dose`
