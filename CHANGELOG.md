@@ -121,6 +121,27 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   per-record line into every caller's log. Set the level in your entry point to
   get the old verbosity back.
 
+### Added (sequence mixer, EXP-0014)
+
+- **`DoTA3D_v3(sequence_mixer=...)`** and the `TrainingConfig` fields
+  `sequence_mixer` (`transformer` | `mlstm` | `none`), `mlstm_proj_factor` and
+  `mlstm_conv_kernel`, passed through `build_adota_model`. `to_dict()` (and so
+  `hyperparams.json`) gains the three keys; a file without them builds the
+  transformer, and existing checkpoints load unchanged. `num_transformers`
+  counts the blocks of whichever mixer runs.
+- **`src/adota/layers/mlstm.py`**: `MLSTMBlockDoTA`, `mlstm_parallel`,
+  `look_ahead`, a pure-PyTorch mLSTM read in the beam direction with the
+  transformer's `num_forward` look-ahead.
+- **`src/adota/layers/mixers.py`**: `build_sequence_mixer`, `SEQUENCE_MIXERS`;
+  both re-exported from `src.adota.layers` with `MLSTMBlockDoTA`.
+- Guide: `docs/sequence_mixers.md`.
+
+### Changed (sequence mixer, EXP-0014)
+
+- In eval mode `DoTA3D_v3` returns the zero attention placeholder whenever the
+  mixer computes no attention (`mlstm` or `none`), not only when there are no
+  transformer blocks; the transformer's output is unchanged.
+
 ### Added (active learning)
 
 - **`src/active_learning/`**: `pool` (CT roles and the leakage rule, with the
