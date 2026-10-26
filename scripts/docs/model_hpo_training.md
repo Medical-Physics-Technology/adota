@@ -100,6 +100,31 @@ Because the schedule is tied to the run's length, a search trial is never
 resumed into a longer run: `confirm` trains the top trials again from scratch at
 full length.
 
+## Gradient clipping and final-run deviations
+
+`training.max_grad_norm` (default `null`, off) clips the global L2 norm of the
+gradients to that value before every optimizer step
+(`torch.nn.utils.clip_grad_norm_` in `src.training.loop.train_one_epoch`). Every
+epoch's `metrics.jsonl` row now also records the median and maximum of the
+per-step gradient norms (measured before clipping, so they describe the training
+either way) and the number of clipped steps (`n_clipped`); the median and maximum
+are what a threshold should be chosen from.
+
+The final run trains on 1.7 times as many beamlets per epoch as the confirmation
+runs, so it spends more steps at the peak learning rate. If it proves unstable,
+it can be repeated with clipping and a warmup:
+
+```bash
+uv run python scripts/model_hpo_training.py final --run-dir <run> --device 0 \
+    --restart --max-grad-norm <X> --warmup-epochs <W>
+```
+
+`--max-grad-norm` and `--warmup-epochs` are written into the run's frozen
+`config.yaml` under `final:` and logged as a deviation from the confirmed
+configuration (`stage_overrides`). `--restart` moves an existing `final/` to
+`final_aborted_<ts>/` rather than deleting it; without it, `final` refuses to
+overwrite a final training.
+
 ## What is fixed and why
 
 | Fixed | Why |

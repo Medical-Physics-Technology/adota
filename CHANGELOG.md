@@ -33,6 +33,14 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   `on_epoch(epoch, record)` callback, called after each epoch is logged and
   checkpointed; existing callers are unchanged.
 - Dependency: `optuna>=4,<5`.
+- **Gradient clipping**: `TrainingConfig.max_grad_norm` (default `None`, off; existing
+  configs behave as before) and `train_one_epoch(..., max_grad_norm=None)`, passed
+  through by `train_cycle` and `scripts/train_adota.py`. New output format: every
+  epoch's training stats gain `grad_norm_median`, `grad_norm_max` (per-step norms
+  before clipping), `max_grad_norm` and `n_clipped`.
+- `model_hpo_training.py final` gains `--max-grad-norm`, `--warmup-epochs` (written
+  into the run's config under `final:` as a recorded deviation; `stage_overrides`)
+  and `--restart` (moves an existing `final/` to `final_aborted_<ts>/`).
 - `src.active_learning.retrospective.lr_schedule.fixed_lr` gains the
   `"warmup_cosine"` schedule for runs that start from scratch: warmup epoch `e`
   of `W` at `lr0 * (e + 1) / (W + 1)` and a cosine that ends above `lr_min`, so

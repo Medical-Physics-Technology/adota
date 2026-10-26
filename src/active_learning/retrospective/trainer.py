@@ -238,7 +238,8 @@ def train_cycle(state: TrainState, train_loader: DataLoader, validation: Validat
             model=state.model, train_loader=train_loader, optimizer=state.optimizer,
             loss_mse_fn=state.loss_mse_fn, loss_ps_fn=state.loss_ps_fn,
             weight_mse=w_mse, weight_ps=w_ps, device=device, epoch=cumulative,
-            run_dir=run_dir, max_batches=None, loss_mode=config.loss_mode)
+            run_dir=run_dir, max_batches=None, loss_mode=config.loss_mode,
+            max_grad_norm=config.max_grad_norm)
         _sync(device)
         t_train = perf_counter() - epoch_started
         train_seconds += t_train

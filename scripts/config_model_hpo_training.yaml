@@ -68,6 +68,11 @@ confirm:
 
 final:
   epochs: 60
+  # Deviations from the confirmed configuration, for the final run only; normally
+  # unset. Set them with `final --max-grad-norm X --warmup-epochs W`, which writes
+  # them into the run's frozen config.yaml and logs the change.
+  # max_grad_norm: null
+  # warmup_epochs: null
 
 # The search space (src/model_search/space.py). Names are TrainingConfig fields,
 # plus warmup_epochs (the run's warmup) and dim_feedforward_factor (feed-forward
@@ -118,6 +123,7 @@ training:
   weight_standardization: false
   num_forward: 2                # v11's look-ahead; nearly a no-op (the convolutions already see 4 to 30 slices ahead)
   weight_init: default          # with normalisation on, the init only rescales the step size (confounded with lr)
+  max_grad_norm: null           # gradient clipping for every run; null = off (see final: for the final run alone)
 
 # Metrics: the confirmation runs (and the trials' last epoch) at 2%/2mm; the test
 # at every criterion of test_gamma ([dose %, distance mm]).

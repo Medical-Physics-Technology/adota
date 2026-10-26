@@ -124,3 +124,13 @@ def test_schedule_from_config_with_legacy_fallback():
     cfg = {"lr_schedule": "warmup_cosine", "confirm": {"lr_schedule": "constant"}}
     assert lr_schedule(cfg, "search") == "warmup_cosine"
     assert lr_schedule(cfg, "confirm") == "constant"
+
+
+def test_stage_overrides_only_the_set_keys():
+    from scripts.model_hpo_training import stage_overrides
+
+    assert stage_overrides({}, "final") == {}
+    assert stage_overrides({"final": {"epochs": 60, "max_grad_norm": None}}, "final") == {}
+    cfg = {"final": {"epochs": 60, "max_grad_norm": 5.0, "warmup_epochs": 2}}
+    assert stage_overrides(cfg, "final") == {"max_grad_norm": 5.0, "warmup_epochs": 2}
+    assert stage_overrides(cfg, "confirm") == {}
