@@ -283,6 +283,11 @@ class TrainingConfig:
 
     # ── Model hyperparameters (passed verbatim to DoTA3D_v3) ───────────
     input_shape: Tuple[int, int, int, int] = (2, 160, 30, 30)
+    # The mixer over the slice sequence: "transformer" | "mlstm" | "none"
+    # (src/adota/layers/mixers.py). num_transformers counts its blocks.
+    sequence_mixer: str = "transformer"
+    mlstm_proj_factor: float = 2.0
+    mlstm_conv_kernel: int = 4
     num_transformers: int = 1
     num_heads: int = 4
     # Feed-forward hidden dim of the transformer layers. None -> defaults to the

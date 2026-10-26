@@ -229,3 +229,6 @@ src/graphify-out/
 
 # Rendered report PDF (regenerable from the .md via pandoc + chrome; keep the .md source)
 research/acquisition_function_final_summary.pdf
+
+# macOS Finder metadata
+.DS_Store
