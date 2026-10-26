@@ -1,0 +1,25 @@
+# Run-by-run comparison of two retrospective experiments (scripts/al_compare_experiments.py)
+# =========================================================================================
+#   uv run python scripts/al_compare_experiments.py --config scripts/config_al_compare_experiments.yaml
+#
+# Exactly two experiments, A first. Every run directory under runs_dir matching
+# pattern is read; the cycle-0 baseline run is dropped. Runs pair on
+# (strategy, seed) and every run needs a partner. B minus A is what the paired
+# figures and tables show.
+experiments:
+  - name: EXP-0012
+    legend: "EXP-0012: warmup 5 + cosine 5e-4 -> 5e-5"
+    runs_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/exp0012
+    pattern: "train_*_al_EXP-0012_d30_*"
+  - name: EXP-0013
+    legend: "EXP-0013: constant 1e-4"
+    runs_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/exp0013
+    pattern: "train_*_al_EXP-0013_d30_*"
+output_dir: /scratch/mstryja/adota_runs/al_retro_v3/d30_patient/compare_exp0012_vs_exp0013
+title: "Retrospective AL, d30"
+
+# trajectory_last_k: how many of the last subsample evaluations of a cycle the
+# "last-3 median" takes. divergence_ratio: the epoch-to-epoch training-loss rise
+# that flags a cycle as diverged (the same rule as scripts/al_compare.py).
+trajectory_last_k: 3
+divergence_ratio: 2.0

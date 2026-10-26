@@ -15,6 +15,18 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 
 ### Added
 
+- **`src/active_learning/retrospective/experiment_compare.py`**: compare two
+  retrospective experiments run by run. `strategy_runs`, `pair_runs` (pairs on
+  strategy and seed), `selection_identity` (same records in the same order per
+  pair and cycle), `cycle_table` (boundary metrics, the median of the last k
+  subsample evaluations, snapshot noise, divergence), `paired_deltas`,
+  `summarize_deltas`, `loss_curves`.
+- **`src/figures/al_experiment_comparison.py`**: `schedule_and_loss_figure`,
+  `paired_quality_figure`, `strategy_endpoint_figure`, `stability_figure`.
+- **`scripts/al_compare_experiments.py`** with `config_al_compare_experiments.yaml`.
+  New output format: `al_compare_experiments_<ts>/` with `selection_identity.csv`,
+  `cycle_table.csv`, `paired_deltas.csv`, `paired_summary.csv`, `consistency.json`
+  and figures G1 to G4 with their CSVs. Guide: `scripts/docs/al_compare_experiments.md`.
 - **`src/metrics/gamma_beamlet_benchmark.py`, `src/metrics/gamma_beamlet_report.py`
   and `scripts/gamma_beamlet_benchmark.py`**: the four-rung gamma deviation
   ladder at *beamlet* scale (160 x 30 x 30), where the plan-level speed-ups of
