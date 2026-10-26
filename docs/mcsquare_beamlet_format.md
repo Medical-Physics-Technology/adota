@@ -65,8 +65,10 @@ Both `mu_i` and `opentps_rescaling_i` come from `spot_index.csv`, where
 `opentps_rescaling_i = computeMU2Protons(E_i) * 1.602176e-19 * 1000`, i.e. the
 per-spot proton conversion for that layer's energy.
 
-This is consistent with the existing plan-level scaling rather than a competing
-convention. The plan factor used by `dose_to_gy_factor()` is the sum of the
+This is the convention of [dose_units.md](dose_units.md) (Gy per MU per beamlet),
+except that `computeMU2Protons` clamps above the last BDL node where MCsquare
+extrapolates (1.2% at 250 MeV). It is consistent with the existing plan-level scaling
+rather than a competing convention. The plan factor used by `dose_to_gy_factor()` is the sum of the
 per-spot weights:
 
 ```

@@ -51,17 +51,23 @@ def train_val_split(
 
 
 def load_record_ids(
-    dataset_path: Path, excluded_indexes_path: Optional[Path]
+    dataset_path: Path, excluded_indexes_path: Optional[Path],
+    max_energy_mev: Optional[float] = None, scale: Optional[dict] = None,
 ) -> List[str]:
-    """Read the H5 keys and remove anything listed in the exclusion file.
+    """Read the H5 keys, remove the exclusion file's ids and (optionally) high energies.
 
     Args:
         dataset_path: Path to the H5 dataset.
         excluded_indexes_path: Optional path to a text file of record ids to
             drop, one per line. Missing / ``None`` means no exclusion.
+        max_energy_mev: Drop records above this beam energy
+            (:func:`src.datasets.energy_cut.drop_above_energy`). ``None`` keeps all,
+            as before the 250 MeV cut; ``TrainingConfig.max_energy_mev`` sets it.
+        scale: The dataset scale, for files without an ``energy_mev`` attribute.
 
     Returns:
-        Record ids present in the dataset and not excluded, in file order.
+        Record ids present in the dataset, not excluded and within the energy cut,
+        in file order.
     """
     with h5py.File(str(dataset_path), "r") as ds:
         record_ids = list(ds.keys())
@@ -75,7 +81,12 @@ def load_record_ids(
         )
 
     excluded_set = set(excluded)
-    return [rid for rid in record_ids if rid not in excluded_set]
+    kept = [rid for rid in record_ids if rid not in excluded_set]
+    if max_energy_mev is not None:
+        from src.datasets.energy_cut import drop_above_energy
+
+        kept, _ = drop_above_energy(dataset_path, kept, max_energy_mev, scale)
+    return kept
 
 
 def collate_h5(batch):

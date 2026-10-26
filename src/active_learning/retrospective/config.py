@@ -27,6 +27,9 @@ class RetroConfig:
     experiment: str = "EXP-0009"
     dataset_path: str = ""
     exclude_indexes_path: str = DEFAULT_EXCLUDE_PATH
+    max_energy_mev: Optional[float] = 250.0
+    """Records above this energy are dropped when the splits are drawn (MCsquare's
+    nuclear data ends at 250 MeV). Splits already frozen are not touched."""
     record_provenance_csv: Optional[str] = PROVENANCE_CSV
     splits_dir: str = "/scratch/mstryja/adota_runs/al_retro/splits"
     runs_dir: str = "/scratch/mstryja/adota_runs/al_retro"

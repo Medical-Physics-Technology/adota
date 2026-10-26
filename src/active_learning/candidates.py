@@ -52,6 +52,11 @@ class CandidateConfig:
     gantry_max_deg: float = 360.0
     seed: int = 20260908
 
+    def __post_init__(self) -> None:
+        from src.mc_generation.mcsquare_runner import check_energies_simulable
+
+        check_energies_simulable(self.energies)    # the oracle labels candidates with MCsquare
+
 
 def _stable_seed(*parts) -> int:
     """A reproducible seed from arbitrary parts.

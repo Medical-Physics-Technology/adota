@@ -70,6 +70,11 @@ class RobustnessConfig:
     make_figures: bool = False
     overwrite: bool = False
 
+    def __post_init__(self) -> None:
+        from src.mc_generation.mcsquare_runner import check_energies_simulable
+
+        check_energies_simulable(self.energies)
+
 
 def robustness_config_from_dict(
     r: dict, *, grid_n=None, num_primaries=None, make_figures=None, overwrite=None,

@@ -18,7 +18,7 @@ import numpy as np
 
 from src.figures.axes_utils import aligned_colorbar, save_figure_as_publication_formats
 from src.utils.dose_grid_utils import estimate_bragg_peak
-from src.utils.unit_conversions import to_gy
+from src.utils.unit_conversions import legacy_to_gy_per_1e6_protons
 
 
 def publication_figure(
@@ -101,8 +101,8 @@ def publication_figure(
 
     # Convert to Gy / 10^7 particles, a more intuitive unit for visualization
     # (and what the paper uses); the 1000 factor converts Gy to mGy.
-    y_true_np = to_gy(ground_truth) * 1000
-    y_pred_np = to_gy(prediction) * 1000
+    y_true_np = legacy_to_gy_per_1e6_protons(ground_truth) * 1000
+    y_pred_np = legacy_to_gy_per_1e6_protons(prediction) * 1000
     x_np = ct_input.copy()
 
     true_min, true_max = np.min(y_true_np), np.max(y_true_np)

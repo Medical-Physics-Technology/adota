@@ -47,7 +47,7 @@ from src.training.binning import (
 from src.training.losses import LMSE, LPS
 from src.utils.scallers import inverse_minmax
 from src.utils.serialization import NumpyEncoder
-from src.utils.unit_conversions import to_gy
+from src.utils.unit_conversions import legacy_to_gy_per_1e6_protons
 
 logger = logging.getLogger(__name__)
 
@@ -215,8 +215,8 @@ def evaluate_validation(
                 y_np = inverse_minmax(
                     y_b.detach().cpu().numpy(), scale["min_ds"], scale["max_ds"]
                 )
-                y_pred_gy = to_gy(y_pred_np)
-                y_gt_gy = to_gy(y_np)
+                y_pred_gy = legacy_to_gy_per_1e6_protons(y_pred_np)
+                y_gt_gy = legacy_to_gy_per_1e6_protons(y_np)
 
                 rmse = float(calculate_rmse(y_pred_gy, y_gt_gy))
                 mask = y_pred_np > 0.1 * float(np.max(y_pred_np))
