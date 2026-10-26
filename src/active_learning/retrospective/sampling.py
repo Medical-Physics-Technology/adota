@@ -162,7 +162,8 @@ def _shares(values: pd.Series) -> Dict[str, float]:
     return {str(k): float(v) / total for k, v in sorted(counts.items(), key=lambda kv: str(kv[0]))}
 
 
-def _energy_bin(energy: pd.Series) -> pd.Series:
+def energy_bin(energy: pd.Series) -> pd.Series:
+    """The 20 MeV bin of every energy, labelled ``"<lo>-<hi>"`` from :data:`ENERGY_EDGES_MEV`."""
     edges = list(ENERGY_EDGES_MEV)
     labels = [f"{int(lo)}-{int(hi)}" for lo, hi in zip(edges[:-1], edges[1:])]
     return pd.cut(energy, bins=edges, labels=labels, right=False, include_lowest=True).astype(str)
@@ -180,7 +181,7 @@ def selection_fingerprint(pool: pd.DataFrame, selected_ids: Sequence[str]) -> Di
     deciles = score_deciles(frame["score"].to_numpy(dtype=float)) if has_scores else None
     frame["score_decile"] = (np.where(deciles < 0, "unscored", deciles.astype(str))
                              if deciles is not None else "unscored")
-    frame["energy_bin"] = _energy_bin(frame["energy_mev"])
+    frame["energy_bin"] = energy_bin(frame["energy_mev"])
     picked = frame[frame["sample_id"].isin(set(selected_ids))]
     out = {"n_selected": int(len(picked)), "n_pool": int(len(frame)),
            "n_selected_unscored": int((picked["score_decile"] == "unscored").sum()),
