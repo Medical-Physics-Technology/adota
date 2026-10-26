@@ -1,0 +1,109 @@
+# EXP-0014 per-mixer HPO (scripts/active_learning/ensemble_hpo.py)
+# ================================================================
+#   uv run python scripts/active_learning/ensemble_hpo.py run \
+#       --config scripts/active_learning/config_ensemble_hpo.yaml
+#
+# One search per sequence mixer with the same budget, on R only (the HPO split
+# of the EXP-0014 partition; no F or V scan). Every trial's checkpoints and
+# metrics go to a timestamped hpo_<ts>/ directory under output_dir.
+experiment: EXP-0014
+output_dir: /scratch/mstryja/adota_runs/exp0014/hpo
+partition_dir: /scratch/mstryja/adota_runs/exp0014/partition
+dataset_path: /scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5
+exclude_indexes_path: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
+devices: [1, 2]               # GPU 0 is shared with another user
+
+# Data. Training: every record of the 30 HPO training scans (35,985), unless
+# max_train_records subsamples them (smoke tests only). Validation: a fixed,
+# seeded subsample of the 8 HPO validation scans; the loss on all 13,498
+# records would cost as much as a training epoch. The finalists' gamma runs on
+# the same subsample.
+max_train_records: null
+val_subsample_size: 3000
+subsample_seed: 20261019
+
+# Budget, identical for every mixer: n_trials Sobol configurations, successive
+# halving with rungs at min_epochs * eta**r cumulative epochs (3, 9, 27):
+# 24 -> 8 -> 2 trials, 156 epochs per mixer.
+mixers: [transformer, mlstm, none]
+n_trials: 24
+min_epochs: 3
+eta: 3
+n_rungs: 3
+sobol_seed: 20261019          # + the mixer's index in `mixers`
+memcheck: true                # one full-batch step per trial before any training
+
+# Capacity: no trial may exceed param_cap_factor x the reference model.
+reference_hyperparams: models/DoTA_v3_grid_search_v11/hyperparams.json
+param_cap_factor: 1.25
+
+# The search space. `shared` applies to every mixer; each mixer adds its own.
+# num_transformers counts the blocks of whichever mixer runs (none ignores it).
+space:
+  shared:
+    enc_features: {choices: [16, 32, 48]}
+    num_levels: {choices: [3, 4]}
+    convolutional_steps: {choices: [1, 2]}
+    conv_hidden_channels: {choices: [48, 64, 96]}
+    dropout_rate: {choices: [0.0, 0.1, 0.2]}
+    learning_rate: {loguniform: [2.0e-4, 1.0e-3]}
+  mixers:
+    transformer:
+      num_transformers: {choices: [1, 2, 3]}
+      num_heads: {choices: [2, 4, 8]}
+    mlstm:
+      num_transformers: {choices: [1, 2, 3]}
+      num_heads: {choices: [2, 4, 8]}
+      mlstm_proj_factor: {choices: [1.5, 2.0]}
+    none: {}
+
+# v11's configuration enters the transformer search as one of its 24 trials.
+fixed_trials:
+  transformer:
+    - {enc_features: 32, num_levels: 4, convolutional_steps: 1, conv_hidden_channels: 64,
+       dropout_rate: 0.1, learning_rate: 5.0e-4, num_transformers: 1, num_heads: 4}
+
+# Everything not searched, identical for every trial (the EXP-0012 recipe with a
+# constant learning rate). Static loss weights keep the validation loss
+# comparable across trials.
+training:
+  seed: 1234
+  scale: {min_ds: 0.0, max_ds: 25277028.0, min_ct: -1024, max_ct: 3071, min_energy: 70.0, max_energy: 270.0}
+  batch_size: 56
+  num_workers: 8
+  augmentation: true
+  normalize_flux_only: true
+  weight_decay: 0.001
+  compile: true
+  compile_mode: default
+  allow_tf32: true
+  loss_mode: mse_idd
+  initial_weight_mse: 0.7
+  initial_weight_ps: 0.3
+  adaptive_after_epoch: 10000
+  lps_dx_mm: 2.0
+  lps_dy_mm: 2.0
+  input_shape: [2, 160, 30, 30]
+  kernel_size: 3
+  causal: true
+  zero_padding: true
+  last_activation: false
+  num_forward: 2
+  dim_feedforward: null
+  weight_standardization: false
+  norm_layer: batch
+  weight_init: default
+
+# The finalists' metric set (as in EXP-0012).
+gamma_params:
+  dose_percent_threshold: 2
+  distance_mm_threshold: 2
+  interp_fraction: 10
+  max_gamma: 2
+  lower_percent_dose_cutoff: 10
+  random_subset: null
+  local_gamma: false
+  quiet: true
+gamma_resolution_mm: [2.0, 2.0, 2.0]
+gamma_cutoff_percent: 10.0
+gamma_backend: torch

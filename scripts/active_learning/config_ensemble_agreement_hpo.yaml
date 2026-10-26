@@ -1,0 +1,59 @@
+# Ensemble agreement of the EXP-0014 HPO finalists (scripts/active_learning/ensemble_agreement.py)
+# ===============================================================================================
+#   uv run python scripts/active_learning/ensemble_agreement.py \
+#       --config scripts/active_learning/config_ensemble_agreement_hpo.yaml
+#
+# The six finalists of hpo_20261019_192308 (every top-rung trial and C1) on the
+# 3,000 HPO validation beamlets they were scored on. Their per-record errors
+# already exist (trials/<trial>/finalist_<gamma>.csv), so this runs on CPU in a
+# minute. No training ids are given: the finalists share one training set, which
+# the pair levels would call "seed_only" although the configurations differ, so
+# every pair is "unknown". The validation scans are disjoint from the training
+# scans by the partition check of CHG-0016.
+experiment: EXP-0014
+stage: hpo_finalists
+output_dir: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/analysis
+
+dataset_path: /scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5
+record_ids: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/ids/val_ids.csv
+metadata_csv: null            # read from the HDF5's <stem>_index.csv
+group_column: patient_key     # a cell is one scan ...
+energy_column: energy_mev     # ... times one 20 MeV energy bin
+
+members:
+  - errors_csv: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/trials/transformer_021/finalist_2pct_2mm_cutoff10pct.csv
+    label: "C0: transformer_021"
+  - errors_csv: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/trials/transformer_016/finalist_2pct_2mm_cutoff10pct.csv
+    label: "C1: transformer_016 (9 ep)"
+  - errors_csv: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/trials/transformer_012/finalist_2pct_2mm_cutoff10pct.csv
+    label: transformer_012
+  - errors_csv: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/trials/mlstm_004/finalist_2pct_2mm_cutoff10pct.csv
+    label: "X0: mlstm_004"
+  - errors_csv: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/trials/none_029/finalist_2pct_2mm_cutoff10pct.csv
+    label: "U0: none_029"
+  - errors_csv: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/trials/none_017/finalist_2pct_2mm_cutoff10pct.csv
+    label: none_017
+
+source: csv                   # never infer: the finalist CSVs are the evaluation
+
+# The HPO's finalist criteria; they also name the CSVs above.
+gamma_params:
+  dose_percent_threshold: 2
+  distance_mm_threshold: 2
+  interp_fraction: 10
+  max_gamma: 2
+  lower_percent_dose_cutoff: 10
+  random_subset: null
+  local_gamma: false
+  quiet: true
+gamma_resolution_mm: [2.0, 2.0, 2.0]
+gamma_cutoff_percent: 10.0
+gamma_backend: torch
+
+metrics: [gamma_fail, mape_pct, abs_dr80_mm, rde_pct]
+min_cell_size: 10
+top_fraction: 0.10
+n_bootstrap: 2000
+bootstrap_seed: 20261021
+ci: 0.95
+allow_training_overlap: false
