@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 from dataclasses import fields, replace
@@ -109,14 +110,31 @@ def lr_schedule(cfg: Dict[str, Any], stage: str) -> str:
     return str(cfg.get(stage, {}).get("lr_schedule") or cfg.get("lr_schedule") or LEGACY_LR_SCHEDULE)
 
 
-STAGE_OVERRIDES = ("max_grad_norm", "warmup_epochs")
+STAGE_OVERRIDES = ("max_grad_norm", "warmup_epochs", "dropout_rate")
+FINAL_NAME = re.compile(r"^final(_[A-Za-z0-9]+)*$")
 
 
 def stage_overrides(cfg: Dict[str, Any], stage: str) -> Dict[str, Any]:
     """The run-level settings a stage replaces in the confirmed configuration
-    (``max_grad_norm``, ``warmup_epochs`` under ``cfg[stage]``), only those set."""
+    (``max_grad_norm``, ``warmup_epochs``, ``dropout_rate`` under ``cfg[stage]``),
+    only those set."""
     section = cfg.get(stage) or {}
     return {k: section[k] for k in STAGE_OVERRIDES if section.get(k) is not None}
+
+
+def final_overrides(cfg: Dict[str, Any], name: str) -> Dict[str, Any]:
+    """The overrides of the final training ``name``: a variant (``final_<tag>``)
+    inherits those of ``final`` and replaces the ones it sets itself."""
+    if not FINAL_NAME.match(name):
+        raise typer.BadParameter(f"a final training is named final or final_<tag>, not {name!r}")
+    inherited = stage_overrides(cfg, "final") if name != "final" else {}
+    return {**inherited, **stage_overrides(cfg, name)}
+
+
+def final_config(config: TrainingConfig, over: Dict[str, Any]) -> TrainingConfig:
+    """The confirmed configuration with a final training's overrides applied."""
+    return replace(config, max_grad_norm=over.get("max_grad_norm", config.max_grad_norm),
+                   dropout_rate=float(over.get("dropout_rate", config.dropout_rate)))
 
 
 def _ids(run: Path, name: str) -> List[str]:
@@ -294,7 +312,8 @@ def confirm(run_dir: Annotated[Path, typer.Option(help="The run directory.")]) -
 
 @app.command(hidden=True)
 def candidate(run_dir: Annotated[Path, typer.Option()], trial: Annotated[int, typer.Option()],
-              stage: Annotated[str, typer.Option(help="confirm | final")]) -> None:
+              stage: Annotated[str, typer.Option(help="confirm | final")],
+              name: Annotated[str, typer.Option(help="The final training's directory.")] = "final") -> None:
     """Train one search trial's configuration for a later stage."""
     run = Path(run_dir)
     cfg = _read_run(run)
@@ -307,12 +326,11 @@ def candidate(run_dir: Annotated[Path, typer.Option()], trial: Annotated[int, ty
                        epoch_val_ids=_ids(run, "search_val_subsample"), final_val_ids=_ids(run, "search_val"),
                        final_metrics=True, lr_schedule=lr_schedule(cfg, "confirm"))
     elif stage == "final":
-        out = run / "final"
+        out = run / name
         # No held-out records: the per-epoch loss is on a subsample of the training
         # records (in-sample, for monitoring only); nothing is selected on it.
-        over = stage_overrides(cfg, "final")
-        config = replace(built.config, max_grad_norm=over.get("max_grad_norm", built.config.max_grad_norm))
-        spec = RunSpec(label=f"final_trial_{trial:04d}", config=config,
+        over = final_overrides(cfg, name)
+        spec = RunSpec(label=f"{name}_trial_{trial:04d}", config=final_config(built.config, over),
                        warmup_epochs=int(over.get("warmup_epochs", built.warmup_epochs)),
                        epochs=int(cfg["final"]["epochs"]), train_ids=_ids(run, "final_train"),
                        epoch_val_ids=_ids(run, "final_train_monitor"), lr_schedule=lr_schedule(cfg, "final"))
@@ -330,49 +348,59 @@ def final(run_dir: Annotated[Path, typer.Option(help="The run directory.")],
               help="Clip the global gradient norm to this value (a deviation from the confirmed run).")] = None,
           warmup_epochs: Annotated[Optional[int], typer.Option(
               help="Replace the winner's warmup (a deviation from the confirmed run).")] = None,
+          dropout_rate: Annotated[Optional[float], typer.Option(
+              help="Replace the winner's attention dropout (a deviation from the confirmed run).")] = None,
+          name: Annotated[str, typer.Option(
+              help="The output directory: final, or final_<tag> for a variant beside it.")] = "final",
           restart: Annotated[bool, typer.Option(
               help="Move an existing final/ aside to final_aborted_<ts>/ and train again.")] = False,
           ) -> None:
     """Train the confirmed winner on the final training records.
 
-    ``--max-grad-norm`` and ``--warmup-epochs`` change the confirmed configuration;
-    they are written into the run's frozen ``config.yaml`` under ``final:`` and
-    logged, so the deviation is on record. A ``final/`` with checkpoints is never
-    overwritten: ``--restart`` moves it to ``final_aborted_<ts>/`` first.
+    ``--max-grad-norm``, ``--warmup-epochs`` and ``--dropout-rate`` change the
+    confirmed configuration; they are written into the run's frozen ``config.yaml``
+    under ``<name>:`` and logged, so the deviation is on record. ``--name final_<tag>``
+    trains a variant in its own directory beside ``final/``; it inherits the
+    overrides of ``final:``. A final training with checkpoints is never
+    overwritten: ``--restart`` moves it to ``<name>_aborted_<ts>/`` first.
     """
     run = Path(run_dir)
     setup_logging(run, log_filename="model_hpo_training.log")
     winner = json.loads((run / "confirm" / "selection.json").read_text())
-    out = run / "final"
+    final_overrides({}, name)
+    out = run / name
     if (out / "checkpoints").exists() and any((out / "checkpoints").iterdir()):
         if not restart:
             raise typer.BadParameter(f"{out} already holds a final training; pass --restart to move it aside")
-        aside = run / f"final_aborted_{datetime.now():%Y%m%d_%H%M%S}"
+        aside = run / f"{name}_aborted_{datetime.now():%Y%m%d_%H%M%S}"
         out.rename(aside)
         out.mkdir()
         logger.warning("previous final training moved to %s", aside)
-    changes = {k: v for k, v in (("max_grad_norm", max_grad_norm), ("warmup_epochs", warmup_epochs))
-               if v is not None}
+    changes = {k: v for k, v in (("max_grad_norm", max_grad_norm), ("warmup_epochs", warmup_epochs),
+                                 ("dropout_rate", dropout_rate)) if v is not None}
     if changes:
         cfg = _read_run(run)
-        cfg.setdefault("final", {}).update(changes)
+        cfg.setdefault(name, {}).update(changes)
         (run / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
-        logger.warning("final stage deviates from the confirmed configuration: %s (written to config.yaml)", changes)
-    logger.info("final training of trial %s on %s records", winner["trial"], len(_ids(run, "final_train")))
-    code = _launch(["candidate", "--run-dir", str(run), "--trial", str(winner["trial"]), "--stage", "final"],
-                   device, run / "final" / "launch.log").wait()
+        logger.warning("%s deviates from the confirmed configuration: %s (written to config.yaml)", name, changes)
+    out.mkdir(exist_ok=True)
+    logger.info("%s: training of trial %s on %s records", name, winner["trial"], len(_ids(run, "final_train")))
+    code = _launch(["candidate", "--run-dir", str(run), "--trial", str(winner["trial"]), "--stage", "final",
+                    "--name", name], device, out / "launch.log").wait()
     if code != 0:
-        raise RuntimeError(f"final training failed; see {run / 'final'}")
-    logger.info("final model: %s", run / "final" / "checkpoints" / "last.pth")
+        raise RuntimeError(f"final training failed; see {out}")
+    logger.info("final model: %s", out / "checkpoints" / "last.pth")
 
 
 @app.command()
 def test(run_dir: Annotated[Path, typer.Option(help="The run directory.")],
          device: Annotated[int, typer.Option(help="GPU index.")] = 0,
+         name: Annotated[str, typer.Option(help="The final training to evaluate.")] = "final",
          force: Annotated[bool, typer.Option(help="Evaluate again although the test set was used.")] = False,
          ) -> None:
-    """Evaluate the final model once on the test records, at every gamma criterion
-    of ``test_gamma``."""
+    """Evaluate one final model once on the test records, at every gamma criterion
+    of ``test_gamma``. The test set is used once per run, whichever final training
+    is chosen, so a variant is chosen before this runs."""
     run = Path(run_dir)
     cfg = _read_run(run)
     setup_logging(run, log_filename="model_hpo_training.log")
@@ -381,13 +409,13 @@ def test(run_dir: Annotated[Path, typer.Option(help="The run directory.")],
         raise typer.BadParameter(f"the test set was already evaluated ({marker}); it is used once")
     winner = json.loads((run / "confirm" / "selection.json").read_text())
     frozen = next(t for t in _study(run, cfg).get_trials(deepcopy=False) if t.number == int(winner["trial"]))
-    config = build_candidate(base_config(cfg), frozen.params).config
+    config = final_config(build_candidate(base_config(cfg), frozen.params).config, final_overrides(cfg, name))
     torch_device = resolve_device(device)
     model = build_adota_model(config, torch_device)
-    CheckpointManager.load_weights_only(run / "final" / "checkpoints" / "last.pth", model=model,
+    CheckpointManager.load_weights_only(run / name / "checkpoints" / "last.pth", model=model,
                                         device=torch_device)
     ids = _ids(run, "test")
-    summary: Dict[str, Any] = {"trial": winner["trial"], "n_test": len(ids), "criteria": {}}
+    summary: Dict[str, Any] = {"trial": winner["trial"], "final": name, "n_test": len(ids), "criteria": {}}
     for gamma in cfg["test_gamma"]:
         params = {**cfg["gamma_params"], "dose_percent_threshold": gamma[0], "distance_mm_threshold": gamma[1]}
         settings = metric_settings(cfg, params)

@@ -41,6 +41,11 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 - `model_hpo_training.py final` gains `--max-grad-norm`, `--warmup-epochs` (written
   into the run's config under `final:` as a recorded deviation; `stage_overrides`)
   and `--restart` (moves an existing `final/` to `final_aborted_<ts>/`).
+- `model_hpo_training.py final` gains `--dropout-rate` (the attention dropout, a
+  recorded deviation like the two above) and `--name final_<tag>`, which trains a
+  variant in `<run>/final_<tag>/` beside `final/`, inheriting the `final:`
+  overrides; `test` gains `--name` to evaluate the chosen one (the test set is
+  still used once per run). New helpers `final_overrides`, `final_config`.
 - `src.active_learning.retrospective.lr_schedule.fixed_lr` gains the
   `"warmup_cosine"` schedule for runs that start from scratch: warmup epoch `e`
   of `W` at `lr0 * (e + 1) / (W + 1)` and a cosine that ends above `lr_min`, so

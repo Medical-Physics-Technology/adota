@@ -134,3 +134,25 @@ def test_stage_overrides_only_the_set_keys():
     cfg = {"final": {"epochs": 60, "max_grad_norm": 5.0, "warmup_epochs": 2}}
     assert stage_overrides(cfg, "final") == {"max_grad_norm": 5.0, "warmup_epochs": 2}
     assert stage_overrides(cfg, "confirm") == {}
+
+
+def test_final_variant_inherits_the_final_overrides():
+    import typer
+
+    from scripts.model_hpo_training import final_config, final_overrides
+    from src.schemas.configs import TrainingConfig
+
+    cfg = {"final": {"epochs": 60, "max_grad_norm": 10.0, "warmup_epochs": 2},
+           "final_attndrop0": {"dropout_rate": 0.0}}
+    assert final_overrides(cfg, "final") == {"max_grad_norm": 10.0, "warmup_epochs": 2}
+    assert final_overrides(cfg, "final_attndrop0") == {"max_grad_norm": 10.0, "warmup_epochs": 2,
+                                                       "dropout_rate": 0.0}
+    config = final_config(TrainingConfig(dropout_rate=0.13), final_overrides(cfg, "final_attndrop0"))
+    assert config.dropout_rate == 0.0 and config.max_grad_norm == 10.0
+    assert final_config(TrainingConfig(dropout_rate=0.13), {}).dropout_rate == 0.13
+    for bad in ("confirm", "final/x", "finalx", "final_"):
+        try:
+            final_overrides(cfg, bad)
+        except typer.BadParameter:
+            continue
+        raise AssertionError(f"{bad!r} was accepted")

@@ -125,6 +125,28 @@ configuration (`stage_overrides`). `--restart` moves an existing `final/` to
 `final_aborted_<ts>/` rather than deleting it; without it, `final` refuses to
 overwrite a final training.
 
+`--dropout-rate` replaces the attention dropout the same way. `--name final_<tag>`
+trains a variant in its own directory beside `final/` (the overrides go under
+`final_<tag>:` in `config.yaml`; the variant inherits those of `final:` and
+replaces the ones it sets), so a running or finished `final/` is left alone:
+
+```bash
+uv run python scripts/model_hpo_training.py final --run-dir <run> --device 1 \
+    --name final_attndrop0 --dropout-rate 0
+```
+
+`test --name <final_name>` evaluates the chosen one. The test set is still used
+once per run, so the variant is chosen before `test` runs.
+
+**Attention dropout and evaluation mode.** `dropout_rate` is the dropout of the
+attention weights (`nn.MultiheadAttention`), and with the causal mask each slice
+attends to a few slices only. In EXP-0019 the model learned the attention output
+as inverted dropout usually presents it (the kept weights scaled by 1/(1-p)), so
+in evaluation mode, with dropout off, its loss was 5 times its training loss
+(final run, epoch 40: 0.049 against 0.0087 with dropout on; the confirmation
+model 0.018 against 0.0079). The per-epoch validation loss is in evaluation mode,
+the training loss is not; compare them with this in mind.
+
 ## What is fixed and why
 
 | Fixed | Why |
