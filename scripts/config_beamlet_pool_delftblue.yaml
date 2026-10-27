@@ -20,18 +20,22 @@ training_index_csv: <copy of the v3 index CSV>/trainset_pelvis_initial_test_one_
 # 198 mm or more had no candidate leaving the CT, the 188-190 mm ones lost 13-14%.
 # 260 (the AL config's gate) was the nominal extent and refused 55 clean Lung-PET-CT-Dx
 # series of 1 mm slices at a 0.7 mm step (measured 188-259 mm).
+# 320 mm in plane (columns x pixel spacing, both axes): the 320 mm crop runs along the
+# beam in the axial plane, so a narrower field of view never holds it at any gantry. In
+# the second plan all 9 StageII-Colorectal scans of 281-318 mm lost every candidate
+# (roi_out_of_bounds) and none of 323 mm or more lost one; other collections are >= 345 mm.
 collections:
   - {name: Lung-PET-CT-Dx, anatomy: thoracic, root: <dicom>/manifest-1608669183333,
      collection: Lung-PET-CT-Dx, qc: {min_slices: 70, max_spacing_xy: 1.5, max_spacing_z: 2.0, min_z_extent_mm: 200.0,
-         max_slice_gap_ratio: 1.5}}
+         min_xy_extent_mm: 320.0, max_slice_gap_ratio: 1.5}}
   - {name: NSCLC-Radiomics, anatomy: thoracic, root: <dicom>/manifest-1603198545583,
      collection: NSCLC-Radiomics, qc: {max_spacing_xy: 1.5, max_spacing_z: 3.5, min_z_extent_mm: 200.0,
-         max_slice_gap_ratio: 1.5}}
+         min_xy_extent_mm: 320.0, max_slice_gap_ratio: 1.5}}
   - {name: StageII-Colorectal, anatomy: abdominal, root: <dicom>/manifest-1646429317311,
-     qc: {min_z_extent_mm: 200.0, max_slice_gap_ratio: 1.5}}
+     qc: {min_z_extent_mm: 200.0, min_xy_extent_mm: 320.0, max_slice_gap_ratio: 1.5}}
   - {name: Prostate-AEC, anatomy: pelvic, root: <dicom>/manifest-1684259732535,
      collection: Prostate-Anatomical-Edge-Cases, qc: {max_spacing_xy: 1.5, max_spacing_z: 3.5, min_z_extent_mm: 200.0,
-         max_slice_gap_ratio: 1.5}}
+         min_xy_extent_mm: 320.0, max_slice_gap_ratio: 1.5}}
 
 # Patients other experiments own. The first claim of a patient wins; a training-scan
 # match excludes the patient whatever is claimed.

@@ -42,7 +42,8 @@ uv run python scripts/al_build_beamlet_pool.py sync     --config scripts/config_
      (`src/provenance/series_geometry.py`). The reader would otherwise stack a
      missing slice, or two acquisitions under one UID, as if evenly spaced;
    - the image-quality gates of `TCIADataset` (spacing, at least 200 mm of z for
-     the +-1.5 deg steering window, 2 x (68 + 30) mm), on the **measured** slice count and z extent,
+     the +-1.5 deg steering window, 2 x (68 + 30) mm; at least 320 mm in plane for
+     the 320 mm crop along the beam), on the **measured** slice count and z extent,
      not the file count and the nominal slice thickness (overlapping
      reconstructions have a thickness larger than their step);
    - the 1 mm grid of **every** CT series of the patient against the 56 scans of
