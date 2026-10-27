@@ -139,10 +139,9 @@ def tissue_fractions_figure(per_ct: pd.DataFrame, per_anatomy: pd.DataFrame, *, 
     ax.invert_yaxis()
     ax.set_xlim(0, 1)
     style_axis(ax, xlabel="Fraction of voxels (beam path: of flux weight)", ylabel="", title=title)
-    ax.legend(ncol=7, fontsize=5.5, frameon=False, loc="lower center", bbox_to_anchor=(0.5, 1.0))
-    ax.title.set_position((0.0, 1.08))
+    ax.legend(ncol=4, fontsize=6, frameon=False, loc="upper center", bbox_to_anchor=(0.5, -0.045))
     if caption:
-        fig.text(0.01, -0.02, textwrap.fill(caption, 140), ha="left", va="top", fontsize=6.5, color="#333333")
+        fig.text(0.01, -0.035, textwrap.fill(caption, 140), ha="left", va="top", fontsize=6.5, color="#333333")
     paths = save_figure_as_publication_formats(fig, figure_path)
     plt.close(fig)
     return paths

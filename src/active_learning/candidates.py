@@ -143,10 +143,13 @@ def pin_worker_threads() -> None:
 
     SimpleITK defaults its global thread pool to every core (48 here), and each worker
     resamples and rotates a CT, so an unpinned pool of ten workers asks for 480
-    threads and the machine spends its time context-switching. Both settings are
-    runtime calls rather than environment variables on purpose: a forked worker has
-    already imported these libraries, so the usual ``OMP_NUM_THREADS`` trick would
-    come too late to have any effect.
+    threads and the machine spends its time context-switching. The same holds for
+    the BLAS (OpenBLAS, 48 threads) and OpenMP (24) pools behind numpy, scipy and
+    torch: pinning only SimpleITK and torch left each worker at about 4 cores (load
+    92 on 48 cores, validation-set build of 2026-10-27). All settings are runtime
+    calls rather than environment variables on purpose: a forked worker has already
+    imported these libraries, so the usual ``OMP_NUM_THREADS`` trick would come too
+    late to have any effect; ``threadpoolctl`` resizes the pools after the fact.
     """
     sitk.ProcessObject_SetGlobalDefaultNumberOfThreads(1)
     try:
@@ -155,6 +158,9 @@ def pin_worker_threads() -> None:
         torch.set_num_threads(1)
     except ImportError:  # pragma: no cover - torch is a hard dependency in practice
         pass
+    from threadpoolctl import threadpool_limits
+
+    threadpool_limits(limits=1)
 
 
 def score_pool(entries: Sequence[PoolEntry], cand_cfg: CandidateConfig,
