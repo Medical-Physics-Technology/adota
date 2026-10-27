@@ -79,15 +79,28 @@ measure generalisation to new beamlets of seen patients, not to new patients.
 generated once on multiple CTs the model has never seen (the validation CTs of
 Section 2.1), frozen, at least **20,000** Monte Carlo beamlets, and its
 generation is planned once the stage-1 experiments have fixed the methodology.
-It is **balanced in difficulty**: candidates are generated on the validation
-CTs, scored with the input-only score, and drawn with equal counts per score
-decile, stratified by anatomy and energy layer. A model that only improves on
-easy beamlets cannot hide in such a set, and per-decile learning curves come for
-free. The score decides what the yardstick contains, so any bias in the score is
-a bias in the yardstick; the existing held-out sets (`testset_pelvis`, 11,580
-records; `testset_Lung-PET-CT-Dx_v3`, 2,008) remain as an independent second
-reading, and are also the regression guard against forgetting the original
-distribution.
+**Amended 2026-10-27: drawn without the difficulty score.** The score is being
+replaced by a model-independent version (EXP-0014, CHG-0021), and a yardstick
+drawn by one score would change when the score does. Candidates are generated on
+the validation CTs, passed through the validity gate of Section 3, and drawn
+with equal counts per anatomy, then per energy layer, then per CT, then per
+field (`select_stratified`); a cell short of valid candidates gives everything
+it has and its siblings make up the rest, so the anatomy balance is kept first.
+The score is still computed for every beamlet and its decile inside the drawn
+set is recorded (`score_decile`), so per-decile learning curves stay available
+for any score version. The original recipe, equal counts per score decile, is
+kept as `balance: score_deciles`.
+
+In the thorax the validity gate is strongly energy-dependent (measured on one
+CT: 88% valid at 130 MeV, 23% at 155 MeV, 1% at 180 MeV, where lung carries the
+analytic peak past the 320 mm crop), so the thoracic share at 155 and 180 MeV
+is what the crop allows, not an equal share. `scripts/al_validation_set_stats.py`
+describes the drawn set before any Monte Carlo is paid for: composition,
+validity, the input-only metrics, and the Hounsfield units inside the patient
+(per CT, per beamlet crop, along the beam path). The existing held-out sets
+(`testset_pelvis`, 11,580 records; `testset_Lung-PET-CT-Dx_v3`, 2,008) remain as
+an independent second reading, and are also the regression guard against
+forgetting the original distribution.
 
 Cost: roughly 35 to 40 hours of Monte Carlo in beamlet mode on one node, or a
 DelftBlue array. Versioned per anatomy, so head-and-neck and brain extend it

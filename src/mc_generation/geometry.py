@@ -93,7 +93,8 @@ def extraction_isocenter_physical(ct: sitk.Image) -> np.ndarray:
     return np.round(origin + center - spacing / 2.0, 3)
 
 
-def body_mask(ct: sitk.Image, body_hu_threshold: float = -500.0) -> np.ndarray:
+def body_mask(ct: sitk.Image, body_hu_threshold: float = -500.0,
+              largest_component: bool = False) -> np.ndarray:
     """Binary patient-body mask as a ``(z, y, x)`` float array (1.0 inside).
 
     Defined per axial slice as **everything that is NOT external air**: air voxels
@@ -102,6 +103,13 @@ def body_mask(ct: sitk.Image, body_hu_threshold: float = -500.0) -> np.ndarray:
     connected to the border) as *inside the patient* -- unlike hole-filling, which
     fails when lung joins external air through the airways. Dose inside this contour
     is in the patient; dose outside it is in external air.
+
+    Everything that is not air is kept, so a couch or an immobilisation device
+    separated from the patient by an air gap is part of this mask (4 to 6 percent of
+    the mask on the active-learning validation CTs). ``largest_component=True``
+    keeps only the largest 3D connected component, the patient, for statistics of
+    the patient's own tissue; the Monte Carlo geometry keeps the default, where a
+    couch in the beam path is rightly not external air.
     """
     from scipy.ndimage import label
 
@@ -120,6 +128,12 @@ def body_mask(ct: sitk.Image, body_hu_threshold: float = -500.0) -> np.ndarray:
         border = border[border != 0]
         external = np.isin(lab, border)      # air touching the slice edge = outside patient
         out[z] = (~external).astype(np.float32)
+    if largest_component:
+        lab3, n3 = label(out > 0.5)
+        if n3 > 1:
+            sizes = np.bincount(lab3.ravel())
+            sizes[0] = 0
+            out = (lab3 == int(np.argmax(sizes))).astype(np.float32)
     return out
 
 

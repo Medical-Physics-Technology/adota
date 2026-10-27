@@ -69,18 +69,37 @@ def extract_candidate_voi(geom: FieldGeometry, candidate: BeamletCandidate, bdl:
     Built through ``prepare_input_from_arrays`` and de-normalised, so the arrays
     are the ones the model would see and the ones the reference metrics used.
     """
+    crops = candidate_crops(geom, candidate, bdl, roi_size)
+    if crops is None:
+        return None
+    cropped_ct, flux, _ = crops
+    return model_grid_inputs(cropped_ct, flux, candidate.energy_mev, scale)
+
+
+def candidate_crops(geom: FieldGeometry, candidate: BeamletCandidate, bdl: BeamDataLibrary,
+                    roi_size: Tuple[int, int, int], extra: Sequence[np.ndarray] = (),
+                    ) -> Optional[Tuple[np.ndarray, np.ndarray, List[np.ndarray]]]:
+    """The candidate's 1 mm extraction crops: CT (HU), flux, and every array of
+    ``extra`` (each on ``geom.ct_array``'s grid, a body mask for instance) cut
+    along the same ray; ``None`` when the ray misses the CT.
+
+    The crops are the generator's ``{id}_ct.npy`` / ``{id}_flux.npy`` layout,
+    ``(H, W, D)`` with depth last.
+    """
     d_nozzle, d_smx, d_smy = bdl.distances
     spot = angles_to_spot_position(candidate.theta_x_deg, candidate.theta_y_deg, d_smx, d_smy)
     cropped_ct, entrance, _, oob = extract_beamlet_roi(
         geom.ct, d_nozzle, d_smx, d_smy, spot, geom.iso_ext, roi_size, ct_array=geom.ct_array)
     if oob or cropped_ct.shape != tuple(roi_size):
         return None
+    others = [extract_beamlet_roi(geom.ct, d_nozzle, d_smx, d_smy, spot, geom.iso_ext, roi_size,
+                                  ct_array=array)[0] for array in extra]
     beamlet_angles = spot_position_to_angles(spot[0], spot[1], d_smx, d_smy)
     sigmas = flux_spatial_spread(bdl, candidate.energy_mev)
     re_proj = [float(entrance[1]), float(entrance[2]), float(entrance[0])]
     flux = flux_projection(re_proj, beamlet_angles, sigmas, cropped_ct.shape,
                            spacing=np.asarray([1, 1, 1], dtype=np.float32))
-    return model_grid_inputs(cropped_ct, flux, candidate.energy_mev, scale)
+    return cropped_ct, flux, others
 
 
 def model_grid_inputs(cropped_ct: np.ndarray, flux: np.ndarray, energy_mev: float,
