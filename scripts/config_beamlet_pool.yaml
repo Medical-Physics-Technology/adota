@@ -6,6 +6,7 @@
 #   uv run python scripts/al_build_beamlet_pool.py generate --config scripts/config_beamlet_pool.yaml \
 #       --shard 0 --n-shards 2          # and --shard 1 in a second process
 #   uv run python scripts/al_build_beamlet_pool.py status   --config scripts/config_beamlet_pool.yaml
+#   uv run python scripts/al_build_beamlet_pool.py sync     --config scripts/config_beamlet_pool.yaml   # later
 #
 # New patients only: every CT whose 1 mm grid matches a scan of the training HDF5 is
 # excluded. Patient-level split 70/15/15 per collection, shared with the DelftBlue
@@ -60,13 +61,23 @@ plan:
   version: 1
 n_processes: 2
 
+# Everything on Apollo lives under /scratch/mstryja/adota_pool:
+#   v1_apollo_1e6/{plan,train,validation,test,index,state}   the pool (about 130 GB)
+#   _work/v1_apollo_1e6/batch_NNNN                           one raw batch per process, deleted when packed
+#   _mc_work/                                                MCsquare's transient run directories
+#   logs/
+# The copy to the storage drive is the separate `sync` stage.
 batches:
-  work_root: /scratch/mstryja/beamlet_pool/work_v1_apollo_1e6
-  store_root: /RadiotherapyData/adota_pool/v1_apollo_1e6
+  work_root: /scratch/mstryja/adota_pool/_work/v1_apollo_1e6
+  store_root: /scratch/mstryja/adota_pool/v1_apollo_1e6
   keep_raw: false
   transient_gb: 20.0
   reserve_work_gb: 30.0
   reserve_store_gb: 50.0
+
+sync:
+  mirror_root: /RadiotherapyData/adota_pool/v1_apollo_1e6
+  reserve_gb: 50.0
 
 checks:
   range_margin_mm: 10.0
@@ -76,7 +87,7 @@ checks:
 # --- Monte Carlo (the AL generator's settings) --------------------------------
 engine:
   mcsquare_install: /home/mstryja/tools/mcsquare
-  mc_work_dir: /scratch/mstryja/mc_work/beamlet_pool
+  mc_work_dir: /scratch/mstryja/adota_pool/_mc_work
   bdl_file: hptc_beam_model_rsnone.txt
   scanner: default
 
@@ -101,7 +112,7 @@ robustness:
   beamlet_block_size: 40     # about 16 GB of transient dose grids per block
   rng_seed: 0
   min_deposition_ratio: 0.95
-  output_root: /scratch/mstryja/beamlet_pool/unused
+  output_root: /scratch/mstryja/adota_pool/_work/unused
   experiment_prefix: pool
   experiment_version: 1
   make_figures: false

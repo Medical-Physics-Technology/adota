@@ -30,10 +30,19 @@ from typing import Dict, List, Optional, Sequence
 import pandas as pd
 
 from src.active_learning.beamlet_pool.planning import PACKED_MB, RAW_MB
-from src.active_learning.beamlet_pool.store import StoreChecks, free_gb, move_file, pack_batch, spot_sigmas
+from src.active_learning.beamlet_pool.store import (
+    StoreChecks,
+    copy_verified,
+    free_gb,
+    move_file,
+    pack_batch,
+    same_filesystem,
+    spot_sigmas,
+)
 from src.active_learning.oracle import label_batch
 from src.active_learning.pool import PoolEntry, RecordResolver
 from src.beamlets.bdl import BeamDataLibrary
+from src.datasets.beamlet_h5 import sha256_of
 from src.mc_generation.mcsquare_runner import MCSquareRunner
 from src.mc_generation.sweep import RobustnessConfig
 
@@ -59,13 +68,25 @@ def my_batches(plan: pd.DataFrame, shard: int, n_shards: int) -> List[int]:
 
 
 def space_check(settings: BatchSettings, n_beamlets: int) -> Optional[str]:
-    """Why the next batch cannot start, or ``None``."""
+    """Why the next batch cannot start, or ``None``.
+
+    The batch needs its raw files and MCsquare's transient grids on the work disk
+    and its packed shards (with 20% headroom) in the store, plus each disk's
+    reserve. When both live on one file system the needs are added up against
+    its single free space.
+    """
     work_need = n_beamlets * RAW_MB / 1000.0 + settings.transient_gb + settings.reserve_work_gb
     store_need = n_beamlets * PACKED_MB / 1000.0 * 1.2 + settings.reserve_store_gb
-    if free_gb(Path(settings.work_root)) < work_need:
-        return f"work disk: {free_gb(Path(settings.work_root)):.0f} GB free, {work_need:.0f} GB needed"
-    if free_gb(Path(settings.store_root)) < store_need:
-        return f"store: {free_gb(Path(settings.store_root)):.0f} GB free, {store_need:.0f} GB needed"
+    work_free, store_free = free_gb(Path(settings.work_root)), free_gb(Path(settings.store_root))
+    if same_filesystem(Path(settings.work_root), Path(settings.store_root)):
+        need = work_need + store_need - min(settings.reserve_work_gb, settings.reserve_store_gb)
+        if work_free < need:
+            return f"disk: {work_free:.0f} GB free, {need:.0f} GB needed (work and store together)"
+        return None
+    if work_free < work_need:
+        return f"work disk: {work_free:.0f} GB free, {work_need:.0f} GB needed"
+    if store_free < store_need:
+        return f"store: {store_free:.0f} GB free, {store_need:.0f} GB needed"
     return None
 
 
@@ -138,3 +159,41 @@ def progress(plan: pd.DataFrame, store_root: Path) -> Dict:
             "hours_per_batch": hours / len(markers) if markers else None,
             "status": pd.Series([k for m in markers for k, v in m.get("status", {}).items() for _ in range(int(v))])
             .value_counts().to_dict() if markers else {}}
+
+
+def mirror(store_root: Path, mirror_root: Path, reserve_gb: float = 50.0) -> Dict:
+    """Copy every finished batch of ``store_root`` to ``mirror_root``, checked.
+
+    For each batch marker in ``<store>/state``, every file it lists is copied
+    through a temporary name and checked against the sha256 recorded when the
+    batch was stored; a file already present with that checksum is skipped, so a
+    sync can be repeated or interrupted. The marker is copied last, so a marker
+    in the mirror means the batch is complete there. The plan directory is
+    copied too. Nothing is deleted from the store.
+    """
+    store, target = Path(store_root), Path(mirror_root)
+    counts = {"batches_copied": 0, "batches_present": 0, "files_copied": 0, "gb_copied": 0.0}
+    for name in sorted(p.name for p in (store / "plan").glob("*")):
+        source = store / "plan" / name
+        copy_verified(source, target / "plan" / name)
+    for marker_path in sorted((store / "state").glob("batch_*.json")):
+        content = json.loads(marker_path.read_text())
+        mirrored = target / "state" / marker_path.name
+        if mirrored.exists() and json.loads(mirrored.read_text()).get("files") == content["files"]:
+            counts["batches_present"] += 1
+            continue
+        size = sum((store / rel).stat().st_size for rel in content["files"]) / 1e9
+        if free_gb(target) < size + reserve_gb:
+            raise RuntimeError(f"mirror: {free_gb(target):.0f} GB free, batch {content['batch']} needs {size:.1f} GB "
+                               f"plus a {reserve_gb:.0f} GB reserve")
+        for rel, digest in content["files"].items():
+            destination = target / rel
+            if destination.exists() and sha256_of(destination) == digest:
+                continue                     # arrived intact in an interrupted sync
+            copy_verified(store / rel, destination, digest)
+            counts["files_copied"] += 1
+        counts["gb_copied"] += size
+        copy_verified(marker_path, mirrored)
+        counts["batches_copied"] += 1
+        logger.info("mirrored batch %d (%.1f GB)", content["batch"], size)
+    return counts

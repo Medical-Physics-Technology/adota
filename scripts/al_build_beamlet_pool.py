@@ -22,6 +22,9 @@
   shards moved to ``store_root``; resumable, ``--shard i --n-shards n`` splits
   the batches over processes (``--shard slurm`` reads the SLURM array index).
 - ``status``: batches done, beamlets stored per split, hours per batch.
+- ``sync`` (later): copy the finished batches and the plan to ``sync.mirror_root``
+  (the storage drive), checked against the checksums of every batch marker;
+  repeatable and resumable, never deletes the source.
 
 The data format and the checks are in :mod:`src.active_learning.beamlet_pool`;
 guide: ``scripts/docs/beamlet_pool.md``.
@@ -40,7 +43,7 @@ import numpy as np
 import pandas as pd
 import typer
 
-from src.active_learning.beamlet_pool.batches import BatchSettings, progress, run_batches
+from src.active_learning.beamlet_pool.batches import BatchSettings, mirror, progress, run_batches
 from src.active_learning.beamlet_pool.mc_check import PASS, compare_mixed_energy
 from src.active_learning.beamlet_pool.planning import (
     PlanSettings,
@@ -220,6 +223,18 @@ def generate(config: ConfigOpt = Path("scripts/config_beamlet_pool.yaml"), set_:
                 free_gb(Path(settings.work_root)), store, free_gb(store))
     done = run_batches(plan_df, entries, runner, bdl, rob_cfg, settings, checks, index, n_shards, max_batches)
     logger.info("shard %d finished %d batches this session", index, len(done))
+
+
+@app.command()
+def sync(config: ConfigOpt = Path("scripts/config_beamlet_pool.yaml"), set_: SetOpt = None,
+         mirror_root: Annotated[Optional[Path], typer.Option(help="Overrides sync.mirror_root.")] = None) -> None:
+    """Copy finished batches (and the plan) to the mirror, checked against their checksums."""
+    cfg = _config(config, set_)
+    target = mirror_root or Path((cfg.get("sync") or {}).get("mirror_root") or "")
+    if not str(target):
+        raise typer.BadParameter("no mirror: set sync.mirror_root or pass --mirror-root")
+    counts = mirror(_store(cfg), target, float((cfg.get("sync") or {}).get("reserve_gb", 50.0)))
+    logger.info("sync %s -> %s: %s", _store(cfg), target, counts)
 
 
 @app.command()

@@ -167,17 +167,40 @@ def verify_shards(paths: Dict[str, Path], index: pd.DataFrame) -> None:
                     raise RuntimeError(f"{path}:{key} is malformed")
 
 
-def move_file(source: Path, destination: Path) -> str:
-    """Copy to ``destination`` through a temporary name, check the checksum,
-    rename, then delete the source. Returns the sha256."""
+def same_filesystem(a: Path, b: Path) -> bool:
+    """Whether two paths (or their nearest existing parents) are on one device."""
+    def device(path: Path) -> int:
+        path = Path(path)
+        while not path.exists():
+            path = path.parent
+        return os.stat(path).st_dev
+    return device(a) == device(b)
+
+
+def copy_verified(source: Path, destination: Path, digest: Optional[str] = None) -> str:
+    """Copy to ``destination`` through a temporary name and check the checksum
+    (against ``digest`` when given, else against the source); the source stays.
+    Returns the sha256."""
     destination.parent.mkdir(parents=True, exist_ok=True)
-    digest = sha256_of(source)
+    digest = digest or sha256_of(source)
     temporary = destination.with_name(destination.name + ".partial")
     shutil.copyfile(source, temporary)
     if sha256_of(temporary) != digest:
         temporary.unlink(missing_ok=True)
         raise RuntimeError(f"checksum mismatch copying {source} to {destination}")
     os.replace(temporary, destination)
+    return digest
+
+
+def move_file(source: Path, destination: Path) -> str:
+    """Move ``source`` to ``destination`` and return its sha256: a rename on the
+    same file system, otherwise :func:`copy_verified` and then delete the source."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if same_filesystem(source, destination.parent):
+        digest = sha256_of(source)
+        os.replace(source, destination)
+        return digest
+    digest = copy_verified(source, destination)
     source.unlink()
     return digest
 

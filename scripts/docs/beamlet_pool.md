@@ -9,7 +9,7 @@ a multi-day run never holds more than one raw batch per process.
 
 | Run | Config | Beamlets | Primaries | Where |
 |---|---|---|---|---|
-| Apollo | `scripts/config_beamlet_pool.yaml` | 50,000 | 1e6 | `/RadiotherapyData/adota_pool/v1_apollo_1e6` |
+| Apollo | `scripts/config_beamlet_pool.yaml` | 50,000 | 1e6 | `/scratch/mstryja/adota_pool/v1_apollo_1e6`, later `sync` to `/RadiotherapyData/adota_pool/v1_apollo_1e6` |
 | DelftBlue | `scripts/config_beamlet_pool_delftblue.yaml` (template) | 100,000 | 1e7 | set in the config |
 
 Both runs share **one patient registry** (`registry/beamlet_pool_patients_v1.csv`,
@@ -28,6 +28,7 @@ uv run python scripts/al_build_beamlet_pool.py check-energy-mixing --config scri
 uv run python scripts/al_build_beamlet_pool.py generate --config scripts/config_beamlet_pool.yaml --shard 0 --n-shards 2
 uv run python scripts/al_build_beamlet_pool.py generate --config scripts/config_beamlet_pool.yaml --shard 1 --n-shards 2
 uv run python scripts/al_build_beamlet_pool.py status   --config scripts/config_beamlet_pool.yaml
+uv run python scripts/al_build_beamlet_pool.py sync     --config scripts/config_beamlet_pool.yaml   # later
 ```
 
 1. **`screen`** (DICOM headers only, minutes). Every CT of the four collections
@@ -69,8 +70,28 @@ uv run python scripts/al_build_beamlet_pool.py status   --config scripts/config_
    stopping and restarting is safe. `--shard i --n-shards n` splits the batches over
    processes; two processes of 24 threads use the 48 cores better than one of 48.
 5. **`status`**: batches done, beamlets stored per split, hours per batch.
+6. **`sync`** (later): copies every finished batch and the plan to
+   `sync.mirror_root`, each file through a temporary name and checked against the
+   sha256 its batch marker recorded; the marker is copied last, so a marker in the
+   mirror means the batch is complete there. Files already present with the right
+   checksum are skipped, so a sync can be interrupted and repeated, also while
+   `generate` is still running. It never deletes from the store.
 
 ## Storage
+
+On Apollo everything lives in one tree, `/scratch/mstryja/adota_pool`:
+
+```
+/scratch/mstryja/adota_pool/
+  v1_apollo_1e6/      the store (below), about 130 GB at the end
+  _work/v1_apollo_1e6/batch_NNNN/   one raw batch per process (about 32 GB), deleted once packed
+  _mc_work/           MCsquare's transient run directories (about 16 GB per beamlet block)
+  logs/
+```
+
+Store and work area share the disk, so a packed shard reaches the store by a rename
+(checksummed once), and the free-space check before each batch adds the raw batch,
+the transient grids and the packed shards together against the disk's free space.
 
 ```
 <store>/

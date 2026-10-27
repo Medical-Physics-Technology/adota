@@ -160,7 +160,7 @@ def test_move_checks_the_copy_and_removes_the_source(tmp_path):
 
 def test_space_check_refuses_a_batch_that_does_not_fit(tmp_path):
     settings = BatchSettings(work_root=str(tmp_path), store_root=str(tmp_path), reserve_work_gb=1e9)
-    assert "work disk" in space_check(settings, 10)
+    assert "GB needed" in space_check(settings, 10)
     assert space_check(BatchSettings(work_root=str(tmp_path), store_root=str(tmp_path), transient_gb=0.0,
                                      reserve_work_gb=0.0, reserve_store_gb=0.0), 1) is None
 
@@ -205,3 +205,38 @@ def test_beamlet_field_with_per_spot_energies_maps_every_output_back_to_its_spot
             runner.run_beamlet_field(ct, energy=energies, gantry_angle=90.0, spots_xy=[(0, 0)] * 4,
                                      isocenter=(0, 0, 0), num_primaries=1e3)}
     assert seen == dict(enumerate(energies))
+
+
+def test_space_check_adds_work_and_store_needs_on_one_file_system(tmp_path, monkeypatch):
+    import src.active_learning.beamlet_pool.batches as batches
+
+    monkeypatch.setattr(batches, "free_gb", lambda path: 100.0)
+    settings = BatchSettings(work_root=str(tmp_path / "w"), store_root=str(tmp_path / "s"), transient_gb=20.0,
+                             reserve_work_gb=30.0, reserve_store_gb=50.0)
+    # 2000 raw beamlets (32 GB) + 20 GB transient + 6.2 GB packed + 50 GB reserve > 100 GB
+    assert "work and store together" in space_check(settings, 2000)
+    assert space_check(settings, 100) is None
+
+
+def test_sync_copies_finished_batches_checked_and_resumes(tmp_path):
+    from src.active_learning.beamlet_pool.batches import mirror
+    from src.datasets.beamlet_h5 import sha256_of
+
+    store, target = tmp_path / "store", tmp_path / "mirror"
+    (store / "train").mkdir(parents=True)
+    (store / "plan").mkdir()
+    (store / "state").mkdir()
+    (store / "plan" / "plan.csv").write_text("a,b\n")
+    shard = store / "train" / "batch_0000.h5"
+    shard.write_bytes(b"shard" * 100)
+    marker = {"batch": 0, "files": {"train/batch_0000.h5": sha256_of(shard)}}
+    (store / "state" / "batch_0000.json").write_text(json.dumps(marker))
+    first = mirror(store, target, reserve_gb=0.0)
+    assert first["batches_copied"] == 1 and (target / "train" / "batch_0000.h5").read_bytes() == b"shard" * 100
+    assert (target / "state" / "batch_0000.json").exists() and shard.exists()        # the source stays
+    assert mirror(store, target, reserve_gb=0.0)["batches_present"] == 1             # repeatable
+    marker["files"]["train/batch_0000.h5"] = "0" * 64                                # a corrupted source
+    (store / "state" / "batch_0000.json").write_text(json.dumps(marker))
+    (target / "train" / "batch_0000.h5").unlink()
+    with pytest.raises(RuntimeError, match="checksum"):
+        mirror(store, target, reserve_gb=0.0)
