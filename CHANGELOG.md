@@ -300,6 +300,37 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   with the corrected `gpr[1]` to within 1e-4 pp except on voxels with gamma
   exactly 0.
 
+### Added (labelled beamlet pool and the frozen AL validation set)
+
+- **`src/active_learning/beamlet_pool/`**: `registry` (`screen_collection`,
+  `grid_from_headers`, `match_training`, `assign_splits`, `Claim`, `CollectionSpec`),
+  `planning` (`PlanSettings`, `gate`, `plan_patient`, `assign_batches`, `estimate`),
+  `store` (`pack_batch`, `read_record`, `recompute_flux`, `post_mc_reason`,
+  `move_file`), `batches` (`run_batches`, `BatchSettings`, `progress`), `mc_check`
+  (`compare_mixed_energy`). New output format: per-batch HDF5 shards (`ct` int16,
+  `dose` float32, `sim_res` attribute; no flux) plus index CSVs and markers.
+- **`scripts/al_build_beamlet_pool.py`** (`screen`, `plan`, `check-energy-mixing`,
+  `generate`, `status`), `config_beamlet_pool.yaml`, the DelftBlue template and
+  `scripts/slurm/beamlet_pool_delftblue.sbatch`; guide `scripts/docs/beamlet_pool.md`.
+- **`scripts/al_validation_set_stats.py`**, `src/active_learning/validation_stats.py`,
+  `src/figures/validation_set.py`: composition, validity, metrics and HU histograms
+  inside the patient of the frozen validation set.
+- `src.active_learning.validation.select_stratified`: the score-free stratified draw.
+- `src.mc_generation.config_writer.build_multi_energy_plan_text`;
+  `MCSquareRunner.run_beamlet_field(energy=[...])` takes one energy per spot;
+  `generate_beamlets(..., energies=...)`; `label_batch(..., per_beamlet_energy=True)`.
+- `src.acquisition.candidates.candidate_crops`: any array cut along a candidate's ray.
+
+### Changed (labelled beamlet pool and the frozen AL validation set)
+
+- `body_mask(..., largest_component=False)`: the new option keeps the largest
+  connected component (drops a couch separated by air); the default is unchanged.
+- `process_beamlet` records `peak_in_body` in `sim_res` (new field; nothing removed).
+- `al_build_validation_set.py`: `validation_set.balance` (`stratified`, the new
+  default, or `score_deciles`), `strata`, `tables_dir`, sizing overrides; the frozen
+  manifest keeps only the loop's columns and gains `score_decile`.
+- `pin_worker_threads` also limits the BLAS and OpenMP pools (`threadpoolctl`).
+
 ### Added (beamlet hardness per engine, EXP-0014)
 
 - **`src/active_learning/hardness/`**: `cells` (`cell_ranks`, `cell_spearman`,

@@ -1,0 +1,102 @@
+# The labelled beamlet pool on DelftBlue: the larger 1e7-primary run (TEMPLATE)
+# ==============================================================================
+#   sbatch --array=0-9 scripts/slurm/beamlet_pool_delftblue.sbatch
+#
+# Same code and the SAME patient registry as the Apollo run (registry_csv below is
+# the committed file), so the train / validation / test patients are identical on
+# both machines and no split leaks into another. Only the plan (its own seed and
+# size), the primaries and the paths differ. Every <...> path must be set for the
+# DelftBlue account before the first job; see scripts/docs/beamlet_pool.md.
+
+registry_csv: registry/beamlet_pool_patients_v1.csv     # frozen once screened; commit it
+training_index_csv: <copy of the v3 index CSV>/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian_index.csv
+
+# Every series is screened from its headers; qc keys are those of src/provenance/dicom_qc.py.
+# 260 mm of z: the +-1.5 deg steering window walks 68 mm along the slice axis each way,
+# plus half the 60 mm crop (the AL config's gate).
+collections:
+  - {name: Lung-PET-CT-Dx, anatomy: thoracic, root: <dicom>/manifest-1608669183333,
+     collection: Lung-PET-CT-Dx, qc: {min_slices: 70, max_spacing_xy: 1.5, max_spacing_z: 2.0, min_z_extent_mm: 260.0}}
+  - {name: NSCLC-Radiomics, anatomy: thoracic, root: <dicom>/manifest-1603198545583,
+     collection: NSCLC-Radiomics, qc: {max_spacing_xy: 1.5, max_spacing_z: 3.0, min_z_extent_mm: 260.0}}
+  - {name: StageII-Colorectal, anatomy: abdominal, root: <dicom>/manifest-1646429317311,
+     qc: {min_z_extent_mm: 260.0}}
+  - {name: Prostate-AEC, anatomy: pelvic, root: <dicom>/manifest-1684259732535,
+     collection: Prostate-Anatomical-Edge-Cases, qc: {max_spacing_xy: 1.5, max_spacing_z: 3.0, min_z_extent_mm: 260.0}}
+
+# Patients other experiments own. The first claim of a patient wins; a training-scan
+# match excludes the patient whatever is claimed.
+claims:
+  - {plan_dir: <copy of the opentps_plans directory names>, role: test, why: plan-level validation (OpenTPS plans)}
+  - {file: registry/robustness_clean_selection.csv, role: test, why: beamlet-angle robustness}
+  - {file: registry/robustness_multipatient_selection.csv, role: test, why: beamlet-angle robustness}
+  - {file: registry/al_pool_selection.csv, role_column: role, role_map: {validation: validation, pool: train},
+     why: "AL validation CTs stay validation; AL pool CTs are train"}
+
+split:
+  fractions: {train: 0.70, validation: 0.15, test: 0.15}
+  seed: 20261027
+
+plan:
+  total_beamlets: 100000
+  split_shares: {train: 0.70, validation: 0.15, test: 0.15}   # of the beamlets
+  energy_range_mev: [70.0, 250.0]      # uniform per beamlet; 250 is MCsquare's nuclear-data limit
+  n_gantry: 2                          # random field angles per patient (one CT rotation each)
+  theta_half_range_deg: 1.5
+  lattice_n: 18
+  range_margin_mm: 10.0                # R80 at least this far before the end of the 320 mm crop
+  min_body_fraction_at_peak: 0.5       # the beam stops inside the patient
+  oversample: 1.04                     # spare beamlets for Monte Carlo QA losses
+  max_draw_factor: 8.0
+  batch_size: 2000                     # raw batch about 32 GB on /scratch per process
+  seed: 20261103                     # its own draw: no beamlet repeats the Apollo plan
+  prefix: pool
+  version: 2
+n_processes: 1                       # one process per array task (a full node)
+
+batches:
+  work_root: <node-local or scratch directory>/work_v2_delftblue_1e7
+  store_root: <scratch or project directory>/adota_pool/v2_delftblue_1e7
+  keep_raw: false
+  transient_gb: 20.0
+  reserve_work_gb: 30.0
+  reserve_store_gb: 50.0
+
+checks:
+  range_margin_mm: 10.0
+  min_deposition_ratio: 0.95
+  flux_rtol: 1.0e-6
+
+# --- Monte Carlo (the AL generator's settings) --------------------------------
+engine:
+  mcsquare_install: <MCsquare install on DelftBlue>
+  mc_work_dir: <node-local or scratch directory>/mc_work
+  bdl_file: hptc_beam_model_rsnone.txt
+  scanner: default
+
+candidates:                  # only the steering window and lattice are read from here
+  theta_half_range_deg: 1.5
+  lattice_n: 18
+  energies: [150.0]
+
+robustness:
+  energies: [150.0]          # unused: every beamlet's energy comes from the plan
+  theta_x_range: [-1.5, 1.5]
+  theta_y_range: [-1.5, 1.5]
+  grid_n: 18
+  rotate_to_canonical: true
+  isocenter_mode: grid_center
+  beam_entrance_standoff_mm: 20.0
+  roi_size: [60, 60, 320]
+  iso_spacing_mm: 1.0
+  num_primaries: 1.0e7
+  num_threads: 0             # every core of the task (generate --num-threads overrides)
+  beamlet_mode: true
+  beamlet_block_size: 40     # about 16 GB of transient dose grids per block
+  rng_seed: 0
+  min_deposition_ratio: 0.95
+  output_root: <scratch>/unused
+  experiment_prefix: pool
+  experiment_version: 2
+  make_figures: false
+  overwrite: false

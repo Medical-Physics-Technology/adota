@@ -67,6 +67,7 @@ def label_batch(
     *,
     lattice: Optional[np.ndarray] = None,
     resolver: Optional[RecordResolver] = None,
+    per_beamlet_energy: bool = False,
 ) -> dict:
     """Simulate every selected candidate and write it to its field directory.
 
@@ -83,6 +84,9 @@ def label_batch(
         lattice: The steering lattice the candidates were drawn on, used to record a
             grid index in ``sim_res``. Defaults to the generator's own lattice.
         resolver: Reused CT resolver, so a multi-cycle loop scans DICOM once.
+        per_beamlet_energy: Group by ``(patient, gantry)`` only and give every
+            beamlet its own ``energy_mev`` in one beamlet-mode call (continuously
+            sampled energies); otherwise one group per energy as before.
 
     Returns:
         Totals plus a per-group breakdown, including measured Monte Carlo seconds
@@ -104,7 +108,9 @@ def label_batch(
         ct = reduce_vacuum_to_air(resample_to_isotropic(rec.load_image(), cfg.iso_spacing_mm))
         for gantry, per_field in per_patient.groupby("gantry_deg", sort=False):
             geom = field_geometry(ct, float(gantry), cfg, bdl)
-            for energy, block in per_field.groupby("energy_mev", sort=False):
+            blocks = ([(float("nan"), per_field)] if per_beamlet_energy
+                      else per_field.groupby("energy_mev", sort=False))
+            for energy, block in blocks:
                 cells: List[Tuple[int, int, float, float]] = []
                 stems: List[str] = []
                 for row in block.itertuples(index=False):
@@ -113,8 +119,9 @@ def label_batch(
                                   tx, ty))
                     stems.append(str(row.candidate_id))
                 out_dir = Path(output_root) / str(block["field_dir"].iloc[0])
-                stats = generate_beamlets(rec, runner, bdl, cfg, geom, float(energy),
-                                          cells, out_dir, stems)
+                energies = block["energy_mev"].astype(float).tolist() if per_beamlet_energy else None
+                stats = generate_beamlets(rec, runner, bdl, cfg, geom, float(block["energy_mev"].iloc[0]),
+                                          cells, out_dir, stems, energies=energies)
                 for key in totals:
                     totals[key] += stats[key]
                 groups.append({"patient_id": str(patient_id), "gantry_deg": float(gantry),
@@ -122,7 +129,8 @@ def label_batch(
                 logger.info("  %s g%.1f e%g: saved=%d qa=%d existing=%d (%d/%d groups)",
                             patient_id, float(gantry), float(energy), stats["saved"],
                             stats["qa_skipped"], stats["existing"], len(groups),
-                            len(chosen.groupby(["patient_id", "gantry_deg", "energy_mev"])))
+                            len(chosen.groupby(["patient_id", "gantry_deg"] if per_beamlet_energy
+                                               else ["patient_id", "gantry_deg", "energy_mev"])))
 
     wall = time.perf_counter() - started
     mc_seconds = read_mc_seconds(chosen, output_root)

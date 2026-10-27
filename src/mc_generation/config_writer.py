@@ -9,7 +9,7 @@ to the one that produced the DoTA training set. ``build_simulation_config`` /
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Sequence
+from typing import Dict, List, Sequence, Tuple
 
 PENCIL_PLAN_FILE_NAME = "PlanPencil.txt"
 SIMULATION_CONFIG_FILE_NAME = "config.txt"
@@ -194,6 +194,45 @@ def build_beamlet_field_plan_text(
     )
     return repr(_Plan(fields=[field],
                       total_meterset_weight_all_fields=total_meterset_weight_all_fields))
+
+
+def build_multi_energy_plan_text(
+    energies: Sequence[float],
+    spots_xy: Sequence[Sequence[float]],
+    gantry_angle: float,
+    isocenter: Sequence[float],
+    weight: float = 1000.0,
+    total_meterset_weight_all_fields: float = 1000.0,
+) -> Tuple[str, List[Tuple[int, int]]]:
+    """PlanPencil.txt text for a beamlet-mode field whose spots have their own
+    energies, and where each spot's dose will be written.
+
+    MCsquare carries the energy per control point, so spots are grouped into one
+    control point per distinct energy, in order of first appearance; beamlet mode
+    then tags spot ``d`` of control point ``c`` as ``_Beamlet_0_{c}_{d}``. Returns
+    the text and, per input spot, its ``(c, d)``. Weights are as in
+    :func:`build_beamlet_field_plan_text` (dose per proton, each spot its own
+    primaries); the cumulative meterset weight grows by one control point's
+    weight at a time, so the plan stays well formed for MCsquare's reader.
+    """
+    if len(energies) != len(spots_xy):
+        raise ValueError(f"{len(energies)} energies for {len(spots_xy)} spots")
+    groups: Dict[float, List[int]] = {}
+    for i, energy in enumerate(energies):
+        groups.setdefault(float(energy), []).append(i)
+    where: List[Tuple[int, int]] = [(0, 0)] * len(spots_xy)
+    control_points, cumulative = [], 0.0
+    for c, (energy, members) in enumerate(groups.items()):
+        cumulative += weight * len(members)
+        control_points.append(_Spot(
+            index=c + 1, spot_id=c + 1, cumulative_meter_set_weight=cumulative, energy=energy,
+            scanned_spots=[(float(spots_xy[i][0]), float(spots_xy[i][1]), float(weight)) for i in members]))
+        for d, i in enumerate(members):
+            where[i] = (c, d)
+    field = _Field(field_id=1, final_cumulative_meter_set_weight=cumulative, gantry_angle=float(gantry_angle),
+                   isocenter_position=isocenter, spots=control_points)
+    text = repr(_Plan(fields=[field], total_meterset_weight_all_fields=total_meterset_weight_all_fields))
+    return text, where
 
 
 def write_plan_beamlets(path, energy, spots_xy, gantry_angle, isocenter, **kwargs) -> Path:
