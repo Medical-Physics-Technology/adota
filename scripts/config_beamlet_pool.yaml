@@ -19,17 +19,19 @@ registry_csv: registry/beamlet_pool_patients_v1.csv     # frozen once screened; 
 training_index_csv: /scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian_index.csv
 
 # Every series is screened from its headers; qc keys are those of src/provenance/dicom_qc.py.
+# max_spacing_z is a strict bound (thickness must be below it): 3.5 lets the 3 mm
+# NSCLC-Radiomics series in (3.0 refused all 251); the training set itself has 5 mm series.
 # 260 mm of z: the +-1.5 deg steering window walks 68 mm along the slice axis each way,
 # plus half the 60 mm crop (the AL config's gate).
 collections:
   - {name: Lung-PET-CT-Dx, anatomy: thoracic, root: /data/lung_cancer_dataset/manifest-1608669183333,
      collection: Lung-PET-CT-Dx, qc: {min_slices: 70, max_spacing_xy: 1.5, max_spacing_z: 2.0, min_z_extent_mm: 260.0}}
   - {name: NSCLC-Radiomics, anatomy: thoracic, root: /scratch/mstryja/manifest-1603198545583,
-     collection: NSCLC-Radiomics, qc: {max_spacing_xy: 1.5, max_spacing_z: 3.0, min_z_extent_mm: 260.0}}
+     collection: NSCLC-Radiomics, qc: {max_spacing_xy: 1.5, max_spacing_z: 3.5, min_z_extent_mm: 260.0}}
   - {name: StageII-Colorectal, anatomy: abdominal, root: /scratch/mstryja/manifest-1646429317311,
      qc: {min_z_extent_mm: 260.0}}
   - {name: Prostate-AEC, anatomy: pelvic, root: /scratch/mstryja/manifest-1684259732535,
-     collection: Prostate-Anatomical-Edge-Cases, qc: {max_spacing_xy: 1.5, max_spacing_z: 3.0, min_z_extent_mm: 260.0}}
+     collection: Prostate-Anatomical-Edge-Cases, qc: {max_spacing_xy: 1.5, max_spacing_z: 3.5, min_z_extent_mm: 260.0}}
 
 # Patients other experiments own. The first claim of a patient wins; a training-scan
 # match excludes the patient whatever is claimed.

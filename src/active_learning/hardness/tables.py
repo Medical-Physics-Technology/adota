@@ -170,13 +170,20 @@ def file_error_columns(all_beamlets_csv: Path, entries: pd.DataFrame, prefixes: 
     return pd.DataFrame(out).reindex(entries["sample_id"]).reset_index(drop=True)
 
 
-def geometry_leakage(entries: pd.DataFrame, index_csv: Path, tol_mm: float = 1.0) -> pd.DataFrame:
+def geometry_leakage(entries: pd.DataFrame, index_csv: Path, tol_mm: float = 1.0,
+                     max_slice_mm: float = 5.0) -> pd.DataFrame:
     """Per comparison CT, the training-set scans with the same grid along the
     axes the gantry rotation leaves alone (x size, z size, z origin, z spacing).
 
     The scan key of the beamlet HDF5 hashes the grid of the unrotated CT, which
     a rotated block no longer has, so this is the check available; an empty
     ``matches`` column means no training scan shares that geometry.
+
+    The generator that built the training set recorded the z origin at either end
+    of the series (for StageII-Colorectal, the top slice: the lowest plus the
+    extent minus one original slice), so the top end is accepted within one
+    original slice of at most ``max_slice_mm``. Comparing the lower end only missed
+    StageII-Colorectal-CT-230, a training scan (corrected 2026-10-27).
     """
     index = pd.read_csv(index_csv, usecols=["patient_key", "image_size_vox_0", "image_size_vox_2",
                                             "image_origin_mm_2", "image_spacing_mm_2"], dtype={"patient_key": str})
@@ -186,8 +193,11 @@ def geometry_leakage(entries: pd.DataFrame, index_csv: Path, tol_mm: float = 1.0
         stem = part.iloc[0]
         meta = json.loads((Path(stem["block_dir"]) / f"{stem['stem']}_sim_res.json").read_text())
         size, origin, spacing = meta["image_size"], meta["image_origin"], meta["image_spacing"]
-        hit = scans[(scans["image_size_vox_0"] == size[0]) & (scans["image_size_vox_2"] == size[2])
-                    & ((scans["image_origin_mm_2"] - origin[2]).abs() <= tol_mm)
+        top = origin[2] + size[2] * spacing[2]
+        z_ok = (((scans["image_origin_mm_2"] - origin[2]).abs() <= tol_mm)
+                | ((scans["image_origin_mm_2"] >= top - max_slice_mm - tol_mm)
+                   & (scans["image_origin_mm_2"] <= top + tol_mm)))
+        hit = scans[(scans["image_size_vox_0"] == size[0]) & (scans["image_size_vox_2"] == size[2]) & z_ok
                     & ((scans["image_spacing_mm_2"] - spacing[2]).abs() <= 0.01)]
         rows.append({"scan": scan, "size_x": size[0], "size_z": size[2], "origin_z_mm": origin[2],
                      "spacing_z_mm": spacing[2], "n_matches": len(hit), "matches": " ".join(hit["patient_key"])})

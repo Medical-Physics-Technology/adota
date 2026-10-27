@@ -71,13 +71,17 @@ def test_splits_respect_training_matches_qc_claims_and_fractions():
     assert again["split"].tolist() == out["split"].tolist()
 
 
-def test_training_match_needs_the_same_grid():
-    scans = pd.DataFrame({"patient_key": ["k1", "k2"], "image_origin_mm_0": [-199.6, -180.0],
-                          "image_origin_mm_2": [-375.0, 31.5], "image_size_vox_0": [400, 402],
-                          "image_size_vox_2": [400, 465], "image_spacing_mm_2": [1.0, 1.0]})
-    grid = {"grid_x": 400, "z_extent_mm": 400.5, "origin_z_mm": -374.2, "origin_x_mm": -199.0}
+def test_training_match_needs_the_same_grid_and_accepts_either_z_end():
+    # Pelvic training scan of StageII-Colorectal-CT-059: z origin recorded at the top slice.
+    scans = pd.DataFrame({"patient_key": ["k1", "k2"], "image_origin_mm_0": [-192.63, -180.0],
+                          "image_origin_mm_1": [-318.63, -300.0], "image_origin_mm_2": [1110.5, 31.5],
+                          "image_size_vox_0": [382, 402], "image_size_vox_2": [255, 465],
+                          "image_spacing_mm_2": [1.0, 1.0]})
+    grid = {"grid_x": 382, "z_extent_mm": 255.0, "origin_x_mm": -192.63, "origin_y_mm": -318.63,
+            "origin_z_mm": 860.5, "origin_z_top_mm": 1110.5}
     assert match_training(grid, scans) == ["k1"]
-    assert match_training({**grid, "origin_z_mm": -774.0}, scans) == []
+    assert match_training({**grid, "origin_z_top_mm": 900.0}, scans) == []          # neither end
+    assert match_training({**grid, "origin_y_mm": -15.0}, scans) == []              # other patient, same size
 
 
 def test_quotas_and_batches_keep_patients_whole_and_splits_interleaved():

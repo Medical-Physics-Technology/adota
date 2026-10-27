@@ -18,11 +18,11 @@ collections:
   - {name: Lung-PET-CT-Dx, anatomy: thoracic, root: <dicom>/manifest-1608669183333,
      collection: Lung-PET-CT-Dx, qc: {min_slices: 70, max_spacing_xy: 1.5, max_spacing_z: 2.0, min_z_extent_mm: 260.0}}
   - {name: NSCLC-Radiomics, anatomy: thoracic, root: <dicom>/manifest-1603198545583,
-     collection: NSCLC-Radiomics, qc: {max_spacing_xy: 1.5, max_spacing_z: 3.0, min_z_extent_mm: 260.0}}
+     collection: NSCLC-Radiomics, qc: {max_spacing_xy: 1.5, max_spacing_z: 3.5, min_z_extent_mm: 260.0}}
   - {name: StageII-Colorectal, anatomy: abdominal, root: <dicom>/manifest-1646429317311,
      qc: {min_z_extent_mm: 260.0}}
   - {name: Prostate-AEC, anatomy: pelvic, root: <dicom>/manifest-1684259732535,
-     collection: Prostate-Anatomical-Edge-Cases, qc: {max_spacing_xy: 1.5, max_spacing_z: 3.0, min_z_extent_mm: 260.0}}
+     collection: Prostate-Anatomical-Edge-Cases, qc: {max_spacing_xy: 1.5, max_spacing_z: 3.5, min_z_extent_mm: 260.0}}
 
 # Patients other experiments own. The first claim of a patient wins; a training-scan
 # match excludes the patient whatever is claimed.

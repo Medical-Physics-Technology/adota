@@ -59,6 +59,7 @@ from src.active_learning.beamlet_pool.registry import (
     Claim,
     CollectionSpec,
     assign_splits,
+    matched_training_scans,
     screen_collection,
     split_summary,
     training_scans,
@@ -122,8 +123,13 @@ def screen(config: ConfigOpt = Path("scripts/config_beamlet_pool.yaml"), set_: S
     registry = assign_splits(pd.concat(frames, ignore_index=True), claims, split["fractions"], int(split["seed"]))
     out.parent.mkdir(parents=True, exist_ok=True)
     registry.to_csv(out, index=False)
-    n_matched = int((registry["n_training_matches"].fillna(0) > 0).sum())
-    logger.info("training scans matched: %d of %d in the index", n_matched, len(scans))
+    coverage = matched_training_scans(registry, scans)
+    coverage.to_csv(out.with_name(out.stem + "_training_coverage.csv"), index=False)
+    logger.info("training scans matched to a screened patient, per training source:\n%s", coverage.to_string())
+    if int(coverage["matched"].sum()) < len(scans):
+        logger.warning("%d of %d training scans match no screened patient: their collection is not covered "
+                       "here, so patients of it cannot be proven unused", len(scans) - int(coverage["matched"].sum()),
+                       len(scans))
     logger.info("registry -> %s\n%s", out, split_summary(registry).to_string())
 
 

@@ -96,59 +96,94 @@ def grid_from_headers(series_dir: str, series_uid: str, spacing_mm: float = 1.0)
     n = len(files)
     dz = abs(last.GetOrigin()[2] - first.GetOrigin()[2]) / max(n - 1, 1) if n > 1 else first.GetSpacing()[2]
     origin = [float(v) for v in first.GetOrigin()]
+    z_ends = sorted([origin[2], float(last.GetOrigin()[2])])
     return {"n_slices": n, "spacing_x_mm": float(sx), "spacing_y_mm": float(sy), "spacing_z_mm": float(dz),
-            "origin_x_mm": origin[0], "origin_y_mm": origin[1], "origin_z_mm": min(origin[2], last.GetOrigin()[2]),
+            "origin_x_mm": origin[0], "origin_y_mm": origin[1], "origin_z_mm": z_ends[0], "origin_z_top_mm": z_ends[1],
             "grid_x": int(round(nx * sx / spacing_mm)), "grid_y": int(round(ny * sy / spacing_mm)),
             "grid_z": int(round(n * dz / spacing_mm)), "z_extent_mm": float(n * dz)}
 
 
 def training_scans(index_csv: Path) -> pd.DataFrame:
     """One row per scan of the training HDF5: its key and grid."""
-    cols = ["patient_key", "image_origin_mm_0", "image_origin_mm_2", "image_size_vox_0", "image_size_vox_2",
-            "image_spacing_mm_2", "source_dataset"]
+    cols = ["patient_key", "image_origin_mm_0", "image_origin_mm_1", "image_origin_mm_2", "image_size_vox_0",
+            "image_size_vox_2", "image_spacing_mm_2", "source_dataset"]
     index = pd.read_csv(index_csv, usecols=cols, dtype={"patient_key": str})
     return index.drop_duplicates("patient_key").reset_index(drop=True)
 
 
 def match_training(grid: Mapping[str, float], scans: pd.DataFrame, tol_mm: float = 2.0) -> List[str]:
-    """Training scans with the same 1 mm grid (x size, z extent, x and z origin)."""
+    """Training scans with the same 1 mm grid: x size, z extent, x and y origin, and
+    a z origin at either end of the series.
+
+    The generator that built the training set recorded the z origin of the slice
+    it read first, which for some collections is the highest one (StageII-Colorectal:
+    the training z origin is the lowest slice plus the extent minus one slice), so
+    both ends are accepted; the in-plane origins, which it kept, make the match
+    specific.
+    """
     z_extent = scans["image_size_vox_2"] * scans["image_spacing_mm_2"]
+    z_top = grid.get("origin_z_top_mm", grid["origin_z_mm"])
+    z_close = (((scans["image_origin_mm_2"] - grid["origin_z_mm"]).abs() <= tol_mm)
+               | ((scans["image_origin_mm_2"] - z_top).abs() <= tol_mm))
     hit = scans[((scans["image_size_vox_0"] - grid["grid_x"]).abs() <= 2)
-                & ((z_extent - grid["z_extent_mm"]).abs() <= 2 * tol_mm)
-                & ((scans["image_origin_mm_2"] - grid["origin_z_mm"]).abs() <= tol_mm)
-                & ((scans["image_origin_mm_0"] - grid["origin_x_mm"]).abs() <= tol_mm)]
+                & ((z_extent - grid["z_extent_mm"]).abs() <= 2 * tol_mm) & z_close
+                & ((scans["image_origin_mm_0"] - grid["origin_x_mm"]).abs() <= tol_mm)
+                & ((scans["image_origin_mm_1"] - grid["origin_y_mm"]).abs() <= tol_mm)]
     return hit["patient_key"].tolist()
 
 
 def screen_collection(spec: CollectionSpec, scans: pd.DataFrame, spacing_mm: float = 1.0) -> pd.DataFrame:
-    """Every patient of one collection: QC, grid and training match."""
-    dataset = TCIADataset(root=spec.root, collection=spec.collection, anatomy=spec.anatomy, name=spec.name,
-                          selection="first", qc=spec.qc or None)
+    """Every patient of one collection: training match, grid and QC.
+
+    The training match is computed for every patient whatever its QC, on the
+    largest CT series without the configured gates and on the series the gates
+    select, so a training patient that fails today's gates is still counted as
+    matched (it cannot leak either way, but an unmatched training scan must mean
+    that its collection is not on this machine, not that a gate hid it).
+    """
+    common = dict(root=spec.root, collection=spec.collection, anatomy=spec.anatomy, name=spec.name,
+                  selection="first")
+    ungated = {r.patient_id: r for r in (lambda d: [d.record(i) for i in range(len(d))])(TCIADataset(**common))}
+    gated_ds = TCIADataset(**common, qc=spec.qc or None)
+    gated = {r.patient_id: r for r in (gated_ds.record(i) for i in range(len(gated_ds)))}
     rows = []
-    base = {"collection": spec.name, "anatomy": spec.anatomy}
-    passing = [dataset.record(i) for i in range(len(dataset))]
-    seen = {rec.patient_id for rec in passing}
-    every = sorted(d.name for d in Path(dataset.collection_dir).iterdir() if d.is_dir())
-    for pid in every:
-        if pid not in seen:
-            rows.append({**base, "patient_id": pid, "qc_pass": False, "qc_reason": "no CT series passing QC"})
-    for rec in passing:
-        row = {**base, "patient_id": rec.patient_id, "series_uid": rec.series_uid, "series_dir": rec.series_dir,
-               "root": spec.root, "dataset_collection": spec.collection or "", "qc_pass": True, "qc_reason": ""}
+    base = {"collection": spec.name, "anatomy": spec.anatomy, "root": spec.root,
+            "dataset_collection": spec.collection or ""}
+    for pid in sorted(d.name for d in Path(gated_ds.collection_dir).iterdir() if d.is_dir()):
+        row = {**base, "patient_id": pid}
+        matches: List[str] = []
+        for rec in {id(r): r for r in (ungated.get(pid), gated.get(pid)) if r is not None}.values():
+            try:
+                matches += match_training(grid_from_headers(rec.series_dir, rec.series_uid, spacing_mm), scans)
+            except Exception as exc:  # one unreadable series must not end the screen
+                row["header_error"] = repr(exc)
+        row.update(training_matches=" ".join(sorted(set(matches))), n_training_matches=len(set(matches)))
+        rec = gated.get(pid)
+        if rec is None:
+            row.update(qc_pass=False, qc_reason="no CT series passing QC" if pid in ungated else "no CT series")
+            rows.append(row)
+            continue
         try:
             grid = grid_from_headers(rec.series_dir, rec.series_uid, spacing_mm)
         except Exception as exc:
             row.update(qc_pass=False, qc_reason=f"header: {exc}")
             rows.append(row)
             continue
-        matches = match_training(grid, scans)
         prov = rec.provenance or {}
-        row.update(grid, training_matches=" ".join(matches), n_training_matches=len(matches),
+        row.update(grid, series_uid=rec.series_uid, series_dir=rec.series_dir, qc_pass=True, qc_reason="",
                    kvp=prov.get("kvp"), kernel=prov.get("convolution_kernel"), manufacturer=prov.get("manufacturer"))
         rows.append(row)
-    logger.info("%s: %d patients screened, %d pass QC, %d match a training scan", spec.name, len(rows),
-                sum(r.get("qc_pass", False) for r in rows), sum(r.get("n_training_matches", 0) > 0 for r in rows))
-    return pd.DataFrame(rows)
+    frame = pd.DataFrame(rows)
+    logger.info("%s: %d patients, %d pass QC, %d match a training scan", spec.name, len(frame),
+                int(frame["qc_pass"].sum()), int((frame["n_training_matches"] > 0).sum()))
+    return frame
+
+
+def matched_training_scans(registry: pd.DataFrame, scans: pd.DataFrame) -> pd.DataFrame:
+    """Per training-set source, how many of its scans a screened patient matched."""
+    hit = {key for keys in registry["training_matches"].fillna("") for key in str(keys).split() if key}
+    return scans.assign(matched=scans["patient_key"].isin(hit)).groupby("source_dataset")["matched"] \
+        .agg(matched="sum", scans="size").reset_index()
 
 
 def assign_splits(screened: pd.DataFrame, claims: Sequence[Claim], fractions: Mapping[str, float],
@@ -166,8 +201,9 @@ def assign_splits(screened: pd.DataFrame, claims: Sequence[Claim], fractions: Ma
     for claim in claims:
         for pid, role in claim.assignments().items():
             claimed.setdefault(pid, (role, claim.why or claim.file or claim.plan_dir or "listed"))
+    matches = pd.to_numeric(out.get("n_training_matches"), errors="coerce").fillna(0)
     for i, row in out.iterrows():
-        if int(row.get("n_training_matches", 0) or 0) > 0:
+        if matches[i] > 0:
             out.loc[i, ["split", "split_reason"]] = [EXCLUDED, f"training scan {row['training_matches']}"]
         elif not bool(row.get("qc_pass", False)):
             out.loc[i, ["split", "split_reason"]] = [EXCLUDED, f"qc: {row.get('qc_reason', '')}"]
