@@ -302,8 +302,22 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 
 ### Added (labelled beamlet pool and the frozen AL validation set)
 
+- **`src/provenance/series_geometry.py`**: a CT series assembled from its headers
+  (`read_directory` groups the files of a directory by the series UID each file
+  carries, CT image objects only, localizers set aside) and checked
+  (`check_geometry`: one orientation and in-plane grid, no in-plane shear, no
+  duplicate positions, no step above `max_gap_ratio` times the median). New opt-in
+  QC gate `QCGates.max_slice_gap_ratio`: with it, `TCIADataset` reads every header,
+  selects among the series that stack, uses the measured slice count and z extent,
+  and its records carry the files to stack (`CTRecord.files`, new field, empty by
+  default). Without it the selection is unchanged.
+  `src.datasets.tcia`: `ct_series_candidates`, `best_candidate`, `candidate_record`,
+  `series_dirs`; `_auto_collection` is now public as `auto_collection`.
+- `PoolEntry.max_slice_gap_ratio` (new field, default None, not written to the pool
+  CSV): when set, `RecordResolver` loads exactly `series_uid`, re-checked, and
+  refuses a changed slice count; when None the lookup is unchanged.
 - **`src/active_learning/beamlet_pool/`**: `registry` (`screen_collection`,
-  `grid_from_headers`, `match_training`, `assign_splits`, `Claim`, `CollectionSpec`),
+  `screen_patient`, `grid_from_geometry`, `match_training`, `assign_splits`, `Claim`, `CollectionSpec`),
   `planning` (`PlanSettings`, `gate`, `plan_patient`, `assign_batches`, `estimate`),
   `store` (`pack_batch`, `read_record`, `recompute_flux`, `post_mc_reason`,
   `move_file`), `batches` (`run_batches`, `BatchSettings`, `progress`), `mc_check`

@@ -25,6 +25,9 @@ class CTRecord:
     # Acquisition provenance + QC (pixel spacing, kVp, tube current, kernel, ...);
     # None for synthetic sources. See src/provenance/dicom_qc.py.
     provenance: Optional[Dict] = None
+    # The files to stack, in order, when the series was validated from all of its
+    # headers (src/provenance/series_geometry.py); empty = let GDCM pick them.
+    files: Tuple[str, ...] = ()
 
     @property
     def uid(self) -> str:
@@ -34,7 +37,7 @@ class CTRecord:
     def load_image(self) -> sitk.Image:
         """Read the series into a geometrically-ordered SITK image."""
         reader = sitk.ImageSeriesReader()
-        files = reader.GetGDCMSeriesFileNames(self.series_dir, self.series_uid)
+        files = list(self.files) or reader.GetGDCMSeriesFileNames(self.series_dir, self.series_uid)
         if not files:
             raise RuntimeError(f"No DICOM files for series {self.uid} in {self.series_dir}")
         reader.SetFileNames(files)

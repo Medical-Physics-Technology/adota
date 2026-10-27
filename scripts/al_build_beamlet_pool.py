@@ -110,14 +110,15 @@ def _registry(cfg: Dict[str, Any]) -> pd.DataFrame:
 
 @app.command()
 def screen(config: ConfigOpt = Path("scripts/config_beamlet_pool.yaml"), set_: SetOpt = None,
-           overwrite: Annotated[bool, typer.Option(help="Replace an existing registry.")] = False) -> None:
+           overwrite: Annotated[bool, typer.Option(help="Replace an existing registry.")] = False,
+           n_workers: Annotated[int, typer.Option(help="Worker processes, one patient each.")] = 8) -> None:
     """Screen the collections and split the usable patients."""
     cfg = _config(config, set_)
     out = Path(cfg["registry_csv"])
     if out.exists() and not overwrite:
         raise typer.BadParameter(f"{out} exists; it defines the splits of every run. Pass --overwrite to redraw.")
     scans = training_scans(Path(cfg["training_index_csv"]))
-    frames = [screen_collection(CollectionSpec(**spec), scans) for spec in cfg["collections"]]
+    frames = [screen_collection(CollectionSpec(**spec), scans, n_workers=n_workers) for spec in cfg["collections"]]
     claims = [Claim(**c) for c in cfg.get("claims", [])]
     split = cfg["split"]
     registry = assign_splits(pd.concat(frames, ignore_index=True), claims, split["fractions"], int(split["seed"]))

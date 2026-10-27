@@ -208,11 +208,18 @@ def acceptance_table(candidates: pd.DataFrame, bins: Sequence[float]) -> pd.Data
 
 
 def entries_from_registry(registry: pd.DataFrame) -> List[PoolEntry]:
-    """The registry's usable patients as :class:`PoolEntry` rows (role = split)."""
+    """The registry's usable patients as :class:`PoolEntry` rows (role = split).
+
+    Each entry loads exactly its screened series, re-checked slice by slice, so a
+    registry that predates the slice-geometry screen is refused.
+    """
+    if "max_slice_gap_ratio" not in registry.columns:
+        raise ValueError("the registry predates the slice-geometry screen: rerun `screen --overwrite`")
     keep = registry[registry["split"].isin(["train", "validation", "test"])]
     return [PoolEntry(role=r.split, anatomy=r.anatomy, dataset_name=r.collection, root=r.root,
                       collection=r.dataset_collection if isinstance(r.dataset_collection, str) else "",
-                      patient_id=r.patient_id, series_uid=r.series_uid, n_slices=int(r.n_slices))
+                      patient_id=r.patient_id, series_uid=r.series_uid, n_slices=int(r.n_slices),
+                      max_slice_gap_ratio=float(r.max_slice_gap_ratio))
             for r in keep.itertuples()]
 
 

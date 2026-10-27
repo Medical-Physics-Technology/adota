@@ -1,13 +1,16 @@
 """Which patients the pool may use, and in which split.
 
 Every CT series of the configured collections is screened from its DICOM headers
-only (no pixel data):
+only (no pixel data), all of them: files are grouped by the series UID each one
+carries, and a series must stack into a volume (:mod:`src.provenance.series_geometry`):
 
-- the image-quality gates of :class:`src.datasets.tcia.TCIADataset`;
-- its 1 mm grid, computed the way :func:`src.mc_generation.geometry.resample_to_isotropic`
-  will build it, compared with the scans of the training HDF5 (``*_index.csv``).
-  The training set records a scan only by that grid (``patient_key`` hashes origin,
-  size and spacing), so a match on the grid is how a training patient is found;
+- the image-quality gates of :class:`src.datasets.tcia.TCIADataset`, on the measured
+  slice count and z extent;
+- the 1 mm grid of every CT series of the patient, computed the way
+  :func:`src.mc_generation.geometry.resample_to_isotropic` will build it, compared
+  with the scans of the training HDF5 (``*_index.csv``). The training set records a
+  scan only by that grid (``patient_key`` hashes origin, size and spacing), so a
+  match on the grid is how a training patient is found;
 - claims of other experiments (registry CSVs, plan directories), which force a
   split or exclude the patient.
 
@@ -19,19 +22,23 @@ from __future__ import annotations
 
 import logging
 import re
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
-import SimpleITK as sitk
 
-from src.datasets.tcia import TCIADataset
+from src.datasets.tcia import auto_collection, best_candidate, ct_series_candidates
+from src.provenance.dicom_qc import gates_from_dict
+from src.provenance.series_geometry import SeriesGeometry
 
 logger = logging.getLogger(__name__)
 
 SPLITS = ("train", "validation", "test")
+# TCIADataset's built-in gates, which the configured ``qc`` refines.
+_DATASET_DEFAULTS = dict(min_slices=50, max_slices=1000, require_ct=True, require_monochrome2=True)
 EXCLUDED = "excluded"
 
 
@@ -79,28 +86,17 @@ class Claim:
         return out
 
 
-def grid_from_headers(series_dir: str, series_uid: str, spacing_mm: float = 1.0) -> Dict[str, float]:
-    """The series' grid and the grid it resamples to, from its first and last headers."""
-    files = sitk.ImageSeriesReader.GetGDCMSeriesFileNames(series_dir, series_uid)
-    if not files:
-        raise RuntimeError(f"no files for series {series_uid} in {series_dir}")
-    heads = []
-    for path in (files[0], files[-1]):
-        reader = sitk.ImageFileReader()
-        reader.SetFileName(path)
-        reader.ReadImageInformation()
-        heads.append(reader)
-    first, last = heads
-    sx, sy = first.GetSpacing()[:2]
-    nx, ny = first.GetSize()[:2]
-    n = len(files)
-    dz = abs(last.GetOrigin()[2] - first.GetOrigin()[2]) / max(n - 1, 1) if n > 1 else first.GetSpacing()[2]
-    origin = [float(v) for v in first.GetOrigin()]
-    z_ends = sorted([origin[2], float(last.GetOrigin()[2])])
-    return {"n_slices": n, "spacing_x_mm": float(sx), "spacing_y_mm": float(sy), "spacing_z_mm": float(dz),
-            "origin_x_mm": origin[0], "origin_y_mm": origin[1], "origin_z_mm": z_ends[0], "origin_z_top_mm": z_ends[1],
-            "grid_x": int(round(nx * sx / spacing_mm)), "grid_y": int(round(ny * sy / spacing_mm)),
-            "grid_z": int(round(n * dz / spacing_mm)), "z_extent_mm": float(n * dz)}
+def grid_from_geometry(geom: SeriesGeometry, spacing_mm: float = 1.0) -> Dict[str, float]:
+    """The series' grid and the grid it resamples to, from its checked headers."""
+    sy, sx = (float(v) for v in geom.pixel_spacing_mm)
+    n = geom.n_slices
+    z_lo, z_hi = geom.z_ends_mm
+    dz = (z_hi - z_lo) / max(n - 1, 1)
+    return {"n_slices": n, "spacing_x_mm": sx, "spacing_y_mm": sy, "spacing_z_mm": float(dz),
+            "origin_x_mm": geom.origin_mm[0], "origin_y_mm": geom.origin_mm[1], "origin_z_mm": z_lo,
+            "origin_z_top_mm": z_hi, "grid_x": int(round(geom.columns * sx / spacing_mm)),
+            "grid_y": int(round(geom.rows * sy / spacing_mm)), "grid_z": int(round(n * dz / spacing_mm)),
+            "z_extent_mm": float(n * dz)}
 
 
 def training_scans(index_csv: Path) -> pd.DataFrame:
@@ -132,50 +128,63 @@ def match_training(grid: Mapping[str, float], scans: pd.DataFrame, tol_mm: float
     return hit["patient_key"].tolist()
 
 
-def screen_collection(spec: CollectionSpec, scans: pd.DataFrame, spacing_mm: float = 1.0) -> pd.DataFrame:
-    """Every patient of one collection: training match, grid and QC.
+def screen_patient(spec: CollectionSpec, patient_id: str, scans: pd.DataFrame,
+                   spacing_mm: float = 1.0) -> Dict[str, object]:
+    """One patient: every CT series checked from all of its headers, matched to the
+    training scans, and the largest series passing QC selected.
 
-    The training match is computed for every patient whatever its QC, on the
-    largest CT series without the configured gates and on the series the gates
-    select, so a training patient that fails today's gates is still counted as
-    matched (it cannot leak either way, but an unmatched training scan must mean
-    that its collection is not on this machine, not that a gate hid it).
+    The training match runs on every CT series, whatever its QC: a training scan
+    can be any series of the patient, and a patient whose series fails today's
+    gates is still a training patient.
     """
-    common = dict(root=spec.root, collection=spec.collection, anatomy=spec.anatomy, name=spec.name,
-                  selection="first")
-    ungated = {r.patient_id: r for r in (lambda d: [d.record(i) for i in range(len(d))])(TCIADataset(**common))}
-    gated_ds = TCIADataset(**common, qc=spec.qc or None)
-    gated = {r.patient_id: r for r in (gated_ds.record(i) for i in range(len(gated_ds)))}
-    rows = []
-    base = {"collection": spec.name, "anatomy": spec.anatomy, "root": spec.root,
-            "dataset_collection": spec.collection or ""}
-    for pid in sorted(d.name for d in Path(gated_ds.collection_dir).iterdir() if d.is_dir()):
-        row = {**base, "patient_id": pid}
-        matches: List[str] = []
-        for rec in {id(r): r for r in (ungated.get(pid), gated.get(pid)) if r is not None}.values():
-            try:
-                matches += match_training(grid_from_headers(rec.series_dir, rec.series_uid, spacing_mm), scans)
-            except Exception as exc:  # one unreadable series must not end the screen
-                row["header_error"] = repr(exc)
-        row.update(training_matches=" ".join(sorted(set(matches))), n_training_matches=len(set(matches)))
-        rec = gated.get(pid)
-        if rec is None:
-            row.update(qc_pass=False, qc_reason="no CT series passing QC" if pid in ungated else "no CT series")
-            rows.append(row)
-            continue
-        try:
-            grid = grid_from_headers(rec.series_dir, rec.series_uid, spacing_mm)
-        except Exception as exc:
-            row.update(qc_pass=False, qc_reason=f"header: {exc}")
-            rows.append(row)
-            continue
-        prov = rec.provenance or {}
-        row.update(grid, series_uid=rec.series_uid, series_dir=rec.series_dir, qc_pass=True, qc_reason="",
-                   kvp=prov.get("kvp"), kernel=prov.get("convolution_kernel"), manufacturer=prov.get("manufacturer"))
-        rows.append(row)
+    gates = gates_from_dict(spec.qc, **_DATASET_DEFAULTS)
+    if gates.max_slice_gap_ratio is None:
+        raise ValueError(f"{spec.name}: the screen needs qc.max_slice_gap_ratio")
+    collection = spec.collection or auto_collection(spec.root)
+    row: Dict[str, object] = {"collection": spec.name, "anatomy": spec.anatomy, "root": spec.root,
+                              "dataset_collection": spec.collection or "", "patient_id": patient_id}
+    try:
+        candidates = ct_series_candidates(str(Path(spec.root) / collection / patient_id), gates)
+    except Exception as exc:  # one unreadable patient must not end the screen
+        candidates, row["header_error"] = [], repr(exc)
+    matches = sorted({k for c in candidates for k in match_training(grid_from_geometry(c.geometry, spacing_mm), scans)})
+    row.update(training_matches=" ".join(matches), n_training_matches=len(matches), n_ct_series=len(candidates),
+               n_ct_series_not_stacking=sum(not c.geometry.ok for c in candidates),
+               max_slice_gap_ratio=gates.max_slice_gap_ratio)
+    best = best_candidate(candidates)
+    if best is None:
+        largest = max(candidates, key=lambda c: c.geometry.n_slices, default=None)
+        reason = "no CT series" if largest is None else \
+            f"no CT series passing QC; largest: {', '.join(largest.qc_reasons)}"
+        row.update(qc_pass=False, qc_reason=reason)
+        return row
+    prov = best.provenance
+    row.update(grid_from_geometry(best.geometry, spacing_mm), series_uid=best.geometry.series_uid,
+               series_dir=best.series_dir, slice_step_mm=best.geometry.step_mm,
+               max_slice_step_mm=best.geometry.max_step_mm, qc_pass=True, qc_reason="", kvp=prov.get("kvp"),
+               kernel=prov.get("convolution_kernel"), manufacturer=prov.get("manufacturer"))
+    return row
+
+
+def _screen_task(args) -> Dict[str, object]:
+    return screen_patient(*args)
+
+
+def screen_collection(spec: CollectionSpec, scans: pd.DataFrame, spacing_mm: float = 1.0,
+                      n_workers: int = 1) -> pd.DataFrame:
+    """Every patient of one collection: training match, geometry, QC."""
+    collection_dir = Path(spec.root) / (spec.collection or auto_collection(spec.root))
+    patients = sorted(d.name for d in collection_dir.iterdir() if d.is_dir())
+    tasks = [(spec, pid, scans, spacing_mm) for pid in patients]
+    if n_workers > 1:
+        with ProcessPoolExecutor(n_workers) as pool:
+            rows = list(pool.map(_screen_task, tasks, chunksize=2))
+    else:
+        rows = [_screen_task(t) for t in tasks]
     frame = pd.DataFrame(rows)
-    logger.info("%s: %d patients, %d pass QC, %d match a training scan", spec.name, len(frame),
-                int(frame["qc_pass"].sum()), int((frame["n_training_matches"] > 0).sum()))
+    logger.info("%s: %d patients, %d pass QC, %d match a training scan, %d CT series do not stack",
+                spec.name, len(frame), int(frame["qc_pass"].sum()), int((frame["n_training_matches"] > 0).sum()),
+                int(frame["n_ct_series_not_stacking"].sum()))
     return frame
 
 

@@ -22,7 +22,8 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 from src.datasets.base import CTRecord
-from src.datasets.tcia import TCIADataset
+from src.datasets.tcia import TCIADataset, auto_collection, candidate_record, ct_series_candidates
+from src.provenance.dicom_qc import QCGates
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,10 @@ class PoolEntry:
     patient_id: str
     series_uid: str = ""
     n_slices: int = 0
+    # Set when the entry comes from a registry screened slice by slice: the CT is
+    # then loaded from exactly ``series_uid``, re-checked with this gap ratio, and
+    # must still have ``n_slices`` slices. None = the original largest-series lookup.
+    max_slice_gap_ratio: Optional[float] = None
 
 
 def read_excluded_patient_ids(paths: Iterable[str]) -> set:
@@ -132,7 +137,8 @@ def write_pool(entries: Sequence[PoolEntry], path: Path) -> Path:
         writer = csv.DictWriter(handle, fieldnames=POOL_CSV_FIELDS)
         writer.writeheader()
         for entry in entries:
-            writer.writerow(asdict(entry))
+            row = asdict(entry)
+            writer.writerow({k: row[k] for k in POOL_CSV_FIELDS})
     return path
 
 
@@ -159,6 +165,7 @@ class RecordResolver:
     def __init__(self, entries: Sequence[PoolEntry]) -> None:
         self._entries = list(entries)
         self._cache: Dict[Tuple[str, str], Dict[str, CTRecord]] = {}
+        self._exact_cache: Dict[Tuple[str, str, str, str], CTRecord] = {}
 
     def _collection(self, entry: PoolEntry) -> Dict[str, CTRecord]:
         key = (entry.root, entry.collection)
@@ -173,7 +180,28 @@ class RecordResolver:
                                 for i in range(len(dataset))}
         return self._cache[key]
 
+    def _exact(self, entry: PoolEntry) -> CTRecord:
+        """The entry's own series, from all of its headers, refused if it no longer stacks."""
+        key = (entry.root, entry.collection, entry.patient_id, entry.series_uid)
+        if key not in self._exact_cache:
+            patient_dir = Path(entry.root) / (entry.collection or auto_collection(entry.root)) / entry.patient_id
+            gates = QCGates(min_slices=0, max_slices=10**6, require_ct=True, require_monochrome2=False,
+                            max_slice_gap_ratio=entry.max_slice_gap_ratio)
+            found = [c for c in ct_series_candidates(str(patient_dir), gates)
+                     if c.geometry.series_uid == entry.series_uid]
+            if not found:
+                raise ValueError(f"series {entry.series_uid} of {entry.patient_id} not found under {patient_dir}")
+            geom = found[0].geometry
+            if not geom.ok:
+                raise ValueError(f"{entry.patient_id} series {entry.series_uid} does not stack: {geom.reasons}")
+            if entry.n_slices and geom.n_slices != entry.n_slices:
+                raise ValueError(f"{entry.patient_id}: {geom.n_slices} slices on disk, {entry.n_slices} screened")
+            self._exact_cache[key] = candidate_record(found[0], entry.dataset_name, entry.anatomy, entry.patient_id)
+        return self._exact_cache[key]
+
     def record(self, entry: PoolEntry) -> CTRecord:
+        if entry.max_slice_gap_ratio is not None:
+            return self._exact(entry)
         records = self._collection(entry)
         if entry.patient_id not in records:
             raise ValueError(

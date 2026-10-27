@@ -22,7 +22,7 @@ Every stage is a separate command and is started by hand.
 
 ```bash
 export TMPDIR=/scratch/$USER/tmp        # the scripts refuse a root-disk TMPDIR
-uv run python scripts/al_build_beamlet_pool.py screen   --config scripts/config_beamlet_pool.yaml
+uv run python scripts/al_build_beamlet_pool.py screen   --config scripts/config_beamlet_pool.yaml --n-workers 8
 uv run python scripts/al_build_beamlet_pool.py plan     --config scripts/config_beamlet_pool.yaml
 uv run python scripts/al_build_beamlet_pool.py check-energy-mixing --config scripts/config_beamlet_pool.yaml
 uv run python scripts/al_build_beamlet_pool.py generate --config scripts/config_beamlet_pool.yaml --shard 0 --n-shards 2
@@ -31,15 +31,30 @@ uv run python scripts/al_build_beamlet_pool.py status   --config scripts/config_
 uv run python scripts/al_build_beamlet_pool.py sync     --config scripts/config_beamlet_pool.yaml   # later
 ```
 
-1. **`screen`** (DICOM headers only, minutes). Every CT of the four collections
-   (Lung-PET-CT-Dx, NSCLC-Radiomics, StageII-Colorectal, Prostate-AEC):
-   - image-quality gates of `TCIADataset` (spacing, at least 260 mm of z for the
-     +-1.5 deg steering window);
-   - its 1 mm grid against the 56 scans of the training HDF5 (`*_index.csv`): the
-     training set records a scan only by that grid, so a match excludes the patient.
-     The command prints how many training scans were matched; a training scan that
-     matches no patient here comes from a collection that is not on this machine,
-     and the leakage check cannot cover that collection;
+1. **`screen`** (DICOM headers only, about 10 minutes with `--n-workers 8`). Every
+   CT series of every patient of the four collections (Lung-PET-CT-Dx,
+   NSCLC-Radiomics, StageII-Colorectal, Prostate-AEC), from **all** of its headers:
+   - a series is the set of files carrying its series UID in their own header, CT
+     image objects only (localizers, other series and non-CT files in the same
+     directory are set aside), and it must stack into a volume: one orientation
+     and in-plane grid, no in-plane shift between slices, no duplicate positions,
+     no slice step above `max_slice_gap_ratio` (1.5) times the median step
+     (`src/provenance/series_geometry.py`). The reader would otherwise stack a
+     missing slice, or two acquisitions under one UID, as if evenly spaced;
+   - the image-quality gates of `TCIADataset` (spacing, at least 260 mm of z for
+     the +-1.5 deg steering window), on the **measured** slice count and z extent,
+     not the file count and the nominal slice thickness (overlapping
+     reconstructions have a thickness larger than their step);
+   - the 1 mm grid of **every** CT series of the patient against the 56 scans of
+     the training HDF5 (`*_index.csv`): the training set records a scan only by
+     that grid, and a training scan can be any series of the patient, so a match
+     on any of them excludes the patient. The command prints how many training
+     scans were matched; a training scan that matches no patient here comes from a
+     collection that is not on this machine, and the leakage check cannot cover
+     that collection;
+   - the selected series is the largest one that passes; the registry records its
+     UID and slice count, and `plan` / `generate` load exactly that series, check it
+     again, and refuse it if it changed;
    - claims: plan-validation patients (`opentps_plans`) and the robustness patients
      go to test, the AL validation CTs to validation, the AL pool CTs to train;
    - the rest per collection, seeded, 70 / 15 / 15.
