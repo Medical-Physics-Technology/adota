@@ -392,6 +392,17 @@ def final(run_dir: Annotated[Path, typer.Option(help="The run directory.")],
     logger.info("final model: %s", out / "checkpoints" / "last.pth")
 
 
+def _final_model(run: Path, cfg: Dict[str, Any], name: str, device):
+    """``(winner, config, model)`` of the final training ``name``: the confirmed
+    configuration with its overrides, and the weights ``test`` evaluates (``last.pth``)."""
+    winner = json.loads((run / "confirm" / "selection.json").read_text())
+    frozen = next(t for t in _study(run, cfg).get_trials(deepcopy=False) if t.number == int(winner["trial"]))
+    config = final_config(build_candidate(base_config(cfg), frozen.params).config, final_overrides(cfg, name))
+    model = build_adota_model(config, device)
+    CheckpointManager.load_weights_only(run / name / "checkpoints" / "last.pth", model=model, device=device)
+    return winner, config, model
+
+
 @app.command()
 def test(run_dir: Annotated[Path, typer.Option(help="The run directory.")],
          device: Annotated[int, typer.Option(help="GPU index.")] = 0,
@@ -407,13 +418,8 @@ def test(run_dir: Annotated[Path, typer.Option(help="The run directory.")],
     marker = run / "test" / "summary.json"
     if marker.exists() and not force:
         raise typer.BadParameter(f"the test set was already evaluated ({marker}); it is used once")
-    winner = json.loads((run / "confirm" / "selection.json").read_text())
-    frozen = next(t for t in _study(run, cfg).get_trials(deepcopy=False) if t.number == int(winner["trial"]))
-    config = final_config(build_candidate(base_config(cfg), frozen.params).config, final_overrides(cfg, name))
-    torch_device = resolve_device(device)
-    model = build_adota_model(config, torch_device)
-    CheckpointManager.load_weights_only(run / name / "checkpoints" / "last.pth", model=model,
-                                        device=torch_device)
+    winner, config, model = _final_model(run, cfg, name, resolve_device(device))
+    torch_device = next(model.parameters()).device
     ids = _ids(run, "test")
     summary: Dict[str, Any] = {"trial": winner["trial"], "final": name, "n_test": len(ids), "criteria": {}}
     for gamma in cfg["test_gamma"]:
@@ -425,6 +431,53 @@ def test(run_dir: Annotated[Path, typer.Option(help="The run directory.")],
         summary["criteria"][settings.gamma_label] = summarise_metrics(frame)
         logger.info("test %s: %s", settings.gamma_label, summary["criteria"][settings.gamma_label])
     marker.write_text(json.dumps(summary, indent=2, default=str))
+
+
+@app.command()
+def export(run_dir: Annotated[Path, typer.Option(help="The run directory.")],
+           out: Annotated[Path, typer.Option(help="The model folder to create, e.g. models/<name>.")],
+           name: Annotated[str, typer.Option(help="The final training to export.")] = "final",
+           ) -> None:
+    """Write a final model as a deployable ``models/<name>/`` folder, the layout
+    ``src.adota.utils.load_model`` reads: ``best_model.pth`` (a bare state dict of
+    the weights ``test`` evaluated), ``hyperparams.json`` (the architecture),
+    ``provenance.json`` and ``comments.txt``. An existing folder is never overwritten."""
+    import hashlib
+
+    import torch
+
+    from src.training.run_dir import _git_info
+
+    run = Path(run_dir)
+    out = Path(out)
+    if out.exists():
+        raise typer.BadParameter(f"{out} exists; choose a new folder")
+    cfg = _read_run(run)
+    winner, config, model = _final_model(run, cfg, name, torch.device("cpu"))
+    out.mkdir(parents=True)
+    torch.save(model.state_dict(), out / "best_model.pth")
+    (out / "hyperparams.json").write_text(json.dumps(model.to_dict(), indent=4) + "\n")
+    checkpoints = run / name / "checkpoints"
+    best_is_last = (checkpoints / "best.pth").exists() and all(
+        torch.equal(a, b) for a, b in zip(
+            torch.load(checkpoints / "best.pth", map_location="cpu", weights_only=False)["model"].values(),
+            model.state_dict().values()))
+    test_summary = run / "test" / "summary.json"
+    tested = json.loads(test_summary.read_text()) if test_summary.exists() else None
+    record = {"run_dir": str(run), "final": name, "trial": winner["trial"],
+              "source_checkpoint": str(checkpoints / "last.pth"),
+              "best_pth_identical": best_is_last, "n_parameters": sum(p.numel() for p in model.parameters()),
+              "n_train_records": len(_ids(run, "final_train")), "dataset_path": config.dataset_path,
+              "overrides": final_overrides(cfg, name),
+              "test": tested if tested and tested.get("final", "final") == name else None,
+              "best_model_sha256": hashlib.sha256((out / "best_model.pth").read_bytes()).hexdigest(),
+              "exported_with": _git_info(), "exported": datetime.now().isoformat(timespec="seconds")}
+    (out / "provenance.json").write_text(json.dumps(record, indent=2, default=str) + "\n")
+    (out / "comments.txt").write_text(
+        f"ADoTA from {run.name}/{name}: trial {winner['trial']} of the model_hpo_training search, trained from "
+        f"scratch on {record['n_train_records']} records (patient-level split; test set held out). "
+        f"Weights = {name}/checkpoints/last.pth, the model `test` evaluated. Full record in provenance.json.\n")
+    logger.info("exported %s to %s", name, out)
 
 
 if __name__ == "__main__":
