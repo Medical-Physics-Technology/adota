@@ -98,6 +98,8 @@ checks:
   range_margin_mm: 10.0
   min_deposition_ratio: 0.95
   flux_rtol: 1.0e-6
+  min_body_fraction_at_peak: 0.5   # dose share in the patient at the Bragg peak depth (the plan's gate);
+                                   # not the hottest voxel, which air noise wins at high energy
 
 # --- Monte Carlo (the AL generator's settings) --------------------------------
 engine:

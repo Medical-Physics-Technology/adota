@@ -175,3 +175,22 @@ def dose_in_body_fraction(cropped_dose: np.ndarray, body_mask_crop: np.ndarray) 
     if total <= 0:
         return 0.0
     return float(cropped_dose[body_mask_crop > 0].sum()) / total
+
+
+def body_fraction_at_peak(cropped_dose: np.ndarray, body_mask_crop: np.ndarray) -> float:
+    """Dose-weighted share of the patient in the depth slice of the Bragg peak.
+
+    The peak depth is the maximum of the integrated depth dose (depth = axis 2),
+    and the share is the dose inside ``body_mask_crop`` over the dose of that
+    slice. ~1.0 means the beam stops inside the patient, ~0 that it stops in air
+    beyond it. Unlike the single hottest voxel, it is not moved by Monte Carlo
+    noise in low-density voxels: a few hits in an air voxel give it a high dose
+    from a tiny mass, and at high energy, where the peak is flat, such a voxel
+    can be the hottest of the crop while the beam stops well inside the patient.
+    """
+    idd = cropped_dose.sum(axis=(0, 1))
+    if float(idd.max()) <= 0:
+        return 0.0
+    k = int(np.argmax(idd))
+    layer = cropped_dose[:, :, k]
+    return float(layer[body_mask_crop[:, :, k] > 0].sum()) / float(layer.sum())

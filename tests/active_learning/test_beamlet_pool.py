@@ -99,10 +99,11 @@ def test_quotas_and_batches_keep_patients_whole_and_splits_interleaved():
     assert my_batches(plan.assign(batch=batch), 1, 2) == [b for b in sorted(batch.unique()) if b % 2 == 1]
 
 
-def sim_res(r80=150.0, peak_in_body=True, ratio=0.99, energy=150.0):
-    return {"r80_mm": r80, "peak_in_body": peak_in_body, "dose_deposition_ratio": ratio, "roi_size": [20, 20, 64],
-            "initial_energy": energy, "beamlet_angles": [0.01, -0.02], "rays_entrence_point_proj": [10.0, 9.0, 0.0],
-            "mc_seconds": 1.0}
+def sim_res(r80=150.0, peak_in_body=True, ratio=0.99, energy=150.0, share=None):
+    out = {"r80_mm": r80, "peak_in_body": peak_in_body, "dose_deposition_ratio": ratio, "roi_size": [20, 20, 64],
+           "initial_energy": energy, "beamlet_angles": [0.01, -0.02], "rays_entrence_point_proj": [10.0, 9.0, 0.0],
+           "mc_seconds": 1.0}
+    return out if share is None else {**out, "body_fraction_at_peak": share}
 
 
 def test_post_mc_checks_catch_overshoot_and_a_peak_outside_the_patient():
@@ -112,6 +113,15 @@ def test_post_mc_checks_catch_overshoot_and_a_peak_outside_the_patient():
     assert post_mc_reason(sim_res(r80=58.0), checks) == "mc_overshoot_crop"
     assert post_mc_reason(sim_res(r80=40.0, peak_in_body=False), checks) == "mc_peak_outside_patient"
     assert post_mc_reason(sim_res(r80=40.0, ratio=0.9), checks) == "mc_low_deposition"
+
+
+def test_post_mc_check_judges_the_peak_slice_not_the_hottest_voxel():
+    checks = StoreChecks(range_margin_mm=10.0)
+    # the hottest voxel in air (noise) no longer rejects a beam that stops in the patient
+    assert post_mc_reason(sim_res(r80=40.0, peak_in_body=False, share=0.9), checks) == ""
+    assert post_mc_reason(sim_res(r80=40.0, peak_in_body=True, share=0.2), checks) == "mc_peak_outside_patient"
+    assert post_mc_reason(sim_res(r80=40.0, share=0.5), checks) == ""
+    assert post_mc_reason(sim_res(r80=40.0, share=0.4), StoreChecks(min_body_fraction_at_peak=0.3)) == ""
 
 
 def write_raw(root, rows, sigmas, flux_noise=0.0):

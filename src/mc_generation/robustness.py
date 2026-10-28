@@ -26,6 +26,7 @@ from src.datasets.base import CTRecord
 from src.figures.mc_beamlet_qc import mc_beamlet_qc_figure
 from src.mc_generation.geometry import (
     beam_entrance_index,
+    body_fraction_at_peak,
     body_mask,
     dose_in_body_fraction,
     extraction_isocenter_physical,
@@ -217,7 +218,8 @@ def process_beamlet(
     sim_res.update({
         "id": str(uuid.uuid4()),
         "dose_in_body_fraction": float(dib),
-        "peak_in_body": bool(body_crop[peak_voxel] > 0.5),   # the dose maximum sits in the patient
+        "peak_in_body": bool(body_crop[peak_voxel] > 0.5),   # the hottest voxel sits in the patient
+        "body_fraction_at_peak": body_fraction_at_peak(cropped_dose, body_crop),
         "r100_mm": float(rm.r100_mm), "r80_mm": float(rm.r80_mm),
         "dfw_mm": float(rm.dfw_mm), "peak_dose": float(rm.peak_dose),
         "provenance_uid": rec.uid,

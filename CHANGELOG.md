@@ -340,6 +340,13 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 - `body_mask(..., largest_component=False)`: the new option keeps the largest
   connected component (drops a couch separated by air); the default is unchanged.
 - `process_beamlet` records `peak_in_body` in `sim_res` (new field; nothing removed).
+- `process_beamlet` also records `body_fraction_at_peak` in `sim_res` (new field;
+  nothing removed), from the new `src.mc_generation.geometry.body_fraction_at_peak`:
+  the dose share inside the patient in the depth slice of the Bragg peak. The
+  beamlet pool's post-Monte-Carlo check uses it (`StoreChecks.min_body_fraction_at_peak`,
+  0.5) instead of `peak_in_body`, the hottest voxel, which Monte Carlo noise in air
+  voxels wins at high energy (11% of the trial beamlets wrongly rejected, 69% at
+  190-220 MeV). The pool index CSV gains a `body_fraction_at_peak` column.
 - `al_build_validation_set.py`: `validation_set.balance` (`stratified`, the new
   default, or `score_deciles`), `strata`, `tables_dir`, sizing overrides; the frozen
   manifest keeps only the loop's columns and gains `score_decile`.

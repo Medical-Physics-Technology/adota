@@ -14,7 +14,10 @@ per planned beamlet and its fate (``stored`` or the reason it was not).
 
 The post-Monte-Carlo overshoot check repeats the planning gate on the simulated
 dose: R80 defined and at least ``range_margin_mm`` before the crop's end, and the
-dose maximum inside the patient.
+Bragg peak inside the patient (at least ``min_body_fraction_at_peak`` of the dose
+in the peak's depth slice, :func:`src.mc_generation.geometry.body_fraction_at_peak`).
+Not the hottest voxel: Monte Carlo noise in air voxels can outrank a flat
+high-energy peak.
 """
 from __future__ import annotations
 
@@ -45,6 +48,7 @@ class StoreChecks:
     range_margin_mm: float = 10.0
     min_deposition_ratio: float = 0.95
     flux_rtol: float = 1e-6
+    min_body_fraction_at_peak: float = 0.5
 
 
 def recompute_flux(sim_res: Dict, sigmas_xy: Sequence[float]) -> np.ndarray:
@@ -67,7 +71,12 @@ def post_mc_reason(sim_res: Dict, checks: StoreChecks) -> str:
     depth = float(sim_res["roi_size"][2])
     if not np.isfinite(r80) or r80 > depth - checks.range_margin_mm:
         return "mc_overshoot_crop"
-    if not bool(sim_res.get("peak_in_body", True)):
+    share = sim_res.get("body_fraction_at_peak")
+    if share is None:                    # written before the field existed
+        inside = bool(sim_res.get("peak_in_body", True))
+    else:
+        inside = float(share) >= checks.min_body_fraction_at_peak
+    if not inside:
         return "mc_peak_outside_patient"
     if float(sim_res.get("dose_deposition_ratio", 1.0)) < checks.min_deposition_ratio:
         return "mc_low_deposition"
@@ -102,6 +111,7 @@ def pack_batch(raw_root: Path, rows: pd.DataFrame, shard_dir: Path, batch: int,
                 continue
             sim_res = json.loads(meta_path.read_text())
             entry.update(r80_mm=sim_res.get("r80_mm"), peak_in_body=sim_res.get("peak_in_body"),
+                         body_fraction_at_peak=sim_res.get("body_fraction_at_peak"),
                          dose_in_body_fraction=sim_res.get("dose_in_body_fraction"),
                          dose_deposition_ratio=sim_res.get("dose_deposition_ratio"),
                          mc_seconds=sim_res.get("mc_seconds"))
