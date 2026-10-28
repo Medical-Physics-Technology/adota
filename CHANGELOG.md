@@ -69,6 +69,51 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   no epoch trains at a learning rate of 0. `"cosine_per_cycle"` is unchanged.
   `model_hpo_training.py` reads `lr_schedule` from its config (per stage
   optionally) and defaults to `"cosine_per_cycle"` for runs frozen without it.
+- **`src/active_learning/retrospective/experiment_compare.py`**: compare two
+  retrospective experiments run by run. `strategy_runs`, `pair_runs` (pairs on
+  strategy and seed), `selection_identity` (same records in the same order per
+  pair and cycle), `cycle_table` (boundary metrics, the median of the last k
+  subsample evaluations, snapshot noise, divergence), `paired_deltas`,
+  `summarize_deltas`, `loss_curves`.
+- **`src/figures/al_experiment_comparison.py`**: `schedule_and_loss_figure`,
+  `paired_quality_figure`, `strategy_endpoint_figure`, `stability_figure`.
+- **`scripts/al_compare_experiments.py`** with `config_al_compare_experiments.yaml`.
+  New output format: `al_compare_experiments_<ts>/` with `selection_identity.csv`,
+  `cycle_table.csv`, `paired_deltas.csv`, `paired_summary.csv`, `consistency.json`
+  and figures G1 to G4 with their CSVs. Guide: `scripts/docs/al_compare_experiments.md`.
+- **`src/metrics/gamma_beamlet_benchmark.py`, `src/metrics/gamma_beamlet_report.py`
+  and `scripts/gamma_beamlet_benchmark.py`**: the four-rung gamma deviation
+  ladder at *beamlet* scale (160 x 30 x 30), where the plan-level speed-ups of
+  1.5.0 do not carry over: the GPU is a median 2-7x faster on a beamlet against
+  18-33x on a plan, and float32 buys nothing over float64 because the kernels
+  are no longer the bottleneck. Times both the NumPy entry point and the
+  device-resident one, the latter being the training path. See
+  `scripts/docs/gamma_beamlet_benchmark.md` and `docs/gamma_beamlet/`.
+- **EXP-0008 evidence harnesses** (`src/metrics/gamma_pool_benchmark.py`,
+  `gamma_scaling_benchmark.py`, `gamma_map_agreement.py`,
+  `benchmark_provenance.py`; `scripts/gamma_pool_benchmark.py`,
+  `gamma_scaling_benchmark.py`, `gamma_profile_beamlet.py`,
+  `gamma_plan_map_agreement.py`) and their reductions
+  (`src/metrics/gamma_evidence_summaries.py`, `gamma_evidence_latex.py`,
+  `src/figures/gamma_scaling.py`, `scripts/analysis/audit_gamma_report.py`).
+  `gamma_beamlet_report.paired_speedups` raises `MatchedSetError` on unmatched
+  case sets; the ratio-of-medians `speedup` is now withheld there too.
+  `gamma_beamlet_benchmark.sweep` retains every repetition, rotates the rung
+  order per beamlet and records the resolved configuration. The rung and
+  criterion specs moved to `src/metrics/gamma_beamlet_specs.py` and pair
+  construction to `src/metrics/gamma_beamlet_pairs.py`; both are re-exported.
+  See `scripts/docs/gamma_evidence.md`.
+- **`src/figures/gamma_backend_performance.py`**:
+  `gamma_backend_performance_figure`, the two-scale timing and speed-up panels.
+- **`scripts/analysis/report_gamma_acceleration.py`**: assembles both gamma
+  benchmarks into the LaTeX tables, figure and CSVs of the gamma-acceleration
+  technical report under `reports/technical-reports/gamma-pass-rate/`.
+- **DoseCUDA source and citation**: `docs/pencil_beam.md` gains a "Source, version,
+  licence and citation" section (the repository, the pinned commit `0d4db1f4f736`,
+  GPL-2.0, and the citation the DoseCUDA authors ask for, Bhattacharya et al., J Appl
+  Clin Med Phys 2025, doi:10.1002/acm2.70093, with BibTeX); the three pencil-beam
+  guides, both READMEs, `src/pencil_beam/__init__.py` and `provision_dosecuda.sh`
+  link the repository and give the citation.
 - **`src/pencil_beam/`**: the DoseCUDA proton pencil beam, commissioned against MCsquare.
   `kernels.load_dose_kernels` (the compiled extension, loaded by path);
   `rlsp.hu_to_rlsp_table` / `write_rlsp_csv` (HU -> RLSP from MCsquare's scanner and Geant4
@@ -223,6 +268,27 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   per-record line into every caller's log. Set the level in your entry point to
   get the old verbosity back.
 
+### Added (sequence mixer, EXP-0014)
+
+- **`DoTA3D_v3(sequence_mixer=...)`** and the `TrainingConfig` fields
+  `sequence_mixer` (`transformer` | `mlstm` | `none`), `mlstm_proj_factor` and
+  `mlstm_conv_kernel`, passed through `build_adota_model`. `to_dict()` (and so
+  `hyperparams.json`) gains the three keys; a file without them builds the
+  transformer, and existing checkpoints load unchanged. `num_transformers`
+  counts the blocks of whichever mixer runs.
+- **`src/adota/layers/mlstm.py`**: `MLSTMBlockDoTA`, `mlstm_parallel`,
+  `look_ahead`, a pure-PyTorch mLSTM read in the beam direction with the
+  transformer's `num_forward` look-ahead.
+- **`src/adota/layers/mixers.py`**: `build_sequence_mixer`, `SEQUENCE_MIXERS`;
+  both re-exported from `src.adota.layers` with `MLSTMBlockDoTA`.
+- Guide: `docs/sequence_mixers.md`.
+
+### Changed (sequence mixer, EXP-0014)
+
+- In eval mode `DoTA3D_v3` returns the zero attention placeholder whenever the
+  mixer computes no attention (`mlstm` or `none`), not only when there are no
+  transformer blocks; the transformer's output is unchanged.
+
 ### Added (active learning)
 
 - **`src/active_learning/`**: `pool` (CT roles and the leakage rule, with the
@@ -288,6 +354,87 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   with the corrected `gpr[1]` to within 1e-4 pp except on voxels with gamma
   exactly 0.
 
+### Added (beamlet hardness per engine, EXP-0014)
+
+- **`src/active_learning/hardness/`**: `cells` (`cell_ranks`, `cell_spearman`,
+  `bootstrap_interval`, `cluster_metrics`, `cluster_composites`: within-cell
+  statistics and clusters of near-duplicate metrics), `fit` (`fit_score`,
+  `out_of_fold`, `coefficients`, `permutation_importance`, `transfer_summary`,
+  `scorer_json`: the difficulty score refit per engine, leave one scan out),
+  `engines` (`EngineSpec`, `parse_engines`, `score_blocks`, `score_blocks_sharded`,
+  `predict_h5_records`: dose engines as config entries, scored on saved beamlet
+  directories), `tables`, `analysis` and `report`.
+- **`src/figures/beamlet_hardness.py`**: `annotated_heatmap`, `cluster_importance_figure`.
+- **`scripts/active_learning/beamlet_hardness.py`** + `config_beamlet_hardness.yaml`;
+  guide `scripts/docs/beamlet_hardness.md`. New output directory
+  `beamlet_hardness_<ts>/` (tables, results, figures, examples, report).
+- Shared helpers, factored out of existing code with unchanged behaviour:
+  `src.active_learning.retrospective.validation.record_metrics` (one record's gamma,
+  MAPE, RDE, dR80; `evaluate_metrics` calls it),
+  `src.active_learning.ensemble.agreement.scan_resamples` (the scan bootstrap draws;
+  `scan_bootstrap` uses it, same draws for the same seed),
+  `src.acquisition.candidates.model_grid_inputs` and `analytic_features` (the
+  candidate feature path, now usable on saved beamlets),
+  `src.acquisition.scorer.percentile_grids` and `percentile_transform`.
+
+### Changed (beamlet hardness per engine, EXP-0014)
+
+- `src.acquisition.reference.record_features` takes `max_energy_mev` (default 250,
+  the previous fixed cut; `None` keeps every energy).
+
+### Added (ensemble agreement, EXP-0014)
+
+- **`src/active_learning/ensemble/`**: `members` (`Member`, `EvaluationSettings`,
+  `resolve_member`, `infer_errors`, `training_config_from_yaml`, `held_out_table`:
+  a trained model's per-record errors, reused from a CSV or inferred from its
+  checkpoint, and its training ids) and `agreement` (`ERROR_METRICS`,
+  `error_matrix`, `assign_cells`, `pair_levels`, `cell_correlations`, `pair_table`,
+  `scan_bootstrap`, `agreement_matrix`: within scan x 20 MeV cell rank agreement
+  per pair, the pair level read from the training ids, a bootstrap over scans).
+- **`scripts/active_learning/ensemble_agreement.py`** with
+  `config_ensemble_agreement.yaml` (stage 0b: the nine cycle-5 models of
+  EXP-0012). New output format: `pairs_<metric>.csv`, `levels_<metric>.csv`,
+  `cells_<metric>.csv`, `members.csv`, `held_out.csv`, `summary.json`. Guide:
+  `scripts/docs/ensemble_agreement.md`.
+- **`src/figures/ensemble_agreement.py`**: `agreement_matrix_figure`.
+- **`src/active_learning/ensemble/partition.py`**: `scans_from_frozen_ids`,
+  `scans_from_patients`, `scan_table`, `assign_folds`, `hpo_split`,
+  `record_table`, `check_partition`, `fold_ids`, `fold_summary`: the scan-level
+  F / V / R partition, anatomy-stratified cross-fitting folds and the HPO split
+  of R.
+- **`scripts/active_learning/cross_fit_partition.py`** with
+  `config_cross_fit_partition.yaml`. New output format: `partition.csv`,
+  `records.csv`, `folds/fold_<k>_{train,eval}_ids.csv`,
+  `hpo/hpo_{train,val}_ids.csv`, `fold_summary.csv`. Guide:
+  `scripts/docs/cross_fit_partition.md`.
+- **`src/hpo/`**: `space` (`decode`, `encode`, `unit_distance`, `Trial`,
+  `draw_trials`: scrambled-Sobol trials under a parameter cap), `halving`
+  (`rung_budgets`, `promote`, `rank`, `schedule`, `total_epochs`), `trial`
+  (`trial_config`, `count_parameters`, `run_segment`, `evaluate_finalist`,
+  `best_so_far`), `selection` (`results_table`, `member_roles`, `finalists`).
+- **`scripts/active_learning/ensemble_hpo.py`** with `config_ensemble_hpo.yaml`.
+  New output format: `trials.json`, `trials/<trial>/segment_<epochs>.json`,
+  `results.csv`, `selection.json`. Guide: `scripts/docs/ensemble_hpo.md`.
+- `src.training.run_dir.save_resolved_config` (and the manifest's `config`)
+  now writes a mapping config as YAML; it used to write a plain dict as its
+  `repr`, which affected the `config.yaml` of `ensemble_agreement.py`,
+  `cross_fit_partition.py` and `ensemble_hpo.py`.
+- `src.evaluation.cli.on_root_filesystem`: whether an output path would land on
+  the root disk, for scripts that refuse it.
+- **`src/figures/hpo.py`**: `hpo_learning_curves_figure` (loss per epoch of every
+  HPO trial, one column per mixer, rungs and selected checkpoints marked),
+  `finalist_beamlet_figure` (one beamlet through every finalist: axial and
+  coronal planes, depth doses, lateral profiles), and the helpers `search_tier`,
+  `beamlet_planes`, `depth_dose`, `lateral_profile`, `shown_depth`.
+- **`scripts/active_learning/hpo_figures.py`** with `config_hpo_figures.yaml`.
+  New output format: `hpo_figures_<ts>/learning_curves{,_trials}.csv`,
+  `finalists_beamlet_<pick>_<id>_<gamma>{,_idd,_profile}.csv` and
+  `finalists_beamlets_<gamma>.csv` beside the figures. Guide:
+  `scripts/docs/hpo_figures.md`. The finalists' error agreement runs through
+  `ensemble_agreement.py` with the new `config_ensemble_agreement_hpo.yaml`.
+- `src.figures.al_curves.draw_cycle_rules` takes an optional `text` callable
+  for boundaries that are not AL cycles; the default labels are unchanged.
+
 ### Added (retrospective active learning)
 
 - **`src/active_learning/retrospective/`**: the retrospective benchmark on the
@@ -315,6 +462,8 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 
 ### Changed (retrospective active learning)
 
+- `src.active_learning.retrospective.sampling.energy_bin` is public (was
+  `_energy_bin`), so the ensemble cells use the selection fingerprint's 20 MeV bins.
 - **`src/active_learning/retrospective/sampling.py`**: `stratified_score`
   (`stratified_score_strategy`) is removed from the retrospective registry.
   EXP-0009 found that equal counts per score decile, uniform inside a decile, is

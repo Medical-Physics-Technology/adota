@@ -19,7 +19,7 @@ semibold title per panel, light grids, no top or right spines. Saving goes throu
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import matplotlib
 
@@ -58,15 +58,17 @@ def style_axis(ax, *, xlabel: str, ylabel: str, title: str) -> None:
     ax.spines["right"].set_visible(False)
 
 
-def draw_cycle_rules(ax, boundaries: pd.DataFrame, label: bool = True) -> None:
+def draw_cycle_rules(ax, boundaries: pd.DataFrame, label: bool = True,
+                     text: Optional[Callable[[Any], str]] = None) -> None:
     """Vertical rules at the cycle boundaries carrying the cycle index and the
-    training set size at that cycle."""
+    training set size at that cycle. ``text`` maps a row of ``boundaries`` to its
+    label instead, for boundaries that are not AL cycles (the HPO rungs)."""
     top = ax.get_ylim()[1]
     for row in boundaries.itertuples(index=False):
         ax.axvline(row.cumulative_epoch, color="#666666", linewidth=0.8, linestyle=":", zorder=1)
         if label:
-            ax.text(row.cumulative_epoch, top, f" c{int(row.cycle)}\n n={int(row.n_train):,}",
-                    fontsize=7.5, color="#444444", ha="left", va="top")
+            words = text(row) if text else f" c{int(row.cycle)}\n n={int(row.n_train):,}"
+            ax.text(row.cumulative_epoch, top, words, fontsize=7.5, color="#444444", ha="left", va="top")
 
 
 def training_curves_figure(curves: Dict[str, pd.DataFrame], boundaries: pd.DataFrame,

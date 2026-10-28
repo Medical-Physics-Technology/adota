@@ -11,13 +11,17 @@ site. The genuinely new helpers are:
   replaces the hand-wired per-field merge blocks in every ``main``; and
 * :func:`apply_set_overrides` -- the generic, repeatable ``--set key=value``
   option, so a variant of a config (a smoke test, a scale-up) is a command line
-  rather than another YAML file.
+  rather than another YAML file; and
+* :func:`on_root_filesystem` -- whether an output path would land on the small
+  root disk, which scripts writing large outputs refuse.
 """
 
 from __future__ import annotations
 
 import copy
 import logging
+import os
+from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 import torch
@@ -72,6 +76,16 @@ def resolve_device(device_index: Optional[int] = None) -> torch.device:
         return torch.device("cpu")
 
     return torch.device(f"cuda:{device_index}")
+
+
+def on_root_filesystem(path: Path) -> bool:
+    """Whether ``path`` (or its nearest existing parent) lives on the device
+    mounted at ``/``. The root disk is small and has filled up twice, so scripts
+    that write large outputs refuse it."""
+    probe = Path(path).resolve()
+    while not probe.exists():
+        probe = probe.parent
+    return os.stat(probe).st_dev == os.stat("/").st_dev
 
 
 def merge_config(

@@ -12,6 +12,7 @@ Flow:
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -22,7 +23,7 @@ import sys
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 import torch
 import yaml
@@ -120,9 +121,14 @@ def _gpu_info() -> Dict[str, Any]:
 
 
 def _config_to_dict(config: Any) -> Dict[str, Any]:
-    """Best-effort serialization of a dataclass or plain object."""
+    """Best-effort serialization of a dataclass, a mapping or a plain object.
+
+    A mapping (a merged YAML config) is returned as a plain dict, so it is
+    written as YAML a script can read back, never as its ``repr``."""
     if is_dataclass(config):
         return asdict(config)
+    if isinstance(config, Mapping):
+        return copy.deepcopy(dict(config))
     if hasattr(config, "__dict__"):
         return dict(config.__dict__)
     return {"repr": repr(config)}

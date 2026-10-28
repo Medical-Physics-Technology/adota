@@ -93,6 +93,40 @@ def evaluate_loss(model: torch.nn.Module, loader: DataLoader, *, device: torch.d
             "seconds": perf_counter() - started}
 
 
+def record_metrics(y_np: np.ndarray, p_np: np.ndarray, settings: MetricSettings,
+                   backend_options: Optional[Dict] = None, sample_id: str = "") -> Dict[str, float]:
+    """Gamma pass rate, MAPE, RDE and dR80 of one prediction ``p_np`` against its
+    ground truth ``y_np``, both de-normalised and on the model grid.
+
+    The one definition of the per-record errors: :func:`evaluate_metrics` calls it
+    per sample, and any other dose engine on the same grid (a pencil beam, a saved
+    prediction) is scored through it so its errors are comparable.
+    """
+    y_np, p_np = np.squeeze(y_np), np.squeeze(p_np)
+    mask = p_np > 0.1 * float(np.max(p_np))
+    mape = float(calculate_pure_mape(y_np[mask], p_np[mask])) if mask.any() else np.nan
+    rde = float(calculate_relative_dose_error(p_np, y_np))
+    peak = float(np.max(y_np))
+    try:
+        # As the prospective loop does it: the cutoff is a share of this
+        # record's own peak dose, and the torch backend runs on ``device``.
+        _, rates = gamma_index(
+            y_np.copy(), p_np.copy(), {"y_max": peak, "y_min": 0.0},
+            dict(settings.gamma_params), tuple(settings.resolution_mm),
+            cutoff=settings.gamma_cutoff_percent, backend=settings.gamma_backend,
+            backend_options=backend_options)
+        gpr = float(rates[0])
+    except Exception as exc:  # one bad beamlet must not end the evaluation
+        logger.warning("gamma failed for %s: %s", sample_id, exc)
+        gpr = np.nan
+    gt_range = compute_range_metrics(_idd(y_np), MODEL_DZ_MM)
+    pred_range = compute_range_metrics(_idd(p_np), MODEL_DZ_MM)
+    return {"gpr": gpr, "mape_pct": mape, "rde_pct": rde,
+            "r80_gt_mm": float(gt_range.r80_mm), "r80_pred_mm": float(pred_range.r80_mm),
+            "dr80_mm": float(pred_range.r80_mm - gt_range.r80_mm),
+            "peak_dose_gt": peak}
+
+
 @torch.no_grad()
 def evaluate_metrics(model: torch.nn.Module, loader: DataLoader, sample_ids: Sequence[str], *,
                      device: torch.device, settings: MetricSettings,
@@ -120,34 +154,12 @@ def evaluate_metrics(model: torch.nn.Module, loader: DataLoader, sample_ids: Seq
             yb, pb = y[b:b + 1], y_pred[b:b + 1]
             y_np = inverse_minmax(yb.detach().cpu().numpy(), scale["min_ds"], scale["max_ds"])
             p_np = inverse_minmax(pb.detach().cpu().numpy(), scale["min_ds"], scale["max_ds"])
-            y_np, p_np = np.squeeze(y_np), np.squeeze(p_np)
-            mask = p_np > 0.1 * float(np.max(p_np))
-            mape = float(calculate_pure_mape(y_np[mask], p_np[mask])) if mask.any() else np.nan
-            rde = float(calculate_relative_dose_error(p_np, y_np))
-            peak = float(np.max(y_np))
-            try:
-                # As the prospective loop does it: the cutoff is a share of this
-                # record's own peak dose, and the torch backend runs on ``device``.
-                _, rates = gamma_index(
-                    y_np.copy(), p_np.copy(), {"y_max": peak, "y_min": 0.0},
-                    dict(settings.gamma_params), tuple(settings.resolution_mm),
-                    cutoff=settings.gamma_cutoff_percent, backend=settings.gamma_backend,
-                    backend_options=backend_options)
-                gpr = float(rates[0])
-            except Exception as exc:  # one bad beamlet must not end the evaluation
-                logger.warning("gamma failed for %s: %s", sample_id, exc)
-                gpr = np.nan
-            gt_range = compute_range_metrics(_idd(y_np), MODEL_DZ_MM)
-            pred_range = compute_range_metrics(_idd(p_np), MODEL_DZ_MM)
             rows.append({
                 "sample_id": sample_id,
                 "energy_mev": float(denormalize_energy(float(energy[b].item()), scale)),
                 "loss_mse": float(loss_mse_fn(pb, yb).item()),
                 "loss_ps": float(loss_ps_fn(pb, yb).item()),
-                "gpr": gpr, "mape_pct": mape, "rde_pct": rde,
-                "r80_gt_mm": float(gt_range.r80_mm), "r80_pred_mm": float(pred_range.r80_mm),
-                "dr80_mm": float(pred_range.r80_mm - gt_range.r80_mm),
-                "peak_dose_gt": peak,
+                **record_metrics(y_np, p_np, settings, backend_options, sample_id=sample_id),
             })
             if flat % heartbeat == 0 or flat == len(sample_ids):
                 finite = [r["gpr"] for r in rows if np.isfinite(r["gpr"])]
