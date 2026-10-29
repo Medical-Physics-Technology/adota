@@ -82,3 +82,112 @@ def test_ranking_breaks_ties_on_the_stricter_criteria():
     best, worst = rank_beamlets(rows, "PBA", crit, n=2)
     assert [r["stem"] for r in best] == ["s2", "s1"]
     assert [r["stem"] for r in worst] == ["s3", "s4"]
+
+
+def test_legacy_config_reads_as_the_two_default_engines():
+    from src.pencil_beam.saved_beamlets import engines_from_config
+
+    pba, adota = engines_from_config({"pencil_beam": {"model_dir": "m"}, "adota": {"model_dir": "a"}})
+    assert (pba.name, pba.kind, pba.suffix, pba.tag, pba.provenance_file) == (
+        "PBA", "pencil_beam", "_ds_pba.npy", "pba", "pba_provenance.json")
+    assert (adota.name, adota.suffix, adota.tag, adota.provenance_file) == (
+        "ADoTA", "_ds_pred.npy", "adota", "adota_provenance.json")
+    assert adota.settings["model_dir"] == "a"
+
+
+def test_engine_list_gives_each_model_its_own_file_and_provenance():
+    from src.pencil_beam.saved_beamlets import engines_from_config
+
+    engines = engines_from_config({"engines": [
+        {"name": "PBA", "kind": "pencil_beam"},
+        {"name": "v11", "kind": "adota", "model_dir": "models/v11"},
+        {"name": "final attndrop0", "kind": "adota", "suffix": "_ds_pred_final_attndrop0.npy"}]})
+    assert [e.suffix for e in engines] == ["_ds_pba.npy", "_ds_pred.npy", "_ds_pred_final_attndrop0.npy"]
+    assert engines[2].tag == "final_attndrop0"
+    assert engines[2].provenance_file == "adota_provenance_ds_pred_final_attndrop0.json"
+    assert engines[1].settings == {"model_dir": "models/v11"}
+
+
+@pytest.mark.parametrize("engines, match", [
+    ([{"name": "a", "kind": "adota"}, {"name": "b", "kind": "adota"}], "share a suffix"),
+    ([{"name": "a b", "kind": "adota"}, {"name": "a_b", "kind": "adota", "suffix": "_ds_x.npy"}], "share a tag"),
+    ([{"name": "a", "kind": "adota", "suffix": "_ds.npy"}], "must look like"),
+    ([{"name": "a", "kind": "adota", "suffix": "_pred.npy"}], "must look like"),
+    ([{"name": "MC", "kind": "adota"}], "reserved"),
+    ([{"name": "a", "kind": "fno"}], "kind"),
+])
+def test_engine_list_refuses_ambiguous_or_clobbering_engines(engines, match):
+    from src.pencil_beam.saved_beamlets import engines_from_config
+
+    with pytest.raises(ValueError, match=match):
+        engines_from_config({"engines": engines})
+
+
+def test_scores_are_reused_per_engine_and_only_new_engines_are_scored():
+    from src.pencil_beam.saved_beamlets import engines_from_config, engines_to_score
+
+    engines = engines_from_config({"engines": [{"name": "PBA", "kind": "pencil_beam"},
+                                               {"name": "v11", "kind": "adota"},
+                                               {"name": "new", "kind": "adota", "suffix": "_ds_pred_new.npy"}]})
+    keys = ["g3_3_10", "r80_delta_mm"]
+    cached = [{"stem": s, "pba_g3_3_10": 99.0, "pba_r80_delta_mm": 0.1, "v11_g3_3_10": 98.0,
+               "v11_r80_delta_mm": 0.2} for s in ("a00_00", "a00_01")]
+    assert [e.name for e in engines_to_score(cached, engines, keys)] == ["new"]
+    del cached[1]["v11_r80_delta_mm"]                          # one beamlet incomplete: v11 again
+    assert [e.name for e in engines_to_score(cached, engines, keys)] == ["v11", "new"]
+    assert engines_to_score([], engines, keys) == engines
+
+
+def _dose_block(tmp_path):
+    """A one-beamlet block: MC, a PBA within 0.1% of it, and two ADoTA files in ADoTA's (D, H, W) layout.
+    (Identical doses would give gamma 0 everywhere, which gamma_pass_rate divides by.)"""
+    z, y, x = np.meshgrid(np.arange(12), np.arange(12), np.arange(40), indexing="ij")
+    mc = np.exp(-((z - 6) ** 2 + (y - 6) ** 2) / 8.0) * np.exp(-((x - 25) ** 2) / 30.0) * 100
+    np.save(tmp_path / "a00_00_ct.npy", np.zeros_like(mc))
+    np.save(tmp_path / "a00_00_ds.npy", mc)
+    np.save(tmp_path / "a00_00_ds_pba.npy", mc * 1.001)                                 # 0.1% high
+    np.save(tmp_path / "a00_00_ds_pred.npy", np.moveaxis(mc * 0.999, -1, 0)[None])      # 0.1% low
+    np.save(tmp_path / "a00_00_ds_pred_new.npy", np.moveaxis(mc * 1.08, -1, 0)[None])  # 8% high
+    return mc
+
+
+def test_score_beamlet_scores_every_engine_of_the_task(tmp_path):
+    from src.pencil_beam.saved_beamlets import engines_from_config, load_doses, score_beamlet
+
+    mc = _dose_block(tmp_path)
+    engines = engines_from_config({"engines": [{"name": "PBA", "kind": "pencil_beam"},
+                                               {"name": "v11", "kind": "adota"},
+                                               {"name": "new", "kind": "adota", "suffix": "_ds_pred_new.npy"}]})
+    doses = load_doses(tmp_path, "a00_00", engines)
+    assert np.allclose(doses["v11"], mc * 0.999) and doses["v11"].shape == mc.shape   # ADoTA layout restored
+    crit = criteria_from_config([{"dose": 3, "dist": 3, "cutoff": 10}, {"dose": 1, "dist": 1, "cutoff": 10}])
+    row = score_beamlet((str(tmp_path), "a00_00", tuple(crit), "blk", tuple(engines)))
+    assert row["pba_g3_3_10"] == row["v11_g3_3_10"] == 100.0
+    assert row["pba_max_abs_diff_pct"] == pytest.approx(0.1, rel=1e-3)          # each engine its own file
+    assert row["v11_mean_diff_pct"] < 0 < row["pba_mean_diff_pct"]
+    assert row["new_max_abs_diff_pct"] == pytest.approx(8.0, rel=1e-3)
+    only_new = score_beamlet((str(tmp_path), "a00_00", tuple(crit), "blk", tuple(engines[2:])))
+    assert "pba_g3_3_10" not in only_new and only_new["new_mean_diff_pct"] == row["new_mean_diff_pct"]
+
+
+def test_missing_predictions_go_to_the_engine_suffix_and_leave_the_others_alone(tmp_path, monkeypatch):
+    import src.beamlets.inference as inference
+    from src.pencil_beam.saved_beamlets import write_missing_predictions
+
+    d = _block(tmp_path, "blk", [(0, 0), (0, 1)])
+    (d / "a00_00_ds_pred.npy").write_bytes(b"v11 prediction")             # an existing model's file
+
+    def fake_inference(directory, model, device, config):
+        for f in directory.glob("*_ct.npy"):
+            np.save(directory / f.name.replace("_ct.npy", "_ds_pred.npy"), np.full(3, 7.0))
+    monkeypatch.setattr(inference, "run_inference", fake_inference)
+    (selected,), _ = survey_dirs([d], grid_n=2, min_beamlets=1)
+    n = write_missing_predictions(selected, None, None, {"checkpoint_sha256": "new"}, suffix="_ds_pred_new.npy",
+                                  provenance_file="adota_provenance_ds_pred_new.json")
+    assert n == 2
+    assert np.array_equal(np.load(d / "a00_01_ds_pred_new.npy"), np.full(3, 7.0))
+    assert (d / "a00_00_ds_pred.npy").read_bytes() == b"v11 prediction"    # untouched
+    assert json.loads((d / "adota_provenance_ds_pred_new.json").read_text()) == {"checkpoint_sha256": "new"}
+    assert not (d / "adota_provenance.json").exists()
+    assert write_missing_predictions(selected, None, None, {"checkpoint_sha256": "new"},
+                                     suffix="_ds_pred_new.npy") == 0      # rerun: nothing to add

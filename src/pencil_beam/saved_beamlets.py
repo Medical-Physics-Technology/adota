@@ -24,6 +24,14 @@ replaced**, by a rerun or by a crash. What may be added:
   and an ``adota_provenance.json`` (:func:`write_missing_predictions`).
 
 Metrics and figures go to a separate output root.
+
+**Engines.** What is scored against the MC is a list of :class:`Engine`: a label,
+a kind (``pencil_beam`` or ``adota``) and the file it reads or adds next to
+``{id}_ds.npy``, for example ``_ds_pba.npy`` or ``_ds_pred_<model>.npy``. Several
+ADoTA models therefore sit side by side in one directory, each with its own
+provenance file (:attr:`Engine.provenance_file`). :func:`engines_from_config`
+reads an ``engines:`` list, or the older ``pencil_beam:`` + ``adota:`` blocks as
+the two engines ``PBA`` and ``ADoTA``.
 """
 from __future__ import annotations
 
@@ -33,10 +41,10 @@ import os
 import re
 import tempfile
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -46,7 +54,13 @@ from src.pencil_beam.metrics import GammaCriterion, dose_agreement, dose_bbox, g
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "ENGINE_KINDS",
+    "Engine",
     "INPUT_SUFFIXES",
+    "engine_tag",
+    "engines_from_config",
+    "engines_to_score",
+    "load_doses",
     "SourceDir",
     "compute_field_pba",
     "load_triplet",
@@ -67,6 +81,95 @@ PREDICTION_SUFFIX = "_ds_pred.npy"                                      # ADoTA;
 PBA_PROVENANCE = "pba_provenance.json"
 ADOTA_PROVENANCE = "adota_provenance.json"
 _STEM = re.compile(r"^(a\d{2}_\d{2})_sim_res\.json$")
+ENGINE_KINDS = ("pencil_beam", "adota")
+_ENGINE_SUFFIX = re.compile(r"^_ds_[A-Za-z0-9_]+\.npy$")
+_DEFAULT_SUFFIX = {"pencil_beam": "_ds_pba.npy", "adota": PREDICTION_SUFFIX}
+
+
+def engine_tag(name: str) -> str:
+    """The column prefix of an engine's scores: its name, lower case, ``[a-z0-9_]``."""
+    return re.sub(r"[^0-9a-z]+", "_", name.lower()).strip("_")
+
+
+@dataclass(frozen=True)
+class Engine:
+    """One dose engine scored against the saved MC.
+
+    ``suffix`` names the file the engine reads or adds next to ``{id}_ds.npy``;
+    ``settings`` holds what produces it (for ``pencil_beam``: ``dosecuda_kernels``,
+    ``model_dir``, ``gpu_id``; for ``adota``: ``model_dir``, ``fname``,
+    ``device_index``, ``batch_size``).
+    """
+
+    name: str
+    kind: str
+    suffix: str
+    settings: Mapping[str, Any] = field(default_factory=dict, compare=False)
+
+    @property
+    def tag(self) -> str:
+        return engine_tag(self.name)
+
+    @property
+    def provenance_file(self) -> str:
+        """``pba_provenance.json`` / ``adota_provenance.json`` for the default files,
+        else the kind's name with the file's suffix, one per engine output."""
+        base = PBA_PROVENANCE if self.kind == "pencil_beam" else ADOTA_PROVENANCE
+        if self.suffix == _DEFAULT_SUFFIX[self.kind]:
+            return base
+        return base.replace(".json", f"{self.suffix[:-len('.npy')]}.json")
+
+    def load(self, path: Path) -> np.ndarray:
+        """The engine's dose as ``(H, W, D) = (z, y, x)``, the layout of ``_ds.npy``.
+
+        ADoTA writes ``(D, H, W)`` (possibly with a leading channel axis) and may
+        predict small negatives, which are clipped to zero.
+        """
+        dose = np.load(path).astype(np.float32)
+        if self.kind == "adota":
+            dose = np.clip(np.moveaxis(np.squeeze(dose), 0, -1), 0.0, None)
+        return dose
+
+
+def engines_from_config(cfg: Mapping[str, Any]) -> List[Engine]:
+    """The engines of a config: its ``engines:`` list, or the older ``pencil_beam:``
+    + ``adota:`` blocks as ``PBA`` (``_ds_pba.npy``) and ``ADoTA`` (``_ds_pred.npy``).
+
+    Raises:
+        ValueError: On an unknown kind, a malformed suffix, the MC's own file, or
+            two engines sharing a name, a column prefix or a file.
+    """
+    if "engines" in cfg:
+        engines = []
+        for item in cfg["engines"]:
+            item = dict(item)
+            name, kind = str(item.pop("name")), str(item.pop("kind"))
+            if kind not in ENGINE_KINDS:
+                raise ValueError(f"engine {name!r}: kind {kind!r} is not one of {ENGINE_KINDS}")
+            suffix = str(item.pop("suffix", _DEFAULT_SUFFIX[kind]))
+            engines.append(Engine(name=name, kind=kind, suffix=suffix, settings=item))
+    else:
+        engines = [Engine("PBA", "pencil_beam", "_ds_pba.npy", dict(cfg.get("pencil_beam") or {})),
+                   Engine("ADoTA", "adota", PREDICTION_SUFFIX, dict(cfg.get("adota") or {}))]
+    for attr in ("name", "tag", "suffix"):
+        values = [getattr(e, attr) for e in engines]
+        if len(set(values)) != len(values):
+            raise ValueError(f"two engines share a {attr}: {values}")
+    for e in engines:
+        if not _ENGINE_SUFFIX.match(e.suffix) or e.suffix == "_ds.npy":
+            raise ValueError(f"engine {e.name!r}: suffix {e.suffix!r} must look like _ds_<name>.npy")
+        if e.tag in ("mc", "ct", ""):
+            raise ValueError(f"engine name {e.name!r} is reserved or empty")
+    return engines
+
+
+def engines_to_score(rows: Sequence[Mapping[str, Any]], engines: Sequence[Engine], keys: Sequence[str]
+                     ) -> List[Engine]:
+    """The engines whose scores ``rows`` (one block's cached metrics) do not hold for
+    every beamlet and every key; all of them when ``rows`` is empty."""
+    if not rows:
+        return list(engines)
+    return [e for e in engines if any(f"{e.tag}_{k}" not in r for r in rows for k in keys)]
 
 
 @dataclass(frozen=True)
@@ -203,17 +306,18 @@ def field_windows(geom, bdl, roi_size, src: SourceDir, verify_ct: bool = True) -
     return windows
 
 
-def compute_field_pba(engine, geom, bdl, roi_size, src: SourceDir, provenance: dict) -> dict:
-    """Pencil-beam dose of every beamlet of one block, added to the source as ``{stem}_ds_pba.npy``.
+def compute_field_pba(engine, geom, bdl, roi_size, src: SourceDir, provenance: dict,
+                      suffix: str = "_ds_pba.npy", provenance_file: str = PBA_PROVENANCE) -> dict:
+    """Pencil-beam dose of every beamlet of one block, added to the source as ``{stem}{suffix}``.
 
     ``geom`` is the rebuilt :class:`~src.mc_generation.robustness.FieldGeometry`. All
     crops are verified (:func:`field_windows`) and the directory's
-    ``pba_provenance.json`` is checked or written before the first dose is saved.
-    Beamlets that already have a ``_ds_pba.npy`` are skipped (never replaced).
+    ``provenance_file`` is checked or written before the first dose is saved.
+    Beamlets that already have one are skipped (never replaced).
     """
     windows = field_windows(geom, bdl, roi_size, src)
-    check_or_write_provenance(src.path / PBA_PROVENANCE, provenance, ("model_fingerprint",))
-    todo = [s for s in src.stems if not (src.path / f"{s}_ds_pba.npy").exists()]
+    check_or_write_provenance(src.path / provenance_file, provenance, ("model_fingerprint",))
+    todo = [s for s in src.stems if not (src.path / f"{s}{suffix}").exists()]
     if not todo:
         return {"computed": 0, "field_seconds": 0.0, "spot_seconds": 0.0}
     field = engine.prepare_field(geom.ct, geom.iso_mc, geom.mc_gantry)
@@ -221,61 +325,73 @@ def compute_field_pba(engine, geom, bdl, roi_size, src: SourceDir, provenance: d
     for stem in todo:
         spot, window = windows[stem]
         result = engine.dose_in_window(field, src.energy, [spot], window)
-        save_new_npy(src.path / f"{stem}_ds_pba.npy", result.dose)
+        save_new_npy(src.path / f"{stem}{suffix}", result.dose)
         spot_seconds += result.seconds
     return {"computed": len(todo), "field_seconds": field.seconds, "spot_seconds": spot_seconds,
             "pba_model_energy": result.model_energy, "pba_interpolated_from": result.interpolated_from}
 
 
 def write_missing_predictions(src: SourceDir, model, device, provenance: dict, batch_size: int = 56,
-                              tmp_root: Optional[Path] = None) -> int:
-    """Add ADoTA predictions for the beamlets of a block that have none; return how many.
+                              tmp_root: Optional[Path] = None, suffix: str = PREDICTION_SUFFIX,
+                              provenance_file: str = ADOTA_PROVENANCE) -> int:
+    """Add ADoTA predictions as ``{stem}{suffix}`` for the beamlets of a block that
+    have none; return how many.
 
-    Inference runs in a temporary directory of symlinks (``run_inference`` writes next
-    to its inputs and would overwrite), and each prediction is then added to the
-    source exclusively, with an ``adota_provenance.json`` that must match on reruns.
-    Existing predictions are never touched.
+    Inference runs in a temporary directory of symlinks (``run_inference`` writes
+    ``{stem}_ds_pred.npy`` next to its inputs and would overwrite), and each
+    prediction is then added to the source exclusively under ``suffix``, with a
+    ``provenance_file`` that must match on reruns. Existing files are never touched.
     """
     from src.beamlets.inference import InferenceConfig, run_inference
 
-    missing = [s for s in src.stems if not (src.path / f"{s}{PREDICTION_SUFFIX}").exists()]
+    missing = [s for s in src.stems if not (src.path / f"{s}{suffix}").exists()]
     if not missing:
         return 0
-    check_or_write_provenance(src.path / ADOTA_PROVENANCE, provenance, ("checkpoint_sha256",))
+    check_or_write_provenance(src.path / provenance_file, provenance, ("checkpoint_sha256",))
     with tempfile.TemporaryDirectory(dir=tmp_root) as tmp:
         tmp = Path(tmp)
         for stem in missing:
-            for suffix in INPUT_SUFFIXES:
-                (tmp / f"{stem}{suffix}").symlink_to(src.path / f"{stem}{suffix}")
+            for name in INPUT_SUFFIXES:
+                (tmp / f"{stem}{name}").symlink_to(src.path / f"{stem}{name}")
         run_inference(tmp, model, device, InferenceConfig(batch_size=batch_size, grid_factor=1))
-        return sum(save_new_npy(src.path / f"{stem}{PREDICTION_SUFFIX}", np.load(tmp / f"{stem}{PREDICTION_SUFFIX}"))
+        return sum(save_new_npy(src.path / f"{stem}{suffix}", np.load(tmp / f"{stem}{PREDICTION_SUFFIX}"))
                    for stem in missing)
 
 
-def load_triplet(block_dir: Path, stem: str) -> Dict[str, np.ndarray]:
-    """``{"CT", "MC", "PBA", "ADoTA"}`` crops ``(H, W, D) = (z, y, x)`` of one saved beamlet (read only)."""
+def load_doses(block_dir: Path, stem: str, engines: Sequence[Engine]) -> Dict[str, np.ndarray]:
+    """``{"CT", "MC", <engine name>...}`` crops ``(H, W, D) = (z, y, x)`` of one saved beamlet (read only)."""
     block_dir = Path(block_dir)
-    pred = np.squeeze(np.load(block_dir / f"{stem}_ds_pred.npy")).astype(np.float32)   # (D, H, W)
-    return {"CT": np.load(block_dir / f"{stem}_ct.npy"),
-            "MC": np.load(block_dir / f"{stem}_ds.npy").astype(np.float32),
-            "PBA": np.load(block_dir / f"{stem}_ds_pba.npy").astype(np.float32),
-            "ADoTA": np.clip(np.moveaxis(pred, 0, -1), 0.0, None)}
+    out = {"CT": np.load(block_dir / f"{stem}_ct.npy"),
+           "MC": np.load(block_dir / f"{stem}_ds.npy").astype(np.float32)}
+    for e in engines:
+        out[e.name] = e.load(block_dir / f"{stem}{e.suffix}")
+    return out
+
+
+def load_triplet(block_dir: Path, stem: str) -> Dict[str, np.ndarray]:
+    """``{"CT", "MC", "PBA", "ADoTA"}``: :func:`load_doses` with the two default engines."""
+    return load_doses(block_dir, stem, engines_from_config({}))
 
 
 def score_beamlet(task) -> dict:
-    """Worker: gamma and dose agreement of PBA and ADoTA against MC for one beamlet."""
-    block_dir, stem, criteria, block = task
+    """Worker: gamma and dose agreement against MC of each engine for one beamlet.
+
+    ``task`` is ``(block_dir, stem, criteria, block[, engines])``; without
+    ``engines``, the two default engines (``PBA``, ``ADoTA``).
+    """
+    block_dir, stem, criteria, block = task[:4]
+    engines = task[4] if len(task) > 4 else engines_from_config({})
     logging.getLogger("pymedphys").setLevel(logging.WARNING)
     t0 = perf_counter()
-    doses = load_triplet(block_dir, stem)
+    doses = load_doses(block_dir, stem, engines)
     mc = doses["MC"]
     max_dist = max(c.dist for c in criteria)
     min_cut = min(c.cutoff for c in criteria) / 100.0
     row = {"block": block, "stem": stem, "grid_ix": int(stem[1:3]), "grid_iy": int(stem[4:6]),
            "mc_max": float(mc.max())}
-    for label in ("PBA", "ADoTA"):
-        test = doses[label]
-        tag = label.lower()
+    for e in engines:
+        test = doses[e.name]
+        tag = e.tag
         box = dose_bbox([mc, test], low_frac=0.5 * min_cut, margin=int(np.ceil(max_dist)) + 2)
         for key, value in gamma_pass_rates(mc[box], test[box], criteria).items():
             row[f"{tag}_{key}"] = value
@@ -287,12 +403,12 @@ def score_beamlet(task) -> dict:
 
 def rank_beamlets(rows: Sequence[dict], engine: str, criteria: Sequence[GammaCriterion], n: int = 10
                   ) -> Tuple[List[dict], List[dict]]:
-    """``(best, worst)`` ``n`` beamlets of one engine by the first criterion.
+    """``(best, worst)`` ``n`` beamlets of one engine (its name) by the first criterion.
 
     Ties (many beamlets pass 3%/3mm fully) are broken by the next criteria, then by
     the mean absolute dose difference, so the order is deterministic and meaningful.
     """
-    tag = engine.lower()
+    tag = engine_tag(engine)
     keys = [f"{tag}_{c.key}" for c in criteria]
 
     def order(r):
