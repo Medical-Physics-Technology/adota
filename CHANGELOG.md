@@ -326,6 +326,18 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 - **`scripts/al_build_beamlet_pool.py`** (`screen`, `plan`, `check-energy-mixing`,
   `generate`, `status`), `config_beamlet_pool.yaml`, the DelftBlue template and
   `scripts/slurm/beamlet_pool_delftblue.sbatch`; guide `scripts/docs/beamlet_pool.md`.
+- **`al_build_beamlet_pool.py stats`** with `src/active_learning/beamlet_pool/stats.py`
+  (`load_pool_index`, `anatomy_tables`, `patient_tables`, `gantry_frame`,
+  `gantry_tables`, `uniformity`, `gini`, `concentration`) and
+  `src/figures/beamlet_pool.py` (`anatomy_figure`, `patient_figure`,
+  `gantry_frame_figure`): reporting statistics of a finished pool from its index
+  CSVs. New output format: `pool_stats_<ts>/` under `stats.output_dir` with
+  per-anatomy, per-collection, per-patient, gantry-sector, spot-position and
+  uniformity CSVs, `summary.json`, `manifest.json` and three figures.
+- **`src/figures/single_beam_ground_truth.py`** (`ground_truth_figure`): the
+  single-beamlet publication layout without the prediction rows (ground-truth
+  dose, CT with flux, IDD, beam's-eye strips), for inspecting Monte Carlo ground
+  truth as it is generated.
 - **`scripts/al_validation_set_stats.py`**, `src/active_learning/validation_stats.py`,
   `src/figures/validation_set.py`: composition, validity, metrics and HU histograms
   inside the patient of the frozen validation set.

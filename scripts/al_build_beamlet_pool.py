@@ -6,6 +6,7 @@
     uv run python scripts/al_build_beamlet_pool.py generate --config scripts/config_beamlet_pool.yaml \
         --shard 0 --n-shards 2
     uv run python scripts/al_build_beamlet_pool.py status   --config scripts/config_beamlet_pool.yaml
+    uv run python scripts/al_build_beamlet_pool.py stats    --config scripts/config_beamlet_pool.yaml
 
 - ``screen`` (DICOM headers only, minutes): every CT of the configured collections
   is checked for image quality, matched against the training HDF5's scans by its
@@ -22,6 +23,9 @@
   shards moved to ``store_root``; resumable, ``--shard i --n-shards n`` splits
   the batches over processes (``--shard slurm`` reads the SLURM array index).
 - ``status``: batches done, beamlets stored per split, hours per batch.
+- ``stats`` (seconds, index CSVs only): reporting tables and figures of the
+  pool per anatomy, per patient and in the gantry frame, into a timestamped
+  directory under ``stats.output_dir``.
 - ``sync`` (later): copy the finished batches and the plan to ``sync.mirror_root``
   (the storage drive), checked against the checksums of every batch marker;
   repeatable and resumable, never deletes the source.
@@ -64,11 +68,22 @@ from src.active_learning.beamlet_pool.registry import (
     split_summary,
     training_scans,
 )
+from src.active_learning.beamlet_pool.stats import (
+    anatomy_tables,
+    gantry_frame,
+    gantry_tables,
+    load_pool_index,
+    patient_tables,
+)
 from src.active_learning.beamlet_pool.store import StoreChecks, free_gb
 from src.active_learning.candidates import pin_worker_threads
 from src.active_learning.config import mc_from_config
+from src.adota.config import setup_run_directory
+from src.beamlets.bdl import BeamDataLibrary
 from src.evaluation.cli import SET_OVERRIDE_HELP, apply_set_overrides, load_yaml_config, on_root_filesystem
+from src.figures.beamlet_pool import anatomy_figure, gantry_frame_figure, patient_figure
 from src.training.logging_utils import silence_pymedphys
+from src.training.run_dir import write_manifest
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", force=True)
 silence_pymedphys()
@@ -252,6 +267,52 @@ def status(config: ConfigOpt = Path("scripts/config_beamlet_pool.yaml"), set_: S
     plan_df = pd.read_csv(store / "plan" / "plan.csv")
     print(json.dumps({**progress(plan_df, store), "store_free_gb": round(free_gb(store), 1)}, indent=2,
                      default=str))
+
+
+@app.command()
+def stats(config: ConfigOpt = Path("scripts/config_beamlet_pool.yaml"), set_: SetOpt = None) -> None:
+    """Reporting tables and figures: per anatomy, per patient, in the gantry frame."""
+    cfg = _config(config, set_)
+    store, opts = _store(cfg), dict(cfg.get("stats") or {})
+    if not opts.get("output_dir"):
+        raise typer.BadParameter("set stats.output_dir")
+    index = load_pool_index(store, Path(cfg["registry_csv"]))
+    quotas_path = store / "plan" / "quotas.csv"
+    quotas = pd.read_csv(quotas_path) if quotas_path.exists() else None
+    engine = cfg["engine"]
+    bdl = BeamDataLibrary.from_file(Path(engine["mcsquare_install"]) / "BDL" / engine["bdl_file"])
+    frame = gantry_frame(index, bdl.d_smx, bdl.d_smy)
+    out = setup_run_directory(Path(opts["output_dir"]), prefix="pool_stats_")
+    tables = {**anatomy_tables(index), **patient_tables(index, quotas),
+              **gantry_tables(frame, float(opts.get("gantry_bin_deg", 15.0)))}
+    for name, table in tables.items():
+        table.to_csv(out / f"{name}.csv", index=name not in ("per_patient", "spot_positions", "fields"))
+    n, n_pat = int((index["status"] == "stored").sum()), int(tables["per_patient"].shape[0])
+    fig, label = out / "figures", f"{store.name}: {n:,} beamlets, {n_pat} patients"
+    anatomy_figure(index, figure_path=str(fig / "pool_anatomy"), title=f"Beamlet pool per anatomy ({label})",
+                   caption="Split at patient level (70/15/15 per collection). Losses are shares of the planned "
+                           "beamlets: generator QA (dose in the crop < 95%), MC overshoot of the crop, Bragg peak "
+                           "outside the patient. R80: Monte Carlo, along the 320 mm crop.")
+    patient_figure(tables["per_patient"], figure_path=str(fig / "pool_patients"),
+                   title=f"Beamlet pool per patient ({label})",
+                   caption="Quota: beamlets planned per patient for its split; fewer when the overshoot gate or the "
+                           "QA left too few. Gini 0: every patient holds the same number of beamlets.")
+    gantry_frame_figure(frame, figure_path=str(fig / "pool_gantry_frame"),
+                        gantry_bin_deg=float(opts.get("gantry_bin_deg", 15.0)),
+                        title=f"Beamlet pool in the gantry coordinate system ({label})",
+                        caption=f"IEC 61217 gantry frame; two random field angles per patient, CT rotated to the "
+                                f"beam's-eye frame about the grid centre. Spot position on the isocentre plane from "
+                                f"the steering angles (SMX {bdl.d_smx:.0f} mm, SMY {bdl.d_smy:.0f} mm). Density "
+                                f"relative to a uniform spread over the lattice cells (1 = uniform).")
+    summary = {"store": str(store), "beamlets_stored": n, "patients": n_pat,
+               "by_split": tables["by_anatomy_split"].loc["total"].to_dict(),
+               "status": index["status"].value_counts().to_dict(),
+               "concentration": tables["concentration"].round(4).to_dict(orient="index")}
+    (out / "summary.json").write_text(json.dumps(summary, indent=2, default=str))
+    write_manifest(out, config=cfg, dataset_path=store / "plan" / "plan.csv",
+                   extra={"kind": "beamlet_pool_stats", "inputs": {"index": str(store / "index"),
+                                                                   "registry": cfg["registry_csv"]}})
+    logger.info("outputs in %s", out)
 
 
 if __name__ == "__main__":

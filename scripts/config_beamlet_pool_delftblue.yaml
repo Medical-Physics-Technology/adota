@@ -75,6 +75,10 @@ batches:
   reserve_work_gb: 30.0
   reserve_store_gb: 50.0
 
+stats:                               # `stats`: reporting tables and figures, from the index CSVs
+  output_dir: <scratch or project directory>/adota_pool/stats
+  gantry_bin_deg: 15.0
+
 checks:
   range_margin_mm: 10.0
   min_deposition_ratio: 0.95

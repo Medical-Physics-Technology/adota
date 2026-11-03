@@ -29,6 +29,7 @@ uv run python scripts/al_build_beamlet_pool.py generate --config scripts/config_
 uv run python scripts/al_build_beamlet_pool.py generate --config scripts/config_beamlet_pool.yaml --shard 1 --n-shards 2
 uv run python scripts/al_build_beamlet_pool.py status   --config scripts/config_beamlet_pool.yaml
 uv run python scripts/al_build_beamlet_pool.py sync     --config scripts/config_beamlet_pool.yaml   # later
+uv run python scripts/al_build_beamlet_pool.py stats    --config scripts/config_beamlet_pool.yaml   # reporting
 ```
 
 1. **`screen`** (DICOM headers only, about 10 minutes with `--n-workers 8`). Every
@@ -92,6 +93,21 @@ uv run python scripts/al_build_beamlet_pool.py sync     --config scripts/config_
    mirror means the batch is complete there. Files already present with the right
    checksum are skipped, so a sync can be interrupted and repeated, also while
    `generate` is still running. It never deletes from the store.
+7. **`stats`** (seconds, index CSVs only): reporting tables and figures into
+   `stats.output_dir/pool_stats_<ts>/`, in three views.
+   - *Anatomy*: stored beamlets per anatomy, collection and split, the fate of
+     every planned beamlet (`fates.csv`), energy, MC R80 and in-body dose spectra.
+   - *Patients*: one row per patient (planned, stored, fields, quota, scanner, z
+     extent) and the concentration per split: Gini, effective number of patients
+     (`1 / sum(p^2)`), share of the largest decile.
+   - *Gantry frame* (IEC 61217): beamlets per gantry sector and per spot position
+     on the isocentre plane. `theta_x` gives `Y_g` (gantry axis, `d_smy * tan`),
+     `theta_y` gives `X_g` (lateral, `d_smx * tan`), the convention of
+     `angles_to_spot_position`, whose argument names are crossed.
+     `uniformity.csv` compares the spread of the cells with the counting noise of
+     a uniform draw (`dispersion` near 1 means noise only). Judge the gantry
+     sectors by fields (`gantry_sector_fields`): the angle is drawn per field, so
+     beamlet counts per sector vary about five times more than Poisson.
 
 ## Storage
 
