@@ -15,6 +15,16 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 
 ### Added
 
+- **`al_build_beamlet_pool.py noise-plan`** with
+  `scripts/config_beamlet_pool_noise_1e6.yaml` and `_1e7.yaml`: new beamlets of a
+  few test patients from the pool planner, planned into the stores of two Monte
+  Carlo realisations (the noise floor of EXP-0014). New module
+  `src.active_learning.beamlet_pool.noise` (`select_patients`, `patient_batches`,
+  `pair_config_differences`). New output: `<store>/plan/noise_selection.csv`.
+- **`scripts/active_learning/difficulty_independence.py`** with
+  `src.active_learning.ensemble.independence` and
+  `src.active_learning.ensemble.noise_floor`: the EXP-0014 closing analysis
+  (leave-one-member-out gap, scorer v2) and the noise-floor diagnostics.
 - **`src/model_search/`**: hyperparameter optimisation and training of a single
   ADoTA model. `space` (`validate_space`, `suggest`, `build_candidate`,
   `rejection`, `Candidate`: a YAML search space over `TrainingConfig` fields to

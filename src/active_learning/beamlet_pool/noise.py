@@ -18,11 +18,12 @@ at the pool's 1e6 primaries and at 1e7 (about 3.2 times less noise per voxel):
 - :func:`pair_config_differences` checks that the two realisations' configs
   differ only in the primaries and the storage locations.
 
-Both realisations keep ``robustness.rng_seed: 0``. In beamlet mode MCsquare seeds
-thread ``t`` with ``seed + t`` and no per-call term
-(``compute_simulation_beamlet.c``), so a fixed seed would give every field call of
-a run the same random streams; seed 0 takes ``time(NULL) + t`` instead, as the
-pool did. The two runs of a beamlet are hours apart, so their streams differ.
+Both realisations keep ``robustness.rng_seed: 0``. In beamlet mode MCsquare runs
+each beamlet on one thread and seeds it, at the beamlet's start, with
+``seed + t`` for thread ``t`` (``compute_simulation_beamlet.c``), so a fixed seed
+would give every beamlet a thread simulates the same random stream; seed 0 takes
+``time(NULL) + t`` instead, as the pool did. The two runs of a beamlet start
+hours apart, far more than the 24 threads' offsets, so their streams differ.
 """
 from __future__ import annotations
 

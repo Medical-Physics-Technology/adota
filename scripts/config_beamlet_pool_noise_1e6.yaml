@@ -79,7 +79,7 @@ robustness:                            # the pool's Monte Carlo settings
   num_primaries: 1.0e6
   num_threads: 24
   beamlet_mode: true
-  beamlet_block_size: 40
+  beamlet_block_size: 42             # one field (42 beamlets) per MCsquare call: no 2-beamlet tail block
   rng_seed: 0
   min_deposition_ratio: 0.95
   output_root: /scratch/mstryja/adota_pool/_work/unused
