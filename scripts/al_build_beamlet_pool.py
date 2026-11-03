@@ -7,6 +7,7 @@
         --shard 0 --n-shards 2
     uv run python scripts/al_build_beamlet_pool.py status   --config scripts/config_beamlet_pool.yaml
     uv run python scripts/al_build_beamlet_pool.py stats    --config scripts/config_beamlet_pool.yaml
+    uv run python scripts/al_build_beamlet_pool.py export   --config scripts/config_beamlet_pool.yaml --split test
 
 - ``screen`` (DICOM headers only, minutes): every CT of the configured collections
   is checked for image quality, matched against the training HDF5's scans by its
@@ -26,6 +27,10 @@
 - ``stats`` (seconds, index CSVs only): reporting tables and figures of the
   pool per anatomy, per patient and in the gantry frame, into a timestamped
   directory under ``stats.output_dir``.
+- ``export`` (CPU, about 0.2 s per beamlet): one split of the pool written in
+  the v3 training HDF5 layout (2 mm, normalised, flux included) to
+  ``export.output_dir/<store>_<split>.h5`` with its index CSV, so every reader
+  of the training data (training, validation, ensemble members) takes it as is.
 - ``sync`` (later): copy the finished batches and the plan to ``sync.mirror_root``
   (the storage drive), checked against the checksums of every batch marker;
   repeatable and resumable, never deletes the source.
@@ -48,6 +53,7 @@ import pandas as pd
 import typer
 
 from src.active_learning.beamlet_pool.batches import BatchSettings, mirror, progress, run_batches
+from src.active_learning.beamlet_pool.export import export_split
 from src.active_learning.beamlet_pool.mc_check import PASS, compare_mixed_energy
 from src.active_learning.beamlet_pool.planning import (
     PlanSettings,
@@ -78,8 +84,9 @@ from src.active_learning.beamlet_pool.stats import (
 from src.active_learning.beamlet_pool.store import StoreChecks, free_gb
 from src.active_learning.candidates import pin_worker_threads
 from src.active_learning.config import mc_from_config
-from src.adota.config import setup_run_directory
+from src.adota.config import DEFAULT_SCALE, setup_run_directory
 from src.beamlets.bdl import BeamDataLibrary
+from src.datasets.beamlet_h5 import sha256_of
 from src.evaluation.cli import SET_OVERRIDE_HELP, apply_set_overrides, load_yaml_config, on_root_filesystem
 from src.figures.beamlet_pool import anatomy_figure, gantry_frame_figure, patient_figure
 from src.training.logging_utils import silence_pymedphys
@@ -313,6 +320,26 @@ def stats(config: ConfigOpt = Path("scripts/config_beamlet_pool.yaml"), set_: Se
                    extra={"kind": "beamlet_pool_stats", "inputs": {"index": str(store / "index"),
                                                                    "registry": cfg["registry_csv"]}})
     logger.info("outputs in %s", out)
+
+
+@app.command()
+def export(config: ConfigOpt = Path("scripts/config_beamlet_pool.yaml"), set_: SetOpt = None,
+           split: Annotated[str, typer.Option(help="train | validation | test.")] = "test",
+           limit: Annotated[Optional[int], typer.Option(help="First N beamlets only (smoke test).")] = None) -> None:
+    """Write one split in the v3 training HDF5 layout, for the model-facing readers."""
+    cfg = _config(config, set_)
+    store, opts = _store(cfg), dict(cfg.get("export") or {})
+    if not opts.get("output_dir"):
+        raise typer.BadParameter("set export.output_dir")
+    out = Path(opts["output_dir"]) / f"{store.name}_{split}{'' if limit is None else f'_first{limit}'}.h5"
+    if on_root_filesystem(out.parent):
+        raise typer.BadParameter(f"{out.parent} is on the root filesystem; use /scratch")
+    engine = cfg["engine"]
+    bdl = Path(engine["mcsquare_install"]) / "BDL" / engine["bdl_file"]
+    scale = dict(opts.get("scale") or DEFAULT_SCALE)
+    export_split(store, split, out, scale=scale, bdl_file=bdl.name, bdl_sha256=sha256_of(bdl),
+                 method=str(opts.get("downsample_method", "average")), limit=limit,
+                 file_attrs={"config": json.dumps(cfg, default=str)})
 
 
 if __name__ == "__main__":

@@ -144,7 +144,8 @@ def main(
         gamma_resolution_mm=tuple(cfg["gamma_resolution_mm"]),
         gamma_cutoff_percent=float(cfg["gamma_cutoff_percent"]),
         gamma_backend=str(cfg["gamma_backend"]),
-        batch_size=cfg["batch_size"], num_workers=cfg["num_workers"])
+        batch_size=cfg["batch_size"], num_workers=cfg["num_workers"],
+        excluded_indexes_file=cfg.get("excluded_indexes_file"))
     device = resolve_device(cfg["device_index"]) if cfg["source"] != "csv" else None
     members = []
     for spec in cfg["members"]:

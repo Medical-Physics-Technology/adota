@@ -1,0 +1,69 @@
+# Every engine on the beamlet pool's test split (primary test set)
+# ================================================================
+#   uv run python scripts/active_learning/ensemble_agreement.py \
+#       --config scripts/active_learning/config_independence_pool.yaml --device-index <gpu>
+#
+# EXP-0014, model independence of the difficulty score: per-record errors of the
+# engines, inferred once and reused by scripts/active_learning/difficulty_independence.py.
+# 7,552 beamlets on 130 patients none of the 56 training scans belongs to
+# (registry match, EXP-0020), exported to the v3 layout by
+# `al_build_beamlet_pool.py export --split test`. Out of sample for every engine;
+# the ladder's training ids live in another HDF5, so none are given here.
+# Reference dose: MCsquare at 1e6 primaries (the training data used 1e7).
+experiment: EXP-0014
+stage: independence_pool
+output_dir: /scratch/mstryja/adota_runs/exp0014/independence/infer
+dataset_path: /scratch/mstryja/adota_pool/exports/v1_apollo_1e6_test.h5
+excluded_indexes_file: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
+metadata_csv: null            # read from the HDF5's <stem>_index.csv
+group_column: patient_key     # a cell is one scan ...
+energy_column: energy_mev     # ... times one 20 MeV energy bin
+record_ids: /scratch/mstryja/adota_pool/exports/v1_apollo_1e6_test_index.csv   # its sample_id column
+
+members:
+  - label: C0_transformer_021
+    checkpoint: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/trials/transformer_021/checkpoints/best.pth
+    model_config: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/trials/transformer_021/config.yaml
+  - label: C1_transformer_016
+    checkpoint: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/trials/transformer_016/checkpoints/best.pth
+    model_config: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/trials/transformer_016/config.yaml
+  - label: X0_mlstm_004
+    checkpoint: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/trials/mlstm_004/checkpoints/best.pth
+    model_config: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/trials/mlstm_004/config.yaml
+  - label: U0_none_029
+    checkpoint: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/trials/none_029/checkpoints/best.pth
+    model_config: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/trials/none_029/config.yaml
+  - label: T012_transformer_012
+    checkpoint: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/trials/transformer_012/checkpoints/best.pth
+    model_config: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/trials/transformer_012/config.yaml
+  - label: EXP0019_final_attndrop0
+    checkpoint: models/ADoTA_EXP0019_final_attndrop0/best_model.pth
+    model_config: models/ADoTA_EXP0019_final_attndrop0/hyperparams.json
+  - label: v11
+    checkpoint: models/DoTA_v3_grid_search_v11/best_model.pth
+    model_config: models/DoTA_v3_grid_search_v11/hyperparams.json
+
+source: infer                 # every member is inferred; its errors land in <run>/members/<label>_errors.csv
+batch_size: 16
+num_workers: 8
+
+# The HPO's finalist criteria (2%/2mm, 10% cutoff), identical for every member.
+gamma_params:
+  dose_percent_threshold: 2
+  distance_mm_threshold: 2
+  interp_fraction: 10
+  max_gamma: 2
+  lower_percent_dose_cutoff: 10
+  random_subset: null
+  local_gamma: false
+  quiet: true
+gamma_resolution_mm: [2.0, 2.0, 2.0]
+gamma_cutoff_percent: 10.0
+gamma_backend: torch
+
+metrics: [rde_pct, gamma_fail, mape_pct, abs_dr80_mm]
+min_cell_size: 5             # pool: about 58 beamlets per patient over 8 energy bins; 5 keeps 94% of records (10: 63%)
+top_fraction: 0.10
+n_bootstrap: 2000
+bootstrap_seed: 20261103
+ci: 0.95
