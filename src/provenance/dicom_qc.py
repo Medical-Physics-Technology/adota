@@ -48,6 +48,11 @@ class QCGates:
     kvp_range: Optional[Tuple[float, float]] = None
     min_tube_current: Optional[float] = None     # mA
     exclude_kernels: Tuple[str, ...] = ()        # case-insensitive substrings
+    # Opt-in: read every header of a series and require that its slices stack into
+    # a volume (src/provenance/series_geometry.py); a step above this multiple of
+    # the median step is a missing slice. Also makes n_slices and the z extent the
+    # measured ones instead of the file count and the nominal thickness.
+    max_slice_gap_ratio: Optional[float] = None
 
 
 def _num(v) -> Optional[float]:
@@ -127,9 +132,14 @@ def check_quality(params: Dict, gates: QCGates) -> Tuple[bool, List[str]]:
         if st is None:
             reasons.append("slice_thickness_missing")
         else:
-            z_extent = n * st
+            z_extent = params.get("z_extent_mm") or n * st
             if z_extent < gates.min_z_extent_mm:
                 reasons.append(f"z_extent={z_extent:.0f}<{gates.min_z_extent_mm}")
+    if gates.max_slice_gap_ratio is not None:
+        if "geometry_reasons" not in params:
+            reasons.append("geometry_not_checked")
+        else:
+            reasons.extend(params["geometry_reasons"])
     if gates.min_xy_extent_mm is not None:
         sx, sy = params.get("pixel_spacing_x"), params.get("pixel_spacing_y")
         cols, rows = params.get("columns"), params.get("rows")

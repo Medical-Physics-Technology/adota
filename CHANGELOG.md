@@ -354,6 +354,70 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   with the corrected `gpr[1]` to within 1e-4 pp except on voxels with gamma
   exactly 0.
 
+### Added (labelled beamlet pool and the frozen AL validation set)
+
+- **`src/provenance/series_geometry.py`**: a CT series assembled from its headers
+  (`read_directory` groups the files of a directory by the series UID each file
+  carries, CT image objects only, localizers set aside) and checked
+  (`check_geometry`: one orientation and in-plane grid, no in-plane shear, no
+  duplicate positions, no step above `max_gap_ratio` times the median). New opt-in
+  QC gate `QCGates.max_slice_gap_ratio`: with it, `TCIADataset` reads every header,
+  selects among the series that stack, uses the measured slice count and z extent,
+  and its records carry the files to stack (`CTRecord.files`, new field, empty by
+  default). Without it the selection is unchanged.
+  `src.datasets.tcia`: `ct_series_candidates`, `best_candidate`, `candidate_record`,
+  `series_dirs`; `_auto_collection` is now public as `auto_collection`.
+- `PoolEntry.max_slice_gap_ratio` (new field, default None, not written to the pool
+  CSV): when set, `RecordResolver` loads exactly `series_uid`, re-checked, and
+  refuses a changed slice count; when None the lookup is unchanged.
+- **`src/active_learning/beamlet_pool/`**: `registry` (`screen_collection`,
+  `screen_patient`, `grid_from_geometry`, `match_training`, `assign_splits`, `Claim`, `CollectionSpec`),
+  `planning` (`PlanSettings`, `gate`, `plan_patient`, `assign_batches`, `estimate`),
+  `store` (`pack_batch`, `read_record`, `recompute_flux`, `post_mc_reason`,
+  `move_file`), `batches` (`run_batches`, `BatchSettings`, `progress`), `mc_check`
+  (`compare_mixed_energy`). New output format: per-batch HDF5 shards (`ct` int16,
+  `dose` float32, `sim_res` attribute; no flux) plus index CSVs and markers.
+- **`scripts/al_build_beamlet_pool.py`** (`screen`, `plan`, `check-energy-mixing`,
+  `generate`, `status`), `config_beamlet_pool.yaml`, the DelftBlue template and
+  `scripts/slurm/beamlet_pool_delftblue.sbatch`; guide `scripts/docs/beamlet_pool.md`.
+- **`al_build_beamlet_pool.py stats`** with `src/active_learning/beamlet_pool/stats.py`
+  (`load_pool_index`, `anatomy_tables`, `patient_tables`, `gantry_frame`,
+  `gantry_tables`, `uniformity`, `gini`, `concentration`) and
+  `src/figures/beamlet_pool.py` (`anatomy_figure`, `patient_figure`,
+  `gantry_frame_figure`): reporting statistics of a finished pool from its index
+  CSVs. New output format: `pool_stats_<ts>/` under `stats.output_dir` with
+  per-anatomy, per-collection, per-patient, gantry-sector, spot-position and
+  uniformity CSVs, `summary.json`, `manifest.json` and three figures.
+- **`src/figures/single_beam_ground_truth.py`** (`ground_truth_figure`): the
+  single-beamlet publication layout without the prediction rows (ground-truth
+  dose, CT with flux, IDD, beam's-eye strips), for inspecting Monte Carlo ground
+  truth as it is generated.
+- **`scripts/al_validation_set_stats.py`**, `src/active_learning/validation_stats.py`,
+  `src/figures/validation_set.py`: composition, validity, metrics and HU histograms
+  inside the patient of the frozen validation set.
+- `src.active_learning.validation.select_stratified`: the score-free stratified draw.
+- `src.mc_generation.config_writer.build_multi_energy_plan_text`;
+  `MCSquareRunner.run_beamlet_field(energy=[...])` takes one energy per spot;
+  `generate_beamlets(..., energies=...)`; `label_batch(..., per_beamlet_energy=True)`.
+- `src.acquisition.candidates.candidate_crops`: any array cut along a candidate's ray.
+
+### Changed (labelled beamlet pool and the frozen AL validation set)
+
+- `body_mask(..., largest_component=False)`: the new option keeps the largest
+  connected component (drops a couch separated by air); the default is unchanged.
+- `process_beamlet` records `peak_in_body` in `sim_res` (new field; nothing removed).
+- `process_beamlet` also records `body_fraction_at_peak` in `sim_res` (new field;
+  nothing removed), from the new `src.mc_generation.geometry.body_fraction_at_peak`:
+  the dose share inside the patient in the depth slice of the Bragg peak. The
+  beamlet pool's post-Monte-Carlo check uses it (`StoreChecks.min_body_fraction_at_peak`,
+  0.5) instead of `peak_in_body`, the hottest voxel, which Monte Carlo noise in air
+  voxels wins at high energy (11% of the trial beamlets wrongly rejected, 69% at
+  190-220 MeV). The pool index CSV gains a `body_fraction_at_peak` column.
+- `al_build_validation_set.py`: `validation_set.balance` (`stratified`, the new
+  default, or `score_deciles`), `strata`, `tables_dir`, sizing overrides; the frozen
+  manifest keeps only the loop's columns and gains `score_decile`.
+- `pin_worker_threads` also limits the BLAS and OpenMP pools (`threadpoolctl`).
+
 ### Added (beamlet hardness per engine, EXP-0014)
 
 - **`src/active_learning/hardness/`**: `cells` (`cell_ranks`, `cell_spearman`,

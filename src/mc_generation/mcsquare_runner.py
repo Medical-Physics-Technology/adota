@@ -16,12 +16,13 @@ import subprocess
 import uuid
 from pathlib import Path
 from time import perf_counter
-from typing import Iterator, Optional, Sequence, Tuple
+from typing import Iterator, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import SimpleITK as sitk
 
 from src.mc_generation.config_writer import (
+    build_multi_energy_plan_text,
     build_simulation_config,
     write_config,
     write_plan_beamlets,
@@ -108,7 +109,7 @@ class MCSquareRunner:
     def run_beamlet_field(
         self,
         ct: sitk.Image,
-        energy: float,
+        energy: Union[float, Sequence[float]],
         gantry_angle: float,
         spots_xy: Sequence[Sequence[float]],
         isocenter: Optional[Sequence[float]] = None,
@@ -135,16 +136,29 @@ class MCSquareRunner:
 
         Note: MCsquare writes ``Simulation_progress.txt`` only outside beamlet
         mode, so ``sim_res["stat_uncertainty"]`` is NaN here.
+
+        ``energy`` is one energy for every spot, or one energy per spot: the spots
+        are then grouped into one control point per energy
+        (:func:`build_multi_energy_plan_text`) and still run in a single call, so a
+        field of beamlets with continuously sampled energies pays the setup once.
         """
-        check_energies_simulable([energy])
-        iso = list(map(float, isocenter)) if isocenter is not None else self.default_isocenter(ct)
         spots = [(float(x), float(y)) for x, y in spots_xy]
+        per_spot = not np.isscalar(energy)
+        energies = [float(e) for e in energy] if per_spot else [float(energy)] * len(spots)
+        check_energies_simulable(sorted(set(energies)))
+        iso = list(map(float, isocenter)) if isocenter is not None else self.default_isocenter(ct)
         wd = self._make_workdir()
         try:
             sitk.WriteImage(ct, str(wd / "CT.mhd"))
-            write_plan_beamlets(
-                wd / "PlanPencil.txt", energy=float(energy), spots_xy=spots,
-                gantry_angle=float(gantry_angle), isocenter=iso, weight=float(weight))
+            if per_spot:
+                text, where = build_multi_energy_plan_text(
+                    energies, spots, gantry_angle=float(gantry_angle), isocenter=iso, weight=float(weight))
+                (wd / "PlanPencil.txt").write_text(text)
+            else:
+                where = [(0, d) for d in range(len(spots))]
+                write_plan_beamlets(
+                    wd / "PlanPencil.txt", energy=float(energy), spots_xy=spots,
+                    gantry_angle=float(gantry_angle), isocenter=iso, weight=float(weight))
             cfg = build_simulation_config(
                 ct_file="CT.mhd", pencil_plan_path="PlanPencil.txt",
                 bdl_file_path=self.bdl_file, output_dir="Outputs",
@@ -171,7 +185,8 @@ class MCSquareRunner:
 
             outputs = wd / "Outputs"
             for index, spot in enumerate(spots):
-                dose_path = outputs / f"Dose_Beamlet_0_0_{index}.mhd"
+                cp, d = where[index]
+                dose_path = outputs / f"Dose_Beamlet_0_{cp}_{d}.mhd"
                 if not dose_path.exists():
                     raise RuntimeError(
                         f"beamlet-mode run produced no {dose_path.name}; "
@@ -180,12 +195,12 @@ class MCSquareRunner:
                 dose = sitk.ReadImage(str(dose_path))
                 sim_res = {
                     "simulation_log": {
-                        "energy": [float(energy)],
+                        "energy": [energies[index]],
                         "isocenter": iso,
                         "bixelgrid_shifts_xy": [spot],
                         "gantry_angle": float(gantry_angle),
                     },
-                    "initial_energy": float(energy),
+                    "initial_energy": energies[index],
                     "gantry_angle": float(gantry_angle),
                     "num_primaries": float(num_primaries),
                     "rng_seed": int(rng_seed),

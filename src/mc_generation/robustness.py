@@ -26,6 +26,7 @@ from src.datasets.base import CTRecord
 from src.figures.mc_beamlet_qc import mc_beamlet_qc_figure
 from src.mc_generation.geometry import (
     beam_entrance_index,
+    body_fraction_at_peak,
     body_mask,
     dose_in_body_fraction,
     extraction_isocenter_physical,
@@ -212,10 +213,13 @@ def process_beamlet(
     dib = dose_in_body_fraction(cropped_dose, body_crop)
     idd = np.asarray(cropped_dose.sum(axis=(0, 1)), dtype=float)  # depth = axis 2
     rm = compute_range_metrics(idd, dz_mm=1.0)
+    peak_voxel = np.unravel_index(int(np.argmax(cropped_dose)), cropped_dose.shape)
 
     sim_res.update({
         "id": str(uuid.uuid4()),
         "dose_in_body_fraction": float(dib),
+        "peak_in_body": bool(body_crop[peak_voxel] > 0.5),   # the hottest voxel sits in the patient
+        "body_fraction_at_peak": body_fraction_at_peak(cropped_dose, body_crop),
         "r100_mm": float(rm.r100_mm), "r80_mm": float(rm.r80_mm),
         "dfw_mm": float(rm.dfw_mm), "peak_dose": float(rm.peak_dose),
         "provenance_uid": rec.uid,
@@ -259,8 +263,13 @@ def generate_beamlets(
     rec: CTRecord, runner: MCSquareRunner, bdl: BeamDataLibrary, cfg: RobustnessConfig,
     geom: FieldGeometry, energy: float, cells: Sequence[Tuple[int, int, float, float]],
     out_dir: Path, stems: Optional[Sequence[str]] = None,
+    energies: Optional[Sequence[float]] = None,
 ) -> dict:
     """Simulate and save an explicit list of beamlets at one (patient, field, energy).
+
+    ``energies`` (one per cell, beamlet mode only) gives every beamlet its own
+    energy; ``energy`` is then ignored and the whole field still runs in one
+    MCsquare call per block (:meth:`MCSquareRunner.run_beamlet_field`).
 
     The sweep passes its angle lattice; the active-learning oracle
     (:mod:`src.active_learning.oracle`) passes whatever candidates the acquisition
@@ -280,8 +289,11 @@ def generate_beamlets(
     out_dir.mkdir(parents=True, exist_ok=True)
     fig_dir = out_dir / "qc_figures"
     stems = [f"a{ix:02d}_{iy:02d}" for ix, iy, _, _ in cells] if stems is None else list(stems)
+    if energies is not None and (len(energies) != len(cells) or not cfg.beamlet_mode):
+        raise ValueError("per-beamlet energies need one energy per cell and beamlet_mode")
+    per_cell = [float(e) for e in energies] if energies is not None else [float(energy)] * len(cells)
 
-    work = [(cell, stem) for cell, stem in zip(cells, stems)
+    work = [(cell, stem, e) for cell, stem, e in zip(cells, stems, per_cell)
             if cfg.overwrite or not (out_dir / f"{stem}_sim_res.json").exists()]
     n_exist = len(cells) - len(work)
     n_saved = n_qa = 0
@@ -289,19 +301,20 @@ def generate_beamlets(
 
     for start in range(0, len(work), block):
         chunk = work[start:start + block]
-        spots = [angles_to_spot_position(tx, ty, d_smx, d_smy) for (_, _, tx, ty), _ in chunk]
+        spots = [angles_to_spot_position(tx, ty, d_smx, d_smy) for (_, _, tx, ty), _, _ in chunk]
         if cfg.beamlet_mode:
+            chunk_energy = [e for _, _, e in chunk] if energies is not None else energy
             for index, dose_img, sim_res in runner.run_beamlet_field(
-                    geom.ct, energy=energy, gantry_angle=geom.mc_gantry, spots_xy=spots,
+                    geom.ct, energy=chunk_energy, gantry_angle=geom.mc_gantry, spots_xy=spots,
                     isocenter=geom.iso_mc, num_primaries=cfg.num_primaries,
                     num_threads=cfg.num_threads, rng_seed=cfg.rng_seed):
                 outcome = process_beamlet(
-                    rec, bdl, cfg, geom, energy, chunk[index][0], spots[index], dose_img,
+                    rec, bdl, cfg, geom, chunk[index][2], chunk[index][0], spots[index], dose_img,
                     sim_res, out_dir, fig_dir, stem=chunk[index][1])
                 n_saved += outcome == "saved"
                 n_qa += outcome == "qa"
         else:
-            for index, (cell, stem) in enumerate(chunk):
+            for index, (cell, stem, _) in enumerate(chunk):
                 dose_img, sim_res = runner.run_beamlet(
                     geom.ct, energy=energy, gantry_angle=geom.mc_gantry, spot_xy=spots[index],
                     isocenter=geom.iso_mc, num_primaries=cfg.num_primaries,

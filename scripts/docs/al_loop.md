@@ -11,7 +11,8 @@ the clinic pays. Design rationale: [docs/active_learning_pipeline.md](../../docs
 | Script | Config | What it does |
 |---|---|---|
 | [`al_build_pool.py`](../al_build_pool.py) | `config_al.yaml` | Split held-out CTs into pool and validation roles; write the provenance CSV. Run once. |
-| [`al_build_validation_set.py`](../al_build_validation_set.py) | `config_al.yaml` | Generate the frozen, difficulty-balanced validation set. Run once, before any cycle. |
+| [`al_build_validation_set.py`](../al_build_validation_set.py) | `config_al.yaml` | Generate the frozen validation set: a score-free draw stratified by anatomy, energy, CT and field. `--dry-run` selects and writes the manifest without simulating. Run once, before any cycle. |
+| [`al_validation_set_stats.py`](../al_validation_set_stats.py) | `config_al.yaml` (`validation_stats`) | Describe the drawn set before its Monte Carlo: composition, candidate validity, input-only metrics, and HU histograms inside the patient (largest component of `body_mask`: lung in, couch out) per CT, per beamlet crop and along the beam path. |
 | [`al_loop.py`](../al_loop.py) | `config_al.yaml` | Run one arm: sample, label, retrain, validate, repeat. One process per strategy. |
 
 ## Order of operations
@@ -25,6 +26,7 @@ uv run python scripts/al_build_pool.py --config scripts/config_al.yaml
 # 2. The yardstick. --dry-run scores and selects but simulates nothing, and prints
 #    the Monte Carlo estimate: always run that first.
 uv run python scripts/al_build_validation_set.py --config scripts/config_al.yaml --dry-run
+uv run python scripts/al_validation_set_stats.py --config scripts/config_al.yaml
 uv run python scripts/al_build_validation_set.py --config scripts/config_al.yaml --num-threads 48
 
 # 3. The arms, at equal Monte Carlo budget, on separate GPUs.

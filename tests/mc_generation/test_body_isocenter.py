@@ -4,6 +4,7 @@ import SimpleITK as sitk
 
 from src.mc_generation.geometry import (
     body_center_of_mass,
+    body_fraction_at_peak,
     dose_in_body_fraction,
     extraction_isocenter_physical,
     isocenters_from_world,
@@ -58,3 +59,30 @@ def test_dose_in_body_fraction():
     dose3[:, :, 1] = 1.0
     dose3[:, :, 6] = 3.0                      # 3/4 in body
     assert abs(dose_in_body_fraction(dose3, mask) - 0.75) < 1e-6
+
+
+def _beamlet(body_end=None):
+    """A 20 x 20 x 300 crop: body from depth 20 (to ``body_end``), a pencil beam on
+    the axis peaking at depth 200, and one noisy air voxel in front of the patient."""
+    mask = np.zeros((20, 20, 300), dtype=np.float32)
+    mask[:, :, 20:body_end] = 1.0
+    depth = np.arange(300)
+    curve = 0.3 + np.exp(-0.5 * ((depth - 200) / 6.0) ** 2)      # entrance plateau + flat peak
+    curve[205:] *= np.exp(-(depth[205:] - 205) / 3.0)            # distal fall-off
+    lateral = np.exp(-0.5 * ((np.arange(20) - 9.5) / 3.0) ** 2)
+    dose = curve[None, None, :] * lateral[:, None, None] * lateral[None, :, None]
+    dose[3, 15, 5] = 2.0 * dose.max()                            # air spike, hotter than the peak
+    return dose.astype(np.float32), mask
+
+
+def test_body_fraction_at_peak_ignores_a_spike_in_air():
+    dose, mask = _beamlet()
+    peak = np.unravel_index(int(np.argmax(dose)), dose.shape)
+    assert mask[peak] == 0.0                                     # the hottest voxel is in air
+    assert body_fraction_at_peak(dose, mask) == 1.0
+
+
+def test_body_fraction_at_peak_catches_a_peak_beyond_the_patient():
+    dose, mask = _beamlet(body_end=150)
+    assert body_fraction_at_peak(dose, mask) == 0.0
+    assert body_fraction_at_peak(np.zeros_like(dose), mask) == 0.0

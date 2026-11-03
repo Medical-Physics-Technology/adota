@@ -56,15 +56,36 @@ candidates:
   seed: 20260908
 
 # --- The frozen validation set ------------------------------------------------
-# Generated once, before cycle 1, and never changed: equal counts per score decile,
-# stratified by anatomy and energy layer. Roughly 4 h of Monte Carlo at these
-# settings; --dry-run reports the exact estimate before anything is simulated.
+# Generated once, before cycle 1, and never changed. Drawn WITHOUT the difficulty
+# score (it is being replaced by a model-independent one, and the yardstick must not
+# move with it): equal counts per anatomy, then energy layer, then CT, then field,
+# among the valid candidates; a cell short of valid candidates gives what it has
+# and its siblings make up the rest. 20,000 beamlets (docs/active_learning_pipeline.md,
+# section 2.2). The validation CTs get a larger candidate draw than the loop's pool
+# (sizing only; the candidate space is the shared one above), because thoracic
+# validity falls to about 23% at 155 MeV and 1% at 180 MeV. --dry-run scores and
+# selects, writes the manifest and the tables, and reports the Monte Carlo cost
+# without simulating anything; scripts/al_validation_set_stats.py then describes it.
 validation_set:
-  n_beamlets: 4000
-  manifest: registry/al_validation_set.csv
+  n_beamlets: 20000
+  manifest: registry/al_validation_set.csv                    # frozen, the loop's columns
+  tables_dir: /scratch/mstryja/adota_runs/al_validation_set   # candidates + selection with metrics
+  balance: stratified              # stratified | score_deciles (the earlier recipe)
+  strata: [anatomy, energy_mev, patient_id, gantry_deg]
+  candidates: {n_gantry_per_ct: 4, n_per_field: 2000}
   beamlet_prefix: al_val
   beamlet_version: 1
   seed: 20260909
+
+# --- Statistics of the validation set (scripts/al_validation_set_stats.py) -----
+# HU inside the patient (largest connected component of body_mask: lung in, external
+# air and the couch out) per CT, per beamlet crop and along the beam path.
+validation_stats:
+  output_dir: /scratch/mstryja/adota_runs/al_validation_set
+  hu_bin_width: 10
+  hu_plot_max: 2000
+  include_pool_cts: true          # pool CTs drawn dashed, to judge representativeness
+  n_workers: 10
 
 # --- MCsquare engine ----------------------------------------------------------
 engine:

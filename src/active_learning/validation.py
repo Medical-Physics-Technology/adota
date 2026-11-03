@@ -1,12 +1,14 @@
 """The frozen yardstick: how it is drawn, and what is measured on it.
 
-The validation set is generated once, before cycle 1, and never changes. It is
-**balanced in difficulty**: candidates are scored with the input-only score and drawn
-with equal counts per score decile, stratified by anatomy and energy layer. A model
-that only improves on easy beamlets cannot hide in such a set, and per-decile learning
-curves come for free. The cost is that the score decides what the yardstick contains,
-so a bias in the score is a bias in the yardstick; the pre-existing held-out sets stay
-as an independent second reading.
+The validation set is generated once, before cycle 1, and never changes. It is drawn
+by :func:`select_stratified`: equal counts per anatomy and energy layer, then per
+patient and per field inside those, among the valid candidates, **without the
+difficulty score**. The score is under revision (a model-independent version is
+planned), and a yardstick drawn by one score would change with it; per-decile curves
+are still available from the ``score_decile`` column computed after the draw.
+:func:`select_balanced`, the earlier recipe with equal counts per score decile, is
+kept for the ``stratified_score`` strategy and for comparison. The pre-existing
+held-out sets stay as an independent second reading.
 
 What is measured on it: gamma pass rate (mean, and the tail that actually matters -
 the fraction below 95 percent and the 5th percentile), MAPE, relative dose error, and
@@ -34,6 +36,63 @@ logger = logging.getLogger(__name__)
 
 MODEL_DZ_MM = 2.0
 """Depth spacing of the model grid: the 320 mm crop resampled to 160 voxels."""
+
+
+def _water_fill(sizes: Sequence[int], n: int) -> List[int]:
+    """Allocate ``n`` over groups as evenly as their sizes allow: every group gets
+    the same count, except those too small, which give all they have; the rest is
+    spread over the others. Remainders go to the groups with the most spare."""
+    sizes = [int(s) for s in sizes]
+    n = min(int(n), sum(sizes))
+    take = [0] * len(sizes)
+    open_ = [i for i, s in enumerate(sizes) if s > 0]
+    left = n
+    while left > 0 and open_:
+        share = left // len(open_)
+        if share == 0:
+            for i in sorted(open_, key=lambda i: sizes[i] - take[i], reverse=True)[:left]:
+                take[i] += 1
+            break
+        for i in list(open_):
+            add = min(share, sizes[i] - take[i])
+            take[i] += add
+            left -= add
+            if take[i] == sizes[i]:
+                open_.remove(i)
+    return take
+
+
+def select_stratified(table: pd.DataFrame, n: int, strata: Sequence[str], *,
+                      rng: np.random.Generator) -> pd.DataFrame:
+    """Draw ``n`` valid candidates with equal counts per level of each stratum, in
+    order: ``n`` is split evenly over the first column's values, each share evenly
+    over the second column's values inside it, and so on; candidates are drawn at
+    random inside the last level.
+
+    A level too small for its share gives everything it has and its shortfall goes
+    to its siblings, so the anatomy x energy balance is kept before the per-patient
+    one. No score is used.
+    """
+    valid = table[table["valid"].astype(bool)]
+    if len(valid) < n:
+        raise ValueError(f"only {len(valid)} valid candidates for a validation set of {n}")
+
+    def draw(part: pd.DataFrame, want: int, depth: int) -> List[pd.DataFrame]:
+        if want <= 0:
+            return []
+        if depth == len(strata):
+            return [part.sample(want, random_state=int(rng.integers(2 ** 31)))]
+        groups = list(part.groupby(strata[depth], sort=True))
+        shares = _water_fill([len(g) for _, g in groups], want)
+        out: List[pd.DataFrame] = []
+        for (_, group), share in zip(groups, shares):
+            out += draw(group, share, depth + 1)
+        return out
+
+    chosen = pd.concat(draw(valid, int(n), 0), ignore_index=True)
+    logger.info("validation selection: %d beamlets, %s", len(chosen),
+                chosen.groupby(list(strata[:2])).size().to_dict())
+    return chosen
 
 
 def select_balanced(
