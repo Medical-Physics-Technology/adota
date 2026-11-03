@@ -1,0 +1,38 @@
+# EXP-0014 closing analysis: is the difficulty score model-independent?
+# uv run python scripts/active_learning/difficulty_independence.py --config scripts/active_learning/config_difficulty_independence.yaml
+
+output_dir: /scratch/mstryja/adota_runs/exp0014/independence/analysis
+
+# The HPO ladder: the members of the shared target, all trained on the same 30 R scans.
+ladder:
+  C0_transformer_021: /scratch/mstryja/adota_runs/exp0014/independence/infer/ensemble_agreement_20261103_124300/members/C0_transformer_021_errors.csv
+  C1_transformer_016: /scratch/mstryja/adota_runs/exp0014/independence/infer/ensemble_agreement_20261103_124306/members/C1_transformer_016_errors.csv
+  X0_mlstm_004: /scratch/mstryja/adota_runs/exp0014/independence/infer/ensemble_agreement_20261103_124300/members/X0_mlstm_004_errors.csv
+  U0_none_029: /scratch/mstryja/adota_runs/exp0014/independence/infer/ensemble_agreement_20261103_124306/members/U0_none_029_errors.csv
+  T012_transformer_012: /scratch/mstryja/adota_runs/exp0014/independence/infer/ensemble_agreement_20261103_124300/members/T012_transformer_012_errors.csv
+# Sensitivity: only the members that pass the quality gate (C0's pass rate minus 1.5 points).
+gate_members: [C0_transformer_021, X0_mlstm_004, T012_transformer_012]
+
+# Test engines outside the target, on F.
+external_f:
+  EXP0019_final_attndrop0: /scratch/mstryja/adota_runs/exp0014/independence/infer/ensemble_agreement_20261103_143809/members/EXP0019_final_attndrop0_errors.csv
+  v11: /scratch/mstryja/adota_runs/exp0014/independence/infer/ensemble_agreement_20261103_143809/members/v11_errors.csv
+
+# Every engine on the pool test split.
+pool_members_dir: /scratch/mstryja/adota_runs/exp0014/independence/infer/ensemble_agreement_20261103_130852/members
+pool_external: [EXP0019_final_attndrop0, v11]
+
+# v3 records: the analytic features come from the EXP-0006 run on the v2 file
+# (the same beamlets; v11 reproduces the study's RDE exactly on them).
+v3_features: /scratch/mstryja/adota_runs/acquisition_input_only/full/features_analytic.csv
+v3_index: /scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian_index.csv
+v3_fit_ids: /scratch/mstryja/adota_runs/exp0014/independence/ids/v3_fit_ids.csv
+v3_f_ids: /scratch/mstryja/adota_runs/exp0014/independence/ids/v3_F_ids.csv
+
+pool_features: /scratch/mstryja/adota_runs/exp0014/independence/features_pool/features_analytic.csv
+pool_index: /scratch/mstryja/adota_pool/exports/v1_apollo_1e6_test_index.csv
+
+error_metric: rde_pct
+n_bootstrap: 2000
+seed: 0
+cv_splits: 5

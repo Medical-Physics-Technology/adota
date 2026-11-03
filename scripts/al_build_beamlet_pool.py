@@ -8,6 +8,8 @@
     uv run python scripts/al_build_beamlet_pool.py status   --config scripts/config_beamlet_pool.yaml
     uv run python scripts/al_build_beamlet_pool.py stats    --config scripts/config_beamlet_pool.yaml
     uv run python scripts/al_build_beamlet_pool.py export   --config scripts/config_beamlet_pool.yaml --split test
+    uv run python scripts/al_build_beamlet_pool.py noise-plan --config scripts/config_beamlet_pool_noise_1e6.yaml \
+        --pair-config scripts/config_beamlet_pool_noise_1e7.yaml
 
 - ``screen`` (DICOM headers only, minutes): every CT of the configured collections
   is checked for image quality, matched against the training HDF5's scans by its
@@ -31,6 +33,11 @@
   the v3 training HDF5 layout (2 mm, normalised, flux included) to
   ``export.output_dir/<store>_<split>.h5`` with its index CSV, so every reader
   of the training data (training, validation, ensemble members) takes it as is.
+- ``noise-plan`` (minutes, CPU): new beamlets of a few test patients, from the
+  pool's planner with another seed, written as the same plan into the stores of
+  two realisations (``config_beamlet_pool_noise_1e6.yaml`` and ``_1e7.yaml``);
+  ``generate`` with each config then simulates them (the Monte Carlo noise floor
+  of EXP-0014, :mod:`src.active_learning.beamlet_pool.noise`).
 - ``sync`` (later): copy the finished batches and the plan to ``sync.mirror_root``
   (the storage drive), checked against the checksums of every batch marker;
   repeatable and resumable, never deletes the source.
@@ -55,6 +62,7 @@ import typer
 from src.active_learning.beamlet_pool.batches import BatchSettings, mirror, progress, run_batches
 from src.active_learning.beamlet_pool.export import export_split
 from src.active_learning.beamlet_pool.mc_check import PASS, compare_mixed_energy
+from src.active_learning.beamlet_pool.noise import pair_config_differences, patient_batches, select_patients
 from src.active_learning.beamlet_pool.planning import (
     PlanSettings,
     _plan_task,
@@ -340,6 +348,68 @@ def export(config: ConfigOpt = Path("scripts/config_beamlet_pool.yaml"), set_: S
     export_split(store, split, out, scale=scale, bdl_file=bdl.name, bdl_sha256=sha256_of(bdl),
                  method=str(opts.get("downsample_method", "average")), limit=limit,
                  file_attrs={"config": json.dumps(cfg, default=str)})
+
+
+@app.command("noise-plan")
+def noise_plan(config: ConfigOpt = Path("scripts/config_beamlet_pool_noise_1e6.yaml"), set_: SetOpt = None,
+               pair_config: Annotated[Path, typer.Option(help="The other realisation's config.")] = Path(
+                   "scripts/config_beamlet_pool_noise_1e7.yaml"),
+               n_workers: Annotated[int, typer.Option(help="Worker processes, one patient each.")] = 12) -> None:
+    """Plan new beamlets of a few test patients into the stores of both realisations."""
+    cfg, other = _config(config, set_), _config(pair_config, None)
+    problems = pair_config_differences(cfg, other)
+    if problems:
+        raise typer.BadParameter("the two realisations' configs: " + "; ".join(problems))
+    noise = cfg["noise"]
+    stores = [_store(cfg), _store(other)]
+    for store in stores:
+        if on_root_filesystem(store):
+            raise typer.BadParameter(f"{store} is on the root filesystem; use /scratch")
+        if (store / "plan" / "plan.csv").exists():
+            raise typer.BadParameter(f"{store / 'plan' / 'plan.csv'} exists")
+    mixing = Path(noise["energy_mixing_check"])
+    if not pd.read_csv(mixing)["passes"].all():
+        raise typer.BadParameter(f"{mixing} is failing")
+    settings = _plan_settings(cfg)
+    registry = _registry(cfg)
+    selection = select_patients(registry, noise["per_anatomy"], noise.get("split", "test"), int(noise["seed"]))
+    chosen = set(selection["patient_id"])
+    entries = [e for e in entries_from_registry(registry) if e.patient_id in chosen]
+    rob_cfg, _, _, bdl_path = mc_from_config(cfg)
+    quota = int(noise["beamlets_per_patient"])
+    payload = [(e, e.role, quota, rob_cfg, bdl_path, settings) for e in entries]
+    frames, counts, failures = [], [], {}
+    with ProcessPoolExecutor(max_workers=n_workers, initializer=pin_worker_threads) as pool:
+        for pid, (frame, count), error in pool.map(_plan_task, payload):
+            if error:
+                failures[pid] = error
+                logger.error("%s failed: %s", pid, error)
+            frames.append(frame)
+            counts.append({"patient_id": pid, **count})
+            logger.info("planned %s: %d of %d accepted", pid, count["accepted"], count["drawn"])
+    candidates = pd.concat(frames, ignore_index=True)
+    accepted = candidates[candidates["valid"].astype(bool)].reset_index(drop=True)
+    accepted["batch"] = patient_batches(accepted, selection).to_numpy()
+    source = pd.read_csv(noise["source_plan"], usecols=["candidate_id"], dtype=str)
+    overlap = int(accepted["candidate_id"].isin(source["candidate_id"]).sum())
+    if overlap:
+        raise typer.BadParameter(f"{overlap} planned beamlets are already in {noise['source_plan']}")
+    for store, c in zip(stores, (cfg, other)):
+        plan_dir = store / "plan"
+        plan_dir.mkdir(parents=True, exist_ok=True)
+        accepted.to_csv(plan_dir / "plan.csv", index=False)
+        candidates.to_csv(plan_dir / "candidates.csv", index=False)
+        selection.merge(pd.DataFrame(counts), on="patient_id").to_csv(plan_dir / "noise_selection.csv", index=False)
+        (plan_dir / "energy_mixing_check.csv").write_bytes(mixing.read_bytes())
+        primaries = float(c["robustness"]["num_primaries"])
+        est = {**estimate(accepted, primaries, int(c.get("n_processes", 1))),
+               "by_anatomy": accepted.groupby("anatomy").size().to_dict(), "failures": failures,
+               "num_primaries": primaries, "pair_store": str(stores[1] if store == stores[0] else stores[0]),
+               "noise": noise, "settings": settings.__dict__}
+        (plan_dir / "estimate.json").write_text(json.dumps(est, indent=2, default=str))
+        logger.info("%g primaries: %d beamlets of %d patients in %d batches, about %.1f MC hours (full machine)"
+                    " -> %s", primaries, len(accepted), accepted["patient_id"].nunique(),
+                    accepted["batch"].nunique(), est["mc_hours_full_machine"], plan_dir)
 
 
 if __name__ == "__main__":
