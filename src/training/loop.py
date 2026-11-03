@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -48,8 +48,18 @@ def train_one_epoch(
     run_dir: Path,
     max_batches: Optional[int],
     loss_mode: str,
+    max_grad_norm: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """Run one training epoch; returns aggregate stats."""
+    """Run one training epoch; returns aggregate stats.
+
+    ``max_grad_norm``, when set, clips the global gradient norm to that value
+    before each optimizer step (:func:`torch.nn.utils.clip_grad_norm_`); the
+    stats then count the clipped steps. The per-step norms are measured before
+    clipping in every case, so their median and maximum describe the training
+    whether or not it is clipped.
+    """
+    if max_grad_norm is not None and not max_grad_norm > 0:
+        raise ValueError(f"max_grad_norm must be positive or None, got {max_grad_norm}")
     model.train()
     sum_loss = 0.0
     sum_loss_mse = 0.0
@@ -57,6 +67,8 @@ def train_one_epoch(
     timings = {"load_s": [], "forward_s": [], "backward_s": []}
     n_batches = 0
     last_grad_norm: Optional[float] = None
+    grad_norms: List[float] = []
+    n_clipped = 0
 
     # Heartbeat: aim for ~10 [TRAIN] lines per epoch regardless of size.
     try:
@@ -133,6 +145,10 @@ def train_one_epoch(
         t_bwd = perf_counter()
         loss.backward()
         last_grad_norm = compute_grad_norm(model)
+        grad_norms.append(last_grad_norm)
+        if max_grad_norm is not None and last_grad_norm > max_grad_norm:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+            n_clipped += 1
         optimizer.step()
         timings["backward_s"].append(perf_counter() - t_bwd)
 
@@ -166,6 +182,10 @@ def train_one_epoch(
         "t_forward_mean_s": float(np.mean(timings["forward_s"])) if timings["forward_s"] else 0.0,
         "t_backward_mean_s": float(np.mean(timings["backward_s"])) if timings["backward_s"] else 0.0,
         "grad_norm_last": last_grad_norm,
+        "grad_norm_median": float(np.median(grad_norms)) if grad_norms else None,
+        "grad_norm_max": float(np.max(grad_norms)) if grad_norms else None,
+        "max_grad_norm": max_grad_norm,
+        "n_clipped": n_clipped,
         "param_norm": compute_param_norm(model),
     }
 

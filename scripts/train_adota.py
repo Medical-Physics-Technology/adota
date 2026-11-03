@@ -453,7 +453,7 @@ def main(
             epoch=epoch,
             run_dir=run_dir,
             max_batches=smoke_train_batches,
-            loss_mode=cfg.loss_mode,
+            loss_mode=cfg.loss_mode, max_grad_norm=cfg.max_grad_norm,
         )
 
         if train_stats.get("n_batches", 0) > 0:

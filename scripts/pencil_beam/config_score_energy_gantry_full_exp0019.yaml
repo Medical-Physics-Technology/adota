@@ -1,0 +1,63 @@
+# MC vs pencil beam vs ADoTA v11 vs the EXP-0019 ADoTA on the paper's energy x gantry beamlet grids
+# ===============================================================================================
+#   uv run python scripts/pencil_beam/score_saved_beamlets.py \
+#       --config scripts/pencil_beam/config_score_energy_gantry_full_exp0019.yaml --stages adota,score,report
+#
+# The same 36 blocks (11,531 beamlets) as config_score_energy_gantry_full.yaml (EXP-0018). The saved MC,
+# PBA and v11 files are used as they are; the only files added to a source directory are the EXP-0019
+# predictions ({id}_ds_pred_final_attndrop0.npy) and their provenance, each created exclusively.
+# Metrics, rankings and figures go to output_root. Guide: scripts/docs/score_saved_beamlets.md
+
+output_root: /scratch/mstryja/pencil_beam/engine_comparison/energy_gantry_full_exp0019
+
+sources:
+  - /scratch/mstryja/DoTA_dataset_v2/energy_gantry_full_thoracic_*
+  - /scratch/mstryja/DoTA_dataset_v2/energy_gantry_full_abdominal_*
+
+selection:
+  grid_n: 18
+  min_beamlets: 200
+
+generation_config: scripts/mc/config_energy_gantry_full.yaml
+
+# Scored against the saved MC, in this order (rows of every figure). `suffix` is the file next to
+# {id}_ds.npy; a missing one is added by the pba / adota stage from the engine's model.
+engines:
+  - name: PBA
+    kind: pencil_beam
+    suffix: _ds_pba.npy
+    dosecuda_kernels: /home/mstryja/tools/dosecuda/current/dose_kernels.so
+    model_dir: /home/mstryja/tools/dosecuda/models/hptc_rsnone_mcsquare_v1   # EXP-0018's model
+    gpu_id: 0
+  - name: v11
+    kind: adota
+    suffix: _ds_pred.npy
+    model_dir: /home/mstryja/projects/adota/models/DoTA_v3_grid_search_v11  # the paper's model
+    fname: best_model.pth
+    device_index: 0
+    batch_size: 56
+  - name: final_attndrop0
+    kind: adota
+    suffix: _ds_pred_final_attndrop0.npy
+    model_dir: /home/mstryja/projects/adota/models/ADoTA_EXP0019_final_attndrop0   # EXP-0019
+    fname: best_model.pth
+    device_index: 0
+    batch_size: 56
+
+# Extra summary groups by patient. Lung_Dx-G0037 and StageII-Colorectal-CT-230 are training scans of
+# both ADoTA models (grid match, src/active_learning/beamlet_pool/registry.py::match_training; R role in
+# the EXP-0014 partition); the other four CTs are unseen by both.
+summary_groups:
+  unseen_cts: [Lung_Dx-G0049, Lung_Dx-G0056, StageII-Colorectal-CT-222, StageII-Colorectal-CT-225]
+  training_cts: [Lung_Dx-G0037, StageII-Colorectal-CT-230]
+
+scoring:
+  gamma_criteria:               # ranking key first: 3%/3mm, 10% cutoff, global (MC maximum)
+    - {dose: 3, dist: 3, cutoff: 10}
+    - {dose: 2, dist: 2, cutoff: 10}
+    - {dose: 1, dist: 1, cutoff: 10}
+  workers: 40
+
+report:
+  n: 3                          # best and worst n per engine
+  figures: true

@@ -1,10 +1,45 @@
-# `score_saved_beamlets.py`: the pencil beam on saved MC beamlet grids
+# `score_saved_beamlets.py`: dose engines on saved MC beamlet grids
 
-Runs the commissioned pencil beam (PBA) on beamlet directories that the MC generator
-already wrote, for example the paper's energy x gantry grids. It then scores the PBA
-and the **saved** ADoTA prediction (`{id}_ds_pred.npy`) against the **saved** MC
-(`{id}_ds.npy`) by gamma pass rate, and renders the best and worst beamlets of each
-engine. No new MC and no new ADoTA inference are run.
+Scores a list of dose engines against the **saved** MC (`{id}_ds.npy`) on beamlet
+directories that the MC generator already wrote, for example the paper's energy x
+gantry grids: the commissioned pencil beam (PBA) and any number of ADoTA models. It
+adds whatever engine output is missing, ranks every engine by gamma pass rate, and
+renders the best and worst beamlets of each engine with all engines in one figure.
+No new MC is run. The input data (`sources`, `generation_config`), the engines and
+the criteria are all config, so the same script compares a newly trained model:
+add it to `engines:` and only its predictions are computed and scored.
+
+## Engines
+
+```yaml
+engines:                               # scored in this order; one row per engine in every figure
+  - name: PBA
+    kind: pencil_beam                  # DoseCUDA: dosecuda_kernels, model_dir, gpu_id
+    suffix: _ds_pba.npy                # the engine's file next to {id}_ds.npy
+    dosecuda_kernels: /home/mstryja/tools/dosecuda/current/dose_kernels.so
+    model_dir: /home/mstryja/tools/dosecuda/models/hptc_rsnone_mcsquare_v1
+  - name: v11
+    kind: adota                        # a models/<name>/ folder: model_dir, fname, device_index, batch_size
+    suffix: _ds_pred.npy
+    model_dir: models/DoTA_v3_grid_search_v11
+  - name: final_attndrop0
+    kind: adota
+    suffix: _ds_pred_final_attndrop0.npy
+    model_dir: models/ADoTA_EXP0019_final_attndrop0
+```
+
+- `name` labels the figures and prefixes the score columns (lower case: `pba_g3_3_10`,
+  `final_attndrop0_r80_delta_mm`). Names, prefixes and suffixes must be unique, and a
+  suffix looks like `_ds_<name>.npy` (never `_ds.npy`, the MC).
+- Each engine has its own provenance file in a source directory: `pba_provenance.json`
+  and `adota_provenance.json` for the default files, `adota_provenance<suffix>.json`
+  (for example `adota_provenance_ds_pred_final_attndrop0.json`) for the others.
+- A config without `engines:` but with `pencil_beam:` and `adota:` blocks (the EXP-0018
+  config) is read as `PBA` (`_ds_pba.npy`) and `ADoTA` (`_ds_pred.npy`): its column
+  names and scores are unchanged.
+- `summary_groups` (optional) adds named groups of patients to the summary, for
+  example the CTs a model was or was not trained on.
+- A model folder for an ADoTA engine is what `model_hpo_training.py export` writes.
 
 The pencil beam is [DoseCUDA](https://github.com/jhu-som-radiation-oncology/DoseCUDA) (Bhattacharya et al., J Appl Clin Med Phys 2025 ([doi:10.1002/acm2.70093](https://doi.org/10.1002/acm2.70093))); its source, the pinned version, the licence and the citation to use are in
 [docs/pencil_beam.md](../../docs/pencil_beam.md#source-version-licence-and-citation).
@@ -13,13 +48,13 @@ The pencil beam is [DoseCUDA](https://github.com/jhu-som-radiation-oncology/Dose
 temporary file hard-linked to the target, which fails if the target exists). No
 existing file is modified or replaced, by a rerun or by a crash. What may be added:
 
-- `{id}_ds_pba.npy` per beamlet, plus one `pba_provenance.json` per directory: model
+- Per pencil-beam engine, its file per beamlet plus its provenance file: model
   fingerprint, kernel build, code commit, settings.
-- For beamlets that have no ADoTA prediction only: `{id}_ds_pred.npy` and
-  `adota_provenance.json`.
+- Per ADoTA engine, only for beamlets without its file: the prediction and its
+  provenance file (checkpoint sha256, code commit).
 
-A directory whose `pba_provenance.json` names a different model is refused, so two
-models never mix in one place. Metrics, rankings and figures go to `output_root`.
+A directory whose provenance file names a different model is refused, so two models
+never mix under one suffix. Metrics, rankings and figures go to `output_root`.
 
 ```bash
 uv run python scripts/pencil_beam/score_saved_beamlets.py \
@@ -30,14 +65,14 @@ uv run python scripts/pencil_beam/score_saved_beamlets.py \
 
 | Stage | Does |
 |---|---|
-| `pba` | Rebuilds each field's canonical CT from the source DICOM with the generation config (`field_geometry`): resample, rotate, trim. It verifies **all** of a field's crops (each must equal the saved `_ct.npy` bit for bit) **before writing anything**. Then it ray-traces once per field and adds `{id}_ds_pba.npy` per beamlet, computed in that beamlet's crop window. Beamlets that already have one are skipped. |
-| `adota` | Only where a beamlet has no `_ds_pred.npy`: runs ADoTA (`adota:` block) and adds the prediction. Existing predictions are used as they are. A no-op for directories that already have them. |
-| `score` | Gamma per criterion and dose agreement (range deltas, dose differences) of the PBA and the saved ADoTA against the saved MC, per beamlet, on a process pool. |
-| `report` | Best and worst `n` beamlets per engine by the first criterion, with ties broken by the stricter criteria and then the mean dose difference. Each gets a three-engine figure. |
+| `pba` | Rebuilds each field's canonical CT from the source DICOM with the generation config (`field_geometry`): resample, rotate, trim. It verifies **all** of a field's crops (each must equal the saved `_ct.npy` bit for bit) **before writing anything**. Then it ray-traces once per field and adds each pencil-beam engine's file per beamlet, computed in that beamlet's crop window. Beamlets that already have one are skipped. |
+| `adota` | Per ADoTA engine, only where a beamlet has no file under its suffix: runs the model and adds the prediction. Existing files are used as they are. A no-op when every beamlet has them. |
+| `score` | Gamma per criterion and dose agreement (range deltas, dose differences) of every engine against the saved MC, per beamlet, on a process pool. Cached per block in `metrics.json`: an engine already scored there for every beamlet and criterion is not scored again, so adding a model scores only that model. |
+| `report` | Best and worst `n` beamlets per engine by the first criterion, with ties broken by the stricter criteria and then the mean dose difference. Each gets a figure of all engines. Also `summary.json` and `summary_table.csv`. |
 
-All stages are resumable. `--rescore` recomputes scores. Pencil-beam files are never
-replaced; to recompute with another model, delete the directory's `_ds_pba.npy` files
-and its `pba_provenance.json` by hand. `--limit-blocks` and `--limit-beamlets` make a
+All stages are resumable. `--rescore` recomputes all scores. Engine files are never
+replaced; to recompute an engine with another model, give it a new suffix, or delete
+its files and its provenance file by hand. `--limit-blocks` and `--limit-beamlets` make a
 smoke run, and `--dry-run` lists the selection and runs the full geometry check
 without writing anything.
 
@@ -102,12 +137,16 @@ Everything else is logged with the reason and written to `run_config.json`; the
 ```
 <output_root>/
   run_config.json                    resolved config, selected and excluded blocks, provenance
-  all_beamlets.csv                   one row per beamlet: gamma per criterion and dose agreement, both engines
-  summary.json                       median / mean / p5 / min per engine, overall, per anatomy, per energy
-  ranking_best_worst_10_g3_3_10_global.csv
-  figures/{pba|adota}_{best|worst}NN_<block>_<id>_g3_3_10_global.{svg,pdf,png}
-  <block>/metrics.json, pba_run.json
-<source block>/{id}_ds_pba.npy       added to the source: pencil beam, same (H, W, D) layout as _ds.npy
+  all_beamlets.csv                   one row per beamlet: gamma per criterion and dose agreement, every engine
+  summary.json                       median / mean / p5 / min per engine, overall, per anatomy, per energy,
+                                     per patient and per summary group
+  summary_table.csv                  one row per (group, engine): gamma mean / median / p5 / min / share
+                                     below 95% per criterion, |dR80| median and p95, mean |dose diff|
+  ranking_best_worst_<n>_g3_3_10_global.csv
+  figures/<engine>_{best|worst}NN_<block>_<id>_g3_3_10_global.{svg,pdf,png}
+  <block>/metrics.json, <pencil-beam engine>_run.json
+<source block>/{id}<suffix>          added to the source per engine (pencil beam: the (H, W, D) layout
+                                     of _ds.npy; ADoTA: its own (D, H, W) output)
 ```
 
 Gamma is global, normalised to the MC maximum, with a 10% cutoff. 3%/3mm is the

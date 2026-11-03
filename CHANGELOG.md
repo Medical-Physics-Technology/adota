@@ -15,6 +15,60 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 
 ### Added
 
+- **`src/model_search/`**: hyperparameter optimisation and training of a single
+  ADoTA model. `space` (`validate_space`, `suggest`, `build_candidate`,
+  `rejection`, `Candidate`: a YAML search space over `TrainingConfig` fields to
+  Optuna suggestions to a checked configuration), `runs` (`resolve_ids`,
+  `prepare_ids`, `scan_overlap`, `RunSpec`, `train_run`, `select_winner`: record
+  sets and one warmup-plus-cosine training run through `train_cycle`), `study`
+  (`open_study`, `fail_stale_trials`, `make_objective`, `stop_at_budget`,
+  `n_trained`, `top_trials`, `SearchContext`: the Optuna study on a journal file).
+- **`scripts/model_hpo_training.py`** with `scripts/config_model_hpo_training.yaml`:
+  commands `search`, `confirm`, `final`, `test`. New output format: a
+  `model_hpo_<ts>/` run directory with `ids/`, `search/study.journal`,
+  `search/trials.csv`, `confirm/results.csv`, `confirm/selection.json`,
+  `final/checkpoints/last.pth`, `test/summary.json`. Guide:
+  `scripts/docs/model_hpo_training.md`.
+- `src.active_learning.retrospective.trainer.train_cycle` takes an optional
+  `on_epoch(epoch, record)` callback, called after each epoch is logged and
+  checkpointed; existing callers are unchanged.
+- Dependency: `optuna>=4,<5`.
+- **Gradient clipping**: `TrainingConfig.max_grad_norm` (default `None`, off; existing
+  configs behave as before) and `train_one_epoch(..., max_grad_norm=None)`, passed
+  through by `train_cycle` and `scripts/train_adota.py`. New output format: every
+  epoch's training stats gain `grad_norm_median`, `grad_norm_max` (per-step norms
+  before clipping), `max_grad_norm` and `n_clipped`.
+- `model_hpo_training.py final` gains `--max-grad-norm`, `--warmup-epochs` (written
+  into the run's config under `final:` as a recorded deviation; `stage_overrides`)
+  and `--restart` (moves an existing `final/` to `final_aborted_<ts>/`).
+- `model_hpo_training.py final` gains `--dropout-rate` (the attention dropout, a
+  recorded deviation like the two above) and `--name final_<tag>`, which trains a
+  variant in `<run>/final_<tag>/` beside `final/`, inheriting the `final:`
+  overrides; `test` gains `--name` to evaluate the chosen one (the test set is
+  still used once per run). New helpers `final_overrides`, `final_config`.
+- `model_hpo_training.py export --run-dir <run> --name <final> --out models/<name>` writes a
+  final model as a deployable `models/<name>/` folder (`best_model.pth` as a bare state dict of
+  the weights `test` evaluated, `hyperparams.json` from `DoTA3D_v3.to_dict`, `provenance.json`,
+  `comments.txt`); `src.adota.utils.load_model` reads it.
+- **`scripts/pencil_beam/score_saved_beamlets.py` takes a list of engines** (`engines:`, each a
+  `name`, a `kind` of `pencil_beam` or `adota`, a file `suffix` and its model), so any number of
+  ADoTA models are scored beside the pencil beam on saved MC grids. New in
+  `src.pencil_beam.saved_beamlets`: `Engine`, `engine_tag`, `engines_from_config`,
+  `engines_to_score`, `load_doses`; `compute_field_pba` and `write_missing_predictions` gain
+  `suffix` and `provenance_file`; `score_beamlet` takes the engines as an optional fifth task
+  element. A config with `pencil_beam:` + `adota:` reads as before (`PBA`, `ADoTA`; same columns,
+  same scores). New output format: `summary_table.csv`, per-patient and `summary_groups` groups in
+  `summary.json`, per-engine provenance files (`adota_provenance<suffix>.json`), `<engine>_run.json`
+  instead of `pba_run.json` for a renamed pencil-beam engine, figure names prefixed by the engine
+  name, and `run_config.json` lists the engines and `pencil_beam_model_fingerprints` (was
+  `pencil_beam_model_fingerprint`). `metrics.json` is now a per-engine cache: `score` only scores
+  engines it does not hold.
+- `src.active_learning.retrospective.lr_schedule.fixed_lr` gains the
+  `"warmup_cosine"` schedule for runs that start from scratch: warmup epoch `e`
+  of `W` at `lr0 * (e + 1) / (W + 1)` and a cosine that ends above `lr_min`, so
+  no epoch trains at a learning rate of 0. `"cosine_per_cycle"` is unchanged.
+  `model_hpo_training.py` reads `lr_schedule` from its config (per stage
+  optionally) and defaults to `"cosine_per_cycle"` for runs frozen without it.
 - **`src/active_learning/retrospective/experiment_compare.py`**: compare two
   retrospective experiments run by run. `strategy_runs`, `pair_runs` (pairs on
   strategy and seed), `selection_identity` (same records in the same order per

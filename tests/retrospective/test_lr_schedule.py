@@ -227,3 +227,29 @@ def test_cosine_warmup_holds_across_cycles(tmp_path):
         assert lrs == pytest.approx([cfg.lr_min, lr0, cfg.lr_min], abs=1e-9), f"cycle {cycle}"
     manifest = json.loads((run_dir / "manifest.json").read_text())
     assert manifest["warmup_epochs"] == 1
+
+
+# ── warmup_cosine: every epoch of a from-scratch run trains ──────────────────
+
+
+@pytest.mark.parametrize("warmup", [0, 1, 3])
+def test_warmup_cosine_never_trains_at_zero(warmup):
+    lrs = [fixed_lr("warmup_cosine", 1e-3, 0.0, e, 20, warmup_epochs=warmup) for e in range(20)]
+    assert min(lrs) > 0.0
+    assert max(lrs) == pytest.approx(1e-3)
+    assert lrs[warmup] == pytest.approx(1e-3)                      # the peak right after the warmup
+    assert all(a < b for a, b in zip(lrs[:warmup], lrs[1:warmup + 1]))      # rising warmup
+    assert all(a > b for a, b in zip(lrs[warmup:], lrs[warmup + 1:]))       # strictly decaying after
+
+
+def test_warmup_cosine_first_warmup_epoch_and_last_epoch():
+    assert fixed_lr("warmup_cosine", 1e-3, 0.0, 0, 20, warmup_epochs=1) == pytest.approx(5e-4)
+    assert fixed_lr("warmup_cosine", 1e-3, 0.0, 0, 20, warmup_epochs=3) == pytest.approx(2.5e-4)
+    last = fixed_lr("warmup_cosine", 1e-3, 1e-5, 19, 20, warmup_epochs=0)
+    assert 1e-5 < last < 2e-5
+
+
+def test_cosine_per_cycle_is_unchanged_by_the_new_schedule():
+    # the AL loop's schedule still starts its warmup and ends its cycle at lr_min
+    assert fixed_lr("cosine_per_cycle", 1e-3, 0.0, 0, 20, warmup_epochs=1) == 0.0
+    assert fixed_lr("cosine_per_cycle", 1e-3, 0.0, 19, 20, warmup_epochs=1) == pytest.approx(0.0)

@@ -214,6 +214,11 @@ class TrainingConfig:
     balancer_smoothing: float = 0.9
     adaptive_after_epoch: int = 10_000  # disable adaptive balancing by default
 
+    # Gradient clipping: before every optimizer step, gradients whose global L2
+    # norm exceeds max_grad_norm are rescaled to that norm. None (the default)
+    # disables clipping, so runs without the key behave exactly as before.
+    max_grad_norm: Optional[float] = None
+
     # LPS pixel spacing (used to weight the IDD integral)
     lps_dx_mm: float = 2.0
     lps_dy_mm: float = 2.0

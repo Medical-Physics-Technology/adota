@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import math
 
-FIXED_LR_SCHEDULES = ("constant", "cosine_per_cycle")
+FIXED_LR_SCHEDULES = ("constant", "cosine_per_cycle", "warmup_cosine")
 ALL_LR_SCHEDULES = ("plateau",) + FIXED_LR_SCHEDULES
 
 
@@ -52,6 +52,17 @@ def fixed_lr(schedule: str, lr0: float, lr_min: float, epoch_in_cycle: int,
     it returns ``lr0``, as a one-epoch cycle does). ``W = 0`` is the formula
     above, unchanged.
 
+    ``"warmup_cosine"``: for a run that starts from scratch, where every epoch
+    should train. Starting the warmup at ``lr_min`` and ending the cosine at
+    ``lr_min`` costs such a run two epochs at a learning rate of 0 (a cycle of
+    the loop above continues a trained model, so there it is the right choice).
+    Here warmup epoch ``e < W`` trains at ``lr0 * (e + 1) / (W + 1)`` (the first
+    warmup epoch already learns, the last one is just below ``lr0``), and the
+    ``D = epochs_in_cycle - W`` remaining epochs follow a cosine from ``lr0`` that
+    stops one step short of ``lr_min``: epoch ``W + k`` trains at
+    ``lr_min + (lr0 - lr_min) * (1 + cos(pi * k / D)) / 2``, so the last epoch is
+    above ``lr_min``.
+
     Raises:
         ValueError: ``schedule`` is not one of :data:`FIXED_LR_SCHEDULES`
             (this includes ``"plateau"``, which has no fixed formula: it is
@@ -61,6 +72,12 @@ def fixed_lr(schedule: str, lr0: float, lr_min: float, epoch_in_cycle: int,
     if schedule not in FIXED_LR_SCHEDULES:
         raise ValueError(f"unknown fixed lr_schedule {schedule!r}; expected one of {FIXED_LR_SCHEDULES}")
     validate_warmup(warmup_epochs, epochs_in_cycle)
+    if schedule == "warmup_cosine":
+        if epoch_in_cycle < warmup_epochs:
+            return float(lr0 * (epoch_in_cycle + 1) / (warmup_epochs + 1))
+        decay_epochs = epochs_in_cycle - warmup_epochs
+        progress = (epoch_in_cycle - warmup_epochs) / decay_epochs
+        return float(lr_min + 0.5 * (lr0 - lr_min) * (1.0 + math.cos(math.pi * progress)))
     if warmup_epochs > 0:
         if epoch_in_cycle < warmup_epochs:
             return float(lr_min + (lr0 - lr_min) * epoch_in_cycle / warmup_epochs)
