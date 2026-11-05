@@ -120,7 +120,8 @@ warmup_epochs: 5
 # the 12 scans dropped, frozen-test Pearson 0.871 against the deployed 0.879, and
 # its scores agree with the deployed one at Pearson 1.000 (top-10 percent overlap
 # 0.98), so the leak was negligible; it is removed anyway so V is clean for every
-# strategy.
+# strategy. Do not swap in scorer v2 (src/acquisition/data/analytic_scorer_v2_exp0014.json)
+# here: 11 of these 12 V scans are among its fit scans, the leak this refit removed.
 scorer:
   name: difficulty
   scorer_path: src/acquisition/data/analytic_scorer_exp0012_train_patients.json

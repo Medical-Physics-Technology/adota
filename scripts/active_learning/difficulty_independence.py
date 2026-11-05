@@ -19,8 +19,7 @@ Writes into a timestamped directory under ``output_dir``:
 - ``transfer.csv``: Pearson of scorer v2, the deployed v1, and energy alone
   with the ensemble target and every engine's error;
 - ``spread.csv``: the members' disagreement, descriptively;
-- ``pool_scores.csv``: scorer v2 and the ensemble target per pool beamlet, which
-  ``al_build_beamlet_pool.py noise-plan`` draws the noise-floor beamlets from;
+- ``pool_scores.csv``: scorer v2 and the ensemble target per pool beamlet;
 - ``scorer_v2_fit.json`` (fit scans only, the evaluated one) and
   ``scorer_v2_unseen.json`` (fit scans plus F, for deployment);
 - ``summary.json`` with the verdict, and the resolved ``config.yaml``.
@@ -41,10 +40,13 @@ from src.acquisition.scorer import FULL, SPARSE, DifficultyScorer
 from src.active_learning.ensemble.independence import (
     EvalSet,
     Standardiser,
+    common_population,
     energy_baseline,
     fit_scorer,
+    inside_crop_features,
     leave_one_member_out,
     log_errors,
+    read_ids,
     scorer_json,
     transfer_table,
     verdict,
@@ -57,23 +59,6 @@ logger = logging.getLogger(__name__)
 METRICS = list(FEATURE_NAMES)
 DEFAULTS = {"output_dir": None, "error_metric": "rde_pct", "n_bootstrap": 2000, "seed": 0, "cv_splits": 5,
             "gate_members": []}
-
-
-def _ids(path: str) -> List[str]:
-    return pd.read_csv(path)["sample_id"].astype(str).tolist()
-
-
-def _features(path: str) -> pd.DataFrame:
-    """Analytic features of the beamlets whose peak lies inside the crop: the
-    population the deployed score is defined on."""
-    frame = pd.read_csv(path)
-    frame["sample_id"] = frame["sample_id"].astype(str)
-    return frame[frame["peak_inside_crop"].astype(bool)].set_index("sample_id")
-
-
-def _population(features: pd.DataFrame, errors: pd.DataFrame, ids: Optional[List[str]]) -> List[str]:
-    keep = features.index.intersection(errors.dropna().index)
-    return [i for i in ids if i in set(keep)] if ids is not None else sorted(keep)
 
 
 def _test_set(name: str, features: pd.DataFrame, z: pd.DataFrame, scans: pd.Series, ids: List[str]) -> EvalSet:
@@ -96,12 +81,12 @@ def main(
     gate = [m for m in cfg["gate_members"] if m in ladder]
 
     # v3: fit scans and F.
-    v3_feat = _features(cfg["v3_features"])
+    v3_feat = inside_crop_features(cfg["v3_features"])
     v3_scans = pd.read_csv(cfg["v3_index"], usecols=["sample_id", "patient_key"]).astype(str) \
         .set_index("sample_id")["patient_key"]
     v3_err = log_errors(cfg["ladder"], metric)
-    fit_ids = _population(v3_feat, v3_err, _ids(cfg["v3_fit_ids"]))
-    f_ids = _population(v3_feat, v3_err, _ids(cfg["v3_f_ids"]))
+    fit_ids = common_population(v3_feat, v3_err, read_ids(cfg["v3_fit_ids"]))
+    f_ids = common_population(v3_feat, v3_err, read_ids(cfg["v3_f_ids"]))
     std = Standardiser.fit(v3_err.loc[fit_ids])
     v3_z = std(v3_err)
     ext_err = log_errors(cfg["external_f"], metric)
@@ -117,10 +102,10 @@ def main(
     if missing:
         raise typer.BadParameter(f"no pool errors for {missing} in {pool_dir}")
     pool_err = log_errors(pool_paths, metric)
-    pool_feat = _features(cfg["pool_features"])
+    pool_feat = inside_crop_features(cfg["pool_features"])
     pool_index = pd.read_csv(cfg["pool_index"], usecols=["sample_id", "pool_patient_id", "pool_anatomy"]) \
         .astype(str).set_index("sample_id")
-    pool_ids = _population(pool_feat, pool_err, None)
+    pool_ids = common_population(pool_feat, pool_err, None)
     ext_pool = list(cfg["pool_external"])
     pool_z = std(pool_err[ladder]).join(Standardiser.fit(pool_err.loc[pool_ids, ext_pool])(pool_err[ext_pool]))
     pool_scans = pool_index["pool_patient_id"]

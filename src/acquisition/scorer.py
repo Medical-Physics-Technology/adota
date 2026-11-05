@@ -24,6 +24,10 @@ N_GRID = 101
 # The deployed input-only score (EXP-0006), fitted on beamlets whose peak lies
 # inside the crop; apply it only to candidates that pass `peak_inside_crop`.
 DEPLOYED_SCORER = Path(__file__).parent / "data" / "analytic_scorer.json"
+# The model-independent score (EXP-0014): fitted to the mean error of five models on
+# 19 v3 scans. 11 of the 12 scans EXP-0012 holds out as V are among them, so it must
+# not be used with that V; the retrospective config keeps its own refit for this reason.
+SCORER_V2 = Path(__file__).parent / "data" / "analytic_scorer_v2_exp0014.json"
 
 
 def percentile_grids(frame: pd.DataFrame, metrics: Sequence[str]) -> Dict[str, np.ndarray]:

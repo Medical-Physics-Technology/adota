@@ -15,6 +15,20 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 
 ### Added
 
+- **Scorer v2 in the active-learning loop**: `scripts/config_al.yaml` sets
+  `candidates.scorer_path` to the vendored
+  `src/acquisition/data/analytic_scorer_v2_exp0014.json` (`src.acquisition.scorer.SCORER_V2`).
+  `CandidateConfig` gains `scorer_path`; without it the deployed v1 score stays the
+  default. `scripts/config_al_retro_loop.yaml` keeps its own refit: 11 of its 12 V scans
+  are among scorer v2's fit scans.
+- **`scripts/active_learning/difficulty_noise_floor.py`** with its config and guide: the
+  EXP-0014 noise-floor analysis on the paired 1e6 / 1e7 beamlets, with a fixed pass rule.
+  New in `src.active_learning.ensemble.noise_floor`: `partial_pearson_with_interval`,
+  `agreement_drop`, `peak_statistics`, `renormalised_errors`, `top_k_overlap`,
+  `score_decile_table`, `NoiseFloorThresholds`, `noise_floor_checks`; `floor_ratio` takes `primaries_ratio`. New in
+  `src.active_learning.ensemble.independence`: `read_ids`, `inside_crop_features`,
+  `common_population`. New figure `src.figures.ensemble_agreement.noise_floor_figure`.
+  `src.figures.hpo.finalist_beamlet_figure` takes `reference_label` and `plane_titles`.
 - **`al_build_beamlet_pool.py noise-plan`** with
   `scripts/config_beamlet_pool_noise_1e6.yaml` and `_1e7.yaml`: new beamlets of a
   few test patients from the pool planner, planned into the stores of two Monte

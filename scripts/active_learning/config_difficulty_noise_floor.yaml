@@ -1,0 +1,42 @@
+# EXP-0014 noise floor: the paired 1e6 / 1e7 beamlets against the model-independence verdict
+# uv run python scripts/active_learning/difficulty_noise_floor.py \
+#     --config scripts/active_learning/config_difficulty_noise_floor.yaml --device-index <gpu>
+
+output_dir: /scratch/mstryja/adota_runs/exp0014/independence/analysis
+
+# The fit scans, ladder and quality-gate members of the closing analysis.
+independence_config: scripts/active_learning/config_difficulty_independence.yaml
+scorer_v2: /scratch/mstryja/adota_runs/exp0014/independence/analysis/difficulty_independence_20261103_163607/scorer_v2_fit.json
+
+# config_independence_noise_{1e6,1e7}.yaml: every engine on the same 979 beamlets.
+members_1e6: /scratch/mstryja/adota_runs/exp0014/independence/infer_noise_1e6/ensemble_agreement_20261104_153759/members
+members_1e7: /scratch/mstryja/adota_runs/exp0014/independence/infer_noise_1e7/ensemble_agreement_20261104_153759/members
+h5_1e6: /scratch/mstryja/adota_pool/exports/v1_noise_1e6_test.h5
+h5_1e7: /scratch/mstryja/adota_pool/exports/v1_noise_1e7_test.h5
+features: /scratch/mstryja/adota_runs/exp0014/independence/features_noise/features_analytic.csv
+index: /scratch/mstryja/adota_pool/exports/v1_noise_1e6_test_index.csv
+
+# The decision rule, agreed before the per-beamlet results (the gap's own rule is verdict()).
+thresholds:
+  target_min_pearson: 0.95
+  agreement_max_drop: 0.02
+  score_max_partial: 0.20
+
+robust_percentile: 99.9        # the robust maximum of the hottest-voxel sensitivity
+spike_depth_mm: 10.0           # a 1e6 maximum this far from the 1e7 one in depth counts as displaced
+n_bootstrap: 2000
+seed: 0
+
+# The engines' criteria (2%/2mm, 10% cutoff), so the floor is on their scale.
+gamma_params:
+  dose_percent_threshold: 2
+  distance_mm_threshold: 2
+  interp_fraction: 10
+  max_gamma: 2
+  lower_percent_dose_cutoff: 10
+  random_subset: null
+  local_gamma: false
+  quiet: true
+gamma_resolution_mm: [2.0, 2.0, 2.0]
+gamma_cutoff_percent: 10.0
+gamma_backend: torch

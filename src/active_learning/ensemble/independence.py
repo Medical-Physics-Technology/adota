@@ -42,6 +42,25 @@ score keeps the study's sparsity on a standardised target."""
 ENERGY_BIN_MEV = 10.0
 
 
+def read_ids(path: str) -> List[str]:
+    """The ``sample_id`` column of a CSV."""
+    return pd.read_csv(path)["sample_id"].astype(str).tolist()
+
+
+def inside_crop_features(path: str) -> pd.DataFrame:
+    """Analytic features of the beamlets whose peak lies inside the crop: the
+    population the deployed score is defined on."""
+    frame = pd.read_csv(path)
+    frame["sample_id"] = frame["sample_id"].astype(str)
+    return frame[frame["peak_inside_crop"].astype(bool)].set_index("sample_id")
+
+
+def common_population(features: pd.DataFrame, errors: pd.DataFrame, ids: Optional[List[str]]) -> List[str]:
+    """``ids`` (in their order; all sorted if ``None``) with features and every error defined."""
+    keep = features.index.intersection(errors.dropna().index)
+    return [i for i in ids if i in set(keep)] if ids is not None else sorted(keep)
+
+
 def log_errors(paths: Mapping[str, str], metric: str = "rde_pct") -> pd.DataFrame:
     """``log(1 + metric)`` of every member, one column per label, indexed by sample id."""
     cols = {label: pd.read_csv(path, usecols=["sample_id", metric]).set_index("sample_id")[metric]
