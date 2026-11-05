@@ -25,7 +25,7 @@ It runs on the CPU in under a minute and reads only the HDF5 keys, the
 
 | Step | Rule |
 |---|---|
-| D | every record of `dataset_path` not on `exclude_indexes_path` |
+| D | every record of `dataset_path` not on `exclude_indexes_path`, if set |
 | Scan | `group_column` (`patient_key` on v3: one CT scan) |
 | F | every scan with at least one record in `frozen_test_ids`; the whole scan belongs to F |
 | V | every scan whose provenance `patient` string is in `held_out_patients` |

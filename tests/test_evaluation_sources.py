@@ -15,12 +15,8 @@ import torch
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LUNG = Path("/scratch/mstryja/DoTA_dataset_v2/lung_testset_paper")
 H5_PATH = Path(
-    "/scratch/mstryja/DoTA_dataset_v2/"
-    "trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5"
-)
-EXCLUDE_FILE = Path(
-    "/home/mstryja/projects/dota_pytorch/auxilary_files/"
-    "IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt"
+    "/scratch/mstryja/DoTA_dataset_v3/"
+    "trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5"
 )
 
 
@@ -78,10 +74,7 @@ def test_h5source_matches_dataset():
 
     with h5py.File(str(H5_PATH), "r") as ds:
         all_ids = sorted(ds.keys())
-    excluded = set()
-    if EXCLUDE_FILE.exists():
-        excluded = {ln.strip() for ln in EXCLUDE_FILE.read_text().splitlines() if ln.strip()}
-    record_ids = [r for r in all_ids if r not in excluded][:3]
+    record_ids = all_ids[:3]
 
     dataset = H5PYGenerator(
         file_path=str(H5_PATH),
@@ -116,10 +109,7 @@ def test_h5source_defaults_record_ids_from_dataset():
 
     with h5py.File(str(H5_PATH), "r") as ds:
         all_ids = sorted(ds.keys())
-    excluded = set()
-    if EXCLUDE_FILE.exists():
-        excluded = {ln.strip() for ln in EXCLUDE_FILE.read_text().splitlines() if ln.strip()}
-    record_ids = [r for r in all_ids if r not in excluded][:3]
+    record_ids = all_ids[:3]
 
     dataset = H5PYGenerator(
         file_path=str(H5_PATH),

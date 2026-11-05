@@ -32,8 +32,8 @@ def find_json(uid):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--h5", default="/scratch/mstryja/DoTA_dataset_v2/"
-                    "trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5")
+    ap.add_argument("--h5", default="/scratch/mstryja/DoTA_dataset_v3/"
+                    "trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5")
     ap.add_argument("--out", default="/scratch/mstryja/DoTA_dataset_v2/"
                     "centerline_params_trainset_pelvis_initial_test_one_ct.csv")
     args = ap.parse_args()

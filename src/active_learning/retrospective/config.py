@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields
 from typing import Any, Dict, List, Optional
 
-from src.active_learning.retrospective.dataset import DEFAULT_EXCLUDE_PATH
 from src.active_learning.retrospective.lr_schedule import ALL_LR_SCHEDULES, validate_warmup
 from src.active_learning.retrospective.validation import MetricSettings
 from src.adota.config import DEFAULT_GAMMA_PARAMS, DEFAULT_SCALE
@@ -26,7 +25,7 @@ class RetroConfig:
 
     experiment: str = "EXP-0009"
     dataset_path: str = ""
-    exclude_indexes_path: str = DEFAULT_EXCLUDE_PATH
+    exclude_indexes_path: Optional[str] = None
     max_energy_mev: Optional[float] = 250.0
     """Records above this energy are dropped when the splits are drawn (MCsquare's
     nuclear data ends at 250 MeV). Splits already frozen are not touched."""
@@ -128,7 +127,7 @@ class RetroConfig:
         valid = {f.name for f in fields(TrainingConfig)}
         block = {k: v for k, v in self.training.items() if k in valid}
         block.update(dataset_path=self.dataset_path,
-                     excluded_indexes_file=self.exclude_indexes_path,
+                     excluded_indexes_file=self.exclude_indexes_path or "",
                      seed=self.seed, runs_dir=self.runs_dir,
                      device_index=self.device_index if self.device_index is not None else 0,
                      gamma_params=dict(self.gamma_params),
