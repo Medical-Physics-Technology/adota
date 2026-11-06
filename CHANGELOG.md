@@ -35,8 +35,8 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   Carlo realisations (the noise floor of EXP-0014). New module
   `src.active_learning.beamlet_pool.noise` (`select_patients`, `patient_batches`,
   `pair_config_differences`). New output: `<store>/plan/noise_selection.csv`.
-- **`scripts/active_learning/difficulty_independence.py`** with
-  `src.active_learning.ensemble.independence` and
+- **`scripts/active_learning/difficulty_independence.py`** with its config, its guide, a
+  `manifest.json` in every run, `src.active_learning.ensemble.independence` and
   `src.active_learning.ensemble.noise_floor`: the EXP-0014 closing analysis
   (leave-one-member-out gap, scorer v2) and the noise-floor diagnostics.
 - **`src/model_search/`**: hyperparameter optimisation and training of a single
