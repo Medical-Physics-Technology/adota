@@ -39,11 +39,8 @@ experiment: EXP-0012
 # v3 (CHG-0011): the v2 records byte for byte plus per-record provenance
 # (patient_key, source_dataset, ...), read from the index CSV beside the file.
 dataset_path: /scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5
-# Mandatory. A missing file is an error, never an unfiltered set. A copy is
-# vendored at data/excluded_indexes/ and cross-checked against this one. v3 was
-# built with this list applied, so on v3 it drops nothing; it stays for the
-# manifest fingerprint and because the loader opens it.
-exclude_indexes_path: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
+# exclude_indexes_path is unset: v3 was built with the list applied and holds no
+# empty-dose record. Set it only for a file that still needs one.
 # sample_id -> anatomy, patient_key of the difficulty study; feeds the selection
 # fingerprint. Optional: without it patient and anatomy read "unknown".
 record_provenance_csv: /scratch/mstryja/adota_runs/20260707_124010/figures/acquisition/uuid_provenance_map.csv

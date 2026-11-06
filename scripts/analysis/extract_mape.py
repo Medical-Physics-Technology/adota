@@ -32,7 +32,7 @@ from src.evaluation.sources import H5Source
 from src.loaders.generator import H5PYGenerator
 from src.schemas.configs import AdvancedAnalysisConfig
 
-H5 = "/scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5"
+H5 = "/scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5"
 MODEL_DIR = Path("/home/mstryja/projects/adota/models/DoTA_v3_grid_search_v11")
 THRESHOLDS = [(0.05, "mape_5pct"), (0.10, "mape_10pct")]
 

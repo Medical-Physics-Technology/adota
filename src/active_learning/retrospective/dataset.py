@@ -22,7 +22,7 @@ import json
 import logging
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Union
 
 import h5py
 import numpy as np
@@ -35,7 +35,6 @@ logger = logging.getLogger(__name__)
 
 EXCLUDE_FILE_NAME = (
     "IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt")
-DEFAULT_EXCLUDE_PATH = f"/home/mstryja/projects/dota_pytorch/auxilary_files/{EXCLUDE_FILE_NAME}"
 VENDORED_EXCLUDE_PATH = (
     Path(__file__).resolve().parents[3] / "data" / "excluded_indexes" / EXCLUDE_FILE_NAME)
 
@@ -47,15 +46,18 @@ SPLIT_FILES = {"validation": "validation_ids.csv", "training": "training_ids.csv
 
 
 def read_exclusion_list(path: Path) -> List[str]:
-    """The record ids to drop, one per line. A missing file is an error, never an
-    unfiltered set."""
+    """The record ids to drop, one per line. A named file that is missing is an error."""
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(
-            f"exclusion list {path} is missing; refusing to run on an unfiltered set. "
-            f"Point exclude_indexes_path at the list (a copy is vendored at "
-            f"{VENDORED_EXCLUDE_PATH}).")
+            f"exclusion list {path} is missing. Point the setting at the list (one is kept "
+            f"at {VENDORED_EXCLUDE_PATH}), or unset it for a file that needs no exclusions.")
     return [line.strip() for line in path.read_text().splitlines() if line.strip()]
+
+
+def read_optional_exclusions(path: Optional[Union[str, Path]]) -> List[str]:
+    """The ids of the list at ``path``; no path means nothing is excluded, as on v3."""
+    return read_exclusion_list(Path(path)) if path else []
 
 
 def cross_check_exclusions(path: Path, vendored: Path = VENDORED_EXCLUDE_PATH) -> Dict:

@@ -10,7 +10,6 @@ experiment: EXP-0014
 output_dir: /scratch/mstryja/adota_runs/exp0014/hpo
 partition_dir: /scratch/mstryja/adota_runs/exp0014/partition
 dataset_path: /scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5
-exclude_indexes_path: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
 devices: [1, 2]               # GPU 0 is shared with another user
 
 # Data. Training: every record of the 30 HPO training scans (35,985), unless

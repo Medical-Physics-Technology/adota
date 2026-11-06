@@ -12,7 +12,7 @@ from src.schemas.configs import AdvancedAnalysisConfig
 from src.utils.scallers import inverse_minmax
 from src.utils.unit_conversions import legacy_to_gy_per_1e6_protons
 
-H5 = "/scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5"
+H5 = "/scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5"
 MODEL_DIR = Path("/home/mstryja/projects/adota/models/DoTA_v3_grid_search_v11")
 OUT = Path("/home/mstryja/projects/adota/research/figures/acquisition")
 BEAMS = [  # (label, uuid)

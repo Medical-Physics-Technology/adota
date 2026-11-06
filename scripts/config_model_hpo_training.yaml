@@ -12,7 +12,6 @@
 experiment: null              # the EXP record id, once the record exists
 output_dir: /scratch/mstryja/adota_runs/model_hpo
 dataset_path: /scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5
-exclude_indexes_path: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
 max_energy_mev: 250.0         # MCsquare's nuclear tables end at 250 MeV (src/datasets/energy_cut.py)
 devices: [0, 1, 2]            # one search worker (and one confirmation run) per GPU
 # Learning-rate schedule of every run (src/active_learning/retrospective/lr_schedule.py):
