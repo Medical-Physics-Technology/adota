@@ -12,7 +12,6 @@ experiment: EXP-0014
 stage: independence_noise_1e6
 output_dir: /scratch/mstryja/adota_runs/exp0014/independence/infer_noise_1e6
 dataset_path: /scratch/mstryja/adota_pool/exports/v1_noise_1e6_test.h5
-excluded_indexes_file: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
 metadata_csv: null            # read from the HDF5's <stem>_index.csv
 group_column: patient_key     # a cell is one scan ...
 energy_column: energy_mev     # ... times one 20 MeV energy bin
