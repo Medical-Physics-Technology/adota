@@ -147,7 +147,8 @@ def run_finalists(hpo_cfg: Dict[str, Any], hpo_dir: Path, trials: Dict[str, Dict
     for trial in order:
         t = trials[trial]
         config = replace(trial_config(hpo_cfg["training"], t["params"], dataset_path=hpo_cfg["dataset_path"],
-                                      excluded_indexes_file=hpo_cfg["exclude_indexes_path"], mixer=t["mixer"]),
+                                      excluded_indexes_file=hpo_cfg.get("exclude_indexes_path") or "",
+                                      mixer=t["mixer"]),
                          compile=False, num_workers=0)
         if "x" not in out:
             x, energy, y = next(iter(validation_loader(config, [sample_id])))

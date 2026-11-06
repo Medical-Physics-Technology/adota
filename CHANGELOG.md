@@ -13,6 +13,27 @@ supplies an analytic dose from the CT, the flux and the energy instead, and
 exposes the score as one call on a full CT grid for the active-learning loop.
 Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 
+### Changed (v3 is the training dataset)
+
+- **The v2 training HDF5 and the `dota_pytorch` checkout are gone, so nothing points
+  at them any more.** 34 configs, scripts and tests move to
+  `/scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5`.
+  `scripts/docs/build_beamlet_h5.md` keeps its v2 references: it describes the
+  v2-to-v3 build. A seeded `train_val_split` shuffles by position and v3 has three
+  records more than v2 minus the list, so a new draw on v3 is a different split from
+  a v2 run. Splits frozen on disk are untouched.
+- **The exclusion list is optional.** `H5PYGenerator` no longer has a default list:
+  no `indexes_to_exclude_list` (or an empty one) excludes nothing, and a path that
+  does not exist still raises. v3 holds none of the 952 listed ids and no empty
+  dose, so the list drops nothing there. `RetroConfig.exclude_indexes_path` now
+  defaults to `None`, and the retrospective loop, `cross_fit_partition.py`,
+  `model_hpo_training.py`, `ensemble_hpo.py` and `hpo_figures.py` accept it unset.
+- **Removed `DEFAULT_EXCLUDE_PATH`** from `src.active_learning.retrospective.dataset`.
+  New: `read_optional_exclusions` in the same module.
+- **`data/excluded_indexes/` is tracked.** It was gitignored, so a fresh clone lacked
+  it. `scripts/build_beamlet_h5.py` still requires the list to rebuild v3 from raw
+  records; its sha256 `425047...` matches the `exclusion_list_sha256` stored in v3.
+
 ### Added
 
 - **`scripts/active_learning/difficulty_engine_grids.py`**: the input-only difficulty
@@ -45,8 +66,8 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   Carlo realisations (the noise floor of EXP-0014). New module
   `src.active_learning.beamlet_pool.noise` (`select_patients`, `patient_batches`,
   `pair_config_differences`). New output: `<store>/plan/noise_selection.csv`.
-- **`scripts/active_learning/difficulty_independence.py`** with
-  `src.active_learning.ensemble.independence` and
+- **`scripts/active_learning/difficulty_independence.py`** with its config, its guide, a
+  `manifest.json` in every run, `src.active_learning.ensemble.independence` and
   `src.active_learning.ensemble.noise_floor`: the EXP-0014 closing analysis
   (leave-one-member-out gap, scorer v2) and the noise-floor diagnostics.
 - **`src/model_search/`**: hyperparameter optimisation and training of a single

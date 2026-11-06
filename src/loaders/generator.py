@@ -9,8 +9,9 @@ Flow (``__getitem__``):
 3. Optionally apply geometric augmentation.
 4. Min-max normalise and return ``(input, energy, target)`` tensors.
 
-A hard-coded exclusion list drops records known to carry an empty dose
-distribution.
+An optional exclusion list (``indexes_to_exclude_list``) drops named records. Files
+built by ``scripts/build_beamlet_h5.py`` need none: their empty-dose records were
+left out at build time.
 """
 
 import warnings
@@ -76,17 +77,13 @@ class H5PYGenerator(Dataset):
         self.return_angles = kwargs.get("return_angles", False)
         self.expected_shape = kwargs.get("expected_shape", (160, 30, 30))
 
-        # Temorary solution, empty records handled here:
-        # Description: We investigated that mentioned records have an empty dose
-        # distribution. It cannot be taken into consideration in the training process.
-        invalid_records = []
-        self.indexes_to_exclude_list_path = kwargs.get(
-            "indexes_to_exclude_list",
-            "/home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt",
-        )
-        with open(self.indexes_to_exclude_list_path, "r") as f:
-            for line in f:
-                invalid_records.append(line.strip())
+        # None or "" means no exclusions. A path that does not exist raises, so a
+        # mistyped list cannot silently leave the records in.
+        invalid_records = set()
+        self.indexes_to_exclude_list_path = kwargs.get("indexes_to_exclude_list")
+        if self.indexes_to_exclude_list_path:
+            with open(self.indexes_to_exclude_list_path, "r") as f:
+                invalid_records = {line.strip() for line in f}
 
         with h5py.File(file_path, "r") as dataset:
             self.record_ids = list(dataset.keys())

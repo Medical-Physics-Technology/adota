@@ -18,7 +18,7 @@ from src.utils.dose_grid_utils import estimate_bp_range
 from src.utils.scallers import inverse_minmax
 
 UUID = "10432ff0-e33b-48f4-ba14-29e771718abb"
-H5 = "/scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5"
+H5 = "/scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5"
 S = dict(min_ct=-1024., max_ct=3071., min_ds=0., max_ds=25277028.)
 RES = (2., 2., 2.)
 DZ = RES[0]

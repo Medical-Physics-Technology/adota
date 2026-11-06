@@ -90,7 +90,7 @@ def _trials(hpo_dir: Path) -> List[Dict[str, Any]]:
 
 def _config_for(cfg: Dict[str, Any], trial: Dict[str, Any]):
     return trial_config(cfg["training"], trial["params"], dataset_path=cfg["dataset_path"],
-                        excluded_indexes_file=cfg["exclude_indexes_path"], mixer=trial["mixer"])
+                        excluded_indexes_file=cfg.get("exclude_indexes_path") or "", mixer=trial["mixer"])
 
 
 def _settings(cfg: Dict[str, Any]) -> MetricSettings:
@@ -119,7 +119,7 @@ def prepare(cfg: Dict[str, Any], out: Path) -> None:
     reference = json.loads(Path(cfg["reference_hyperparams"]).read_text())
     reference.pop("output_shape", None)
     ref_config = trial_config(cfg["training"], {}, dataset_path=cfg["dataset_path"],
-                              excluded_indexes_file=cfg["exclude_indexes_path"], mixer="transformer")
+                              excluded_indexes_file=cfg.get("exclude_indexes_path") or "", mixer="transformer")
     ref_config = replace(ref_config, **{k: v for k, v in reference.items()
                                         if hasattr(ref_config, k) and k != "input_shape"})
     reference_params = count_parameters(ref_config)
@@ -133,7 +133,7 @@ def prepare(cfg: Dict[str, Any], out: Path) -> None:
 
         def count(params, mixer=mixer):
             return count_parameters(trial_config(cfg["training"], params, dataset_path=cfg["dataset_path"],
-                                                 excluded_indexes_file=cfg["exclude_indexes_path"],
+                                                 excluded_indexes_file=cfg.get("exclude_indexes_path") or "",
                                                  mixer=mixer))
 
         fixed = (cfg.get("fixed_trials") or {}).get(mixer) or []
@@ -371,7 +371,8 @@ def run(
         for name in ("hpo_train_ids.csv", "hpo_val_ids.csv"):
             inputs[name] = {"path": str(partition / "hpo" / name), "sha256": sha256_of(partition / "hpo" / name)}
         write_manifest(hpo_dir, config=cfg, dataset_path=Path(cfg["dataset_path"]),
-                       excluded_indexes_path=Path(cfg["exclude_indexes_path"]),
+                       excluded_indexes_path=(Path(cfg["exclude_indexes_path"])
+                                              if cfg.get("exclude_indexes_path") else None),
                        extra={"experiment": cfg["experiment"], "kind": "ensemble_hpo", "inputs": inputs})
     logger.info("HPO directory %s on GPUs %s", hpo_dir, device_list)
     drive(hpo_dir, cfg, device_list)

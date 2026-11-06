@@ -76,10 +76,7 @@ def test_h5source_matches_dataset():
 
     with h5py.File(str(H5_PATH), "r") as ds:
         all_ids = sorted(ds.keys())
-    excluded = set()
-    if EXCLUDE_FILE.exists():
-        excluded = {ln.strip() for ln in EXCLUDE_FILE.read_text().splitlines() if ln.strip()}
-    record_ids = [r for r in all_ids if r not in excluded][:3]
+    record_ids = all_ids[:3]
 
     dataset = H5PYGenerator(
         file_path=str(H5_PATH),
@@ -115,10 +112,7 @@ def test_h5source_defaults_record_ids_from_dataset():
 
     with h5py.File(str(H5_PATH), "r") as ds:
         all_ids = sorted(ds.keys())
-    excluded = set()
-    if EXCLUDE_FILE.exists():
-        excluded = {ln.strip() for ln in EXCLUDE_FILE.read_text().splitlines() if ln.strip()}
-    record_ids = [r for r in all_ids if r not in excluded][:3]
+    record_ids = all_ids[:3]
 
     dataset = H5PYGenerator(
         file_path=str(H5_PATH),

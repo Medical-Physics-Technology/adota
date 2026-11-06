@@ -22,7 +22,7 @@ Writes into a timestamped directory under ``output_dir``:
 - ``pool_scores.csv``: scorer v2 and the ensemble target per pool beamlet;
 - ``scorer_v2_fit.json`` (fit scans only, the evaluated one) and
   ``scorer_v2_unseen.json`` (fit scans plus F, for deployment);
-- ``summary.json`` with the verdict, and the resolved ``config.yaml``.
+- ``summary.json`` with the verdict, the resolved ``config.yaml`` and ``manifest.json``.
 """
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ from src.active_learning.ensemble.independence import (
     within_test_cv_gap,
 )
 from src.evaluation.cli import load_yaml_config, merge_config, setup_logging, setup_run_directory
-from src.training.run_dir import save_resolved_config
+from src.training.run_dir import save_resolved_config, write_manifest
 
 logger = logging.getLogger(__name__)
 METRICS = list(FEATURE_NAMES)
@@ -197,6 +197,9 @@ def main(
                "secondary_F": primary.loc["F", ["median_gap", "ci_lo", "ci_hi", "verdict"]].to_dict(),
                "n_fit": len(fit_ids), "n_f": len(f_ids), "n_pool": len(pool_ids), "outputs": str(out)}
     (out / "summary.json").write_text(json.dumps(summary, indent=2, default=float))
+    write_manifest(out, config=cfg, dataset_path=Path(cfg["pool_index"]), extra={
+        "kind": "difficulty_independence", "inputs": {k: str(cfg[k]) for k in (
+            "pool_members_dir", "pool_features", "pool_index", "v3_features", "v3_index", "v3_fit_ids", "v3_f_ids")}})
     logger.info("verdict: %s (%s)", summary["verdict"], summary["primary"])
 
 

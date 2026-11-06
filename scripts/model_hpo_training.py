@@ -161,7 +161,8 @@ def _prepare(run: Path, cfg: Dict[str, Any]) -> None:
     no scan is shared between sets that must be disjoint, and write ``ids/``."""
     base = Path(cfg["partition_dir"])
     listed = {name: resolve_ids(cfg["id_sets"][name], base) for name in SETS}
-    sets, counts = prepare_ids(listed, Path(cfg["dataset_path"]), Path(cfg["exclude_indexes_path"]),
+    exclude = cfg.get("exclude_indexes_path")
+    sets, counts = prepare_ids(listed, Path(cfg["dataset_path"]), Path(exclude) if exclude else None,
                                cfg.get("max_energy_mev"), cfg["training"]["scale"])
     table = cfg["scan_table"]
     scans = pd.read_csv(base / table["table"], dtype=str).set_index("sample_id")[table["column"]].to_dict()
@@ -237,7 +238,9 @@ def search(config: Annotated[Optional[Path], typer.Option(help="YAML config (new
         (run / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
         setup_logging(run, log_filename="model_hpo_training.log")
         write_manifest(run, config=base_config(cfg), dataset_path=Path(cfg["dataset_path"]),
-                       excluded_indexes_path=Path(cfg["exclude_indexes_path"]), extra={"run_config": cfg})
+                       excluded_indexes_path=(Path(cfg["exclude_indexes_path"])
+                                              if cfg.get("exclude_indexes_path") else None),
+                       extra={"run_config": cfg})
         _prepare(run, cfg)
         _enqueue_fixed_trials(_study(run, cfg), cfg)
     else:

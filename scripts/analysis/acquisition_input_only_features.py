@@ -39,8 +39,8 @@ import typer
 from src.acquisition.features import FeatureConfig
 from src.acquisition.reference import peak_agreement, read_stored_record, record_features
 
-REFERENCE_H5 = Path("/scratch/mstryja/DoTA_dataset_v2/"
-                    "trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5")
+REFERENCE_H5 = Path("/scratch/mstryja/DoTA_dataset_v3/"
+                    "trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5")
 REFERENCE_RESULTS = Path("/scratch/mstryja/adota_runs/20260707_124010/results.csv")
 MODES = ("gt", "analytic")
 

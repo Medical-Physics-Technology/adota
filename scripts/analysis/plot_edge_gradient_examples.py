@@ -18,7 +18,7 @@ from src.utils.scallers import inverse_minmax
 INK, MUTED, BASE, SURF = "#0b0b0b", "#898781", "#c3c2b7", "#fcfcfb"
 plt.rcParams.update({"figure.facecolor": SURF, "axes.facecolor": SURF, "savefig.facecolor": SURF,
     "text.color": INK, "font.size": 11, "font.family": "sans-serif"})
-H5 = "/scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5"
+H5 = "/scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5"
 MODEL_DIR = Path("/home/mstryja/projects/adota/models/DoTA_v3_grid_search_v11")
 OUT = Path("/home/mstryja/projects/adota/research/figures/acquisition")
 DZ = 2.0
