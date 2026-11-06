@@ -71,6 +71,9 @@ class EvaluationSettings:
     gamma_backend: str = "torch"
     batch_size: Optional[int] = None
     num_workers: Optional[int] = None
+    # Replaces the model config's exclusion list when set: a model saved as a
+    # bare ``hyperparams.json`` carries none, and the loader needs a readable file.
+    excluded_indexes_file: Optional[str] = None
 
     def metric_settings(self, config: TrainingConfig) -> MetricSettings:
         return MetricSettings(scale=dict(config.scale), gamma_params=dict(self.gamma_params),
@@ -111,6 +114,8 @@ def infer_errors(checkpoint: Path, model_config: Path, ids: Sequence[str],
         config = replace(config, batch_size=int(settings.batch_size))
     if settings.num_workers is not None:
         config = replace(config, num_workers=int(settings.num_workers))
+    if settings.excluded_indexes_file is not None:
+        config = replace(config, excluded_indexes_file=str(settings.excluded_indexes_file))
     model = build_adota_model(config, device)
     CheckpointManager.load_weights_only(Path(checkpoint), model=model, device=device)
     loader = validation_loader(config, ids)

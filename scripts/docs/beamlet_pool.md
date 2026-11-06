@@ -109,6 +109,44 @@ uv run python scripts/al_build_beamlet_pool.py stats    --config scripts/config_
      sectors by fields (`gantry_sector_fields`): the angle is drawn per field, so
      beamlet counts per sector vary about five times more than Poisson.
 
+## The noise set (EXP-0014)
+
+Every model's error on a pool beamlet is measured against one Monte Carlo run at
+1e6 primaries, so the run's noise is part of every error and is shared by every
+model. The noise set measures it on new beamlets simulated twice, at 1e6 and at 1e7
+primaries, into two stores of their own:
+
+```bash
+uv run python scripts/al_build_beamlet_pool.py noise-plan --config scripts/config_beamlet_pool_noise_1e6.yaml \
+    --pair-config scripts/config_beamlet_pool_noise_1e7.yaml
+# then, per realisation, the usual two processes:
+uv run python scripts/al_build_beamlet_pool.py generate --config scripts/config_beamlet_pool_noise_1e6.yaml \
+    --shard 0 --n-shards 2
+uv run python scripts/al_build_beamlet_pool.py export --config scripts/config_beamlet_pool_noise_1e6.yaml --split test
+```
+
+- **Patients**: `noise.per_anatomy` patients per anatomy, drawn from the test split
+  of the registry (out of sample for every engine, and never used by the active
+  learning loop).
+- **Beamlets**: the pool's own planner (`plan:` with another seed and prefix), so the
+  energies, steering and overshoot gate follow the pool's population;
+  `noise.beamlets_per_patient` per patient, two fields each. `noise-plan` refuses a
+  plan that repeats a beamlet of `noise.source_plan`, and writes the same plan,
+  `noise_selection.csv` and the pool's energy-mixing check into both stores.
+- **Batches**: one patient per batch, numbered so that each process gets the same
+  number of patients of every anatomy.
+- **The pair of configs** may differ only in `robustness.num_primaries`,
+  `batches.store_root` and `batches.work_root`; `noise-plan` refuses anything else.
+- **Seeds**: `robustness.rng_seed` stays 0 in both. In beamlet mode MCsquare runs
+  each beamlet on one thread and seeds it at the beamlet's start with `seed + t`
+  (thread `t`), so a fixed seed would give every beamlet of a thread the same random
+  stream; seed 0 uses `time(NULL) + t`, as the pool did, and the two runs of a
+  beamlet start hours apart.
+- **Threads**: one beamlet per thread means an MCsquare call lasts at least as long
+  as its slowest beamlet on one thread (about 25 minutes at 1e7 for a 200 MeV
+  thoracic beamlet). `beamlet_block_size: 42` keeps a field in one call.
+- A beamlet counts in the analysis only if both realisations stored it.
+
 ## Storage
 
 On Apollo everything lives in one tree, `/scratch/mstryja/adota_pool`:

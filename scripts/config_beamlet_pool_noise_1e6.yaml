@@ -1,0 +1,89 @@
+# The Monte Carlo noise floor of EXP-0014: new pool-like beamlets simulated twice, 1e6 realisation
+# ===============================================================================================
+#   uv run python scripts/al_build_beamlet_pool.py noise-plan --config scripts/config_beamlet_pool_noise_1e6.yaml \
+#       --pair-config scripts/config_beamlet_pool_noise_1e7.yaml          # plans both stores at once
+#   uv run python scripts/al_build_beamlet_pool.py generate --config scripts/config_beamlet_pool_noise_1e6.yaml \
+#       --shard 0 --n-shards 2          # and --shard 1 in a second process; then the same with _1e7
+#   uv run python scripts/al_build_beamlet_pool.py export --config scripts/config_beamlet_pool_noise_1e6.yaml \
+#       --split test
+#
+# 12 patients of the pool's test split (4 per anatomy), 84 beamlets each, from the pool's planner with
+# another seed: the pool's population of beamlets, none of its beamlets. This file and
+# config_beamlet_pool_noise_1e7.yaml must differ only in robustness.num_primaries and the two
+# batches roots; noise-plan refuses the pair otherwise. rng_seed stays 0 (time-based) in both: see
+# src/active_learning/beamlet_pool/noise.py. Guide: scripts/docs/beamlet_pool.md.
+
+registry_csv: registry/beamlet_pool_patients_v1.csv
+
+noise:
+  split: test
+  per_anatomy: {thoracic: 4, abdominal: 4, pelvic: 4}
+  beamlets_per_patient: 84
+  seed: 20261103                       # the patient draw
+  energy_mixing_check: /scratch/mstryja/adota_pool/v1_apollo_1e6/plan/energy_mixing_check.csv
+  source_plan: /scratch/mstryja/adota_pool/v1_apollo_1e6/plan/plan.csv   # no planned beamlet may repeat it
+
+plan:                                  # the pool's planner settings, with another seed and prefix
+  energy_range_mev: [70.0, 250.0]
+  n_gantry: 2
+  theta_half_range_deg: 1.5
+  lattice_n: 18
+  range_margin_mm: 10.0
+  min_body_fraction_at_peak: 0.5
+  max_draw_factor: 8.0
+  seed: 20261103
+  prefix: noise
+  version: 1
+n_processes: 2
+
+batches:
+  work_root: /scratch/mstryja/adota_pool/_work/v1_noise_1e6
+  store_root: /scratch/mstryja/adota_pool/v1_noise_1e6
+  keep_raw: false
+  transient_gb: 20.0
+  reserve_work_gb: 30.0
+  reserve_store_gb: 50.0
+
+export:
+  output_dir: /scratch/mstryja/adota_pool/exports
+  downsample_method: average
+  scale: null
+
+checks:                                # the pool's post-Monte Carlo checks
+  range_margin_mm: 10.0
+  min_deposition_ratio: 0.95
+  flux_rtol: 1.0e-6
+  min_body_fraction_at_peak: 0.5
+
+engine:
+  mcsquare_install: /home/mstryja/tools/mcsquare
+  mc_work_dir: /scratch/mstryja/adota_pool/_mc_work
+  bdl_file: hptc_beam_model_rsnone.txt
+  scanner: default
+
+candidates:
+  theta_half_range_deg: 1.5
+  lattice_n: 18
+  energies: [150.0]
+
+robustness:                            # the pool's Monte Carlo settings
+  energies: [150.0]
+  theta_x_range: [-1.5, 1.5]
+  theta_y_range: [-1.5, 1.5]
+  grid_n: 18
+  rotate_to_canonical: true
+  isocenter_mode: grid_center
+  beam_entrance_standoff_mm: 20.0
+  roi_size: [60, 60, 320]
+  iso_spacing_mm: 1.0
+  num_primaries: 1.0e6
+  num_threads: 24
+  beamlet_mode: true
+  beamlet_block_size: 42             # one field (42 beamlets) per MCsquare call: no 2-beamlet tail block
+  rng_seed: 0
+  min_deposition_ratio: 0.95
+  output_root: /scratch/mstryja/adota_pool/_work/unused
+  experiment_prefix: noise
+  experiment_version: 1
+  make_figures: false
+  overwrite: false

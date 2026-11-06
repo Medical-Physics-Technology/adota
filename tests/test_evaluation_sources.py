@@ -18,6 +18,8 @@ H5_PATH = Path(
     "/scratch/mstryja/DoTA_dataset_v3/"
     "trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5"
 )
+EXCLUDE_FILE = (PROJECT_ROOT / "data" / "excluded_indexes"
+                / "IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt")
 
 
 # ── DirSource ────────────────────────────────────────────────────────────────
@@ -78,6 +80,7 @@ def test_h5source_matches_dataset():
 
     dataset = H5PYGenerator(
         file_path=str(H5_PATH),
+        indexes_to_exclude_list=str(EXCLUDE_FILE),
         indexes=record_ids,
         augmentation=False,
         cropp=True,
@@ -113,6 +116,7 @@ def test_h5source_defaults_record_ids_from_dataset():
 
     dataset = H5PYGenerator(
         file_path=str(H5_PATH),
+        indexes_to_exclude_list=str(EXCLUDE_FILE),
         indexes=record_ids,
         augmentation=False,
         cropp=True,

@@ -29,6 +29,7 @@ def candidate_config_from_dict(raw: dict) -> CandidateConfig:
         theta_half_range_deg=float(raw.get("theta_half_range_deg",
                                            defaults.theta_half_range_deg)),
         lattice_n=int(raw.get("lattice_n", defaults.lattice_n)),
+        scorer_path=raw.get("scorer_path", defaults.scorer_path),
         gantry_min_deg=float(raw.get("gantry_min_deg", defaults.gantry_min_deg)),
         gantry_max_deg=float(raw.get("gantry_max_deg", defaults.gantry_max_deg)),
         seed=int(raw.get("seed", defaults.seed)),

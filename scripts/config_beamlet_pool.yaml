@@ -98,6 +98,11 @@ stats:                       # `stats`: reporting tables and figures, from the i
   output_dir: /scratch/mstryja/adota_pool/stats
   gantry_bin_deg: 15.0
 
+export:                      # `export`: one split in the v3 training HDF5 layout (2 mm, normalised)
+  output_dir: /scratch/mstryja/adota_pool/exports
+  downsample_method: average # the v3 build's method; must match the models' training data
+  scale: null                # null: src.adota.config.DEFAULT_SCALE, the v3 build's scale
+
 checks:
   range_margin_mm: 10.0
   min_deposition_ratio: 0.95

@@ -28,6 +28,7 @@ import SimpleITK as sitk
 
 from src.acquisition import BeamletCandidate, DifficultyScorer, prepare_ct, score_candidates
 from src.acquisition.features import FeatureConfig
+from src.acquisition.scorer import DEPLOYED_SCORER
 from src.active_learning.pool import PoolEntry, RecordResolver
 from src.beamlets.bdl import BeamDataLibrary
 from src.mc_generation.sweep import RobustnessConfig, angle_tag, energy_tag
@@ -51,6 +52,8 @@ class CandidateConfig:
     gantry_min_deg: float = 0.0
     gantry_max_deg: float = 360.0
     seed: int = 20260908
+    scorer_path: Optional[str] = None
+    """The frozen scorer JSON behind ``score_full``; the deployed one if ``None``."""
 
     def __post_init__(self) -> None:
         from src.mc_generation.mcsquare_runner import check_energies_simulable
@@ -118,7 +121,8 @@ def score_one_ct(entry: PoolEntry, cand_cfg: CandidateConfig, rob_cfg: Robustnes
     bdl = BeamDataLibrary.from_file(bdl_path)
     candidates = generate_candidates(rec.patient_id, rec.uid, cand_cfg)
     ct = prepare_ct(rec.load_image(), rob_cfg.iso_spacing_mm)
-    frame = score_candidates(ct, candidates, bdl, {"full": DifficultyScorer.load()},
+    scorer = DifficultyScorer.load(cand_cfg.scorer_path or DEPLOYED_SCORER)
+    frame = score_candidates(ct, candidates, bdl, {"full": scorer},
                              rob_cfg, feature_config or FeatureConfig(), prepared=True)
     # score_candidates already carries candidate_id through from the dataclass, in
     # input order; check that rather than re-inserting it, so a future change to

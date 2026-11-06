@@ -46,6 +46,9 @@ pool:
 # The energy layers span the training distribution, which runs 70-270 MeV with its
 # mass between 70 and 190.
 candidates:
+  # The model-independent score (EXP-0014), fitted on v3 scans; the loop is judged on
+  # the frozen validation set of other patients, drawn without any score.
+  scorer_path: src/acquisition/data/analytic_scorer_v2_exp0014.json
   n_gantry_per_ct: 2      # one CT rotation each; the cost driver of scoring
   n_per_field: 420        # 2 x 420 = 840 candidates per CT
   energies: [80.0, 105.0, 130.0, 155.0, 180.0]

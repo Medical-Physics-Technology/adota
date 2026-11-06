@@ -199,7 +199,8 @@ def finalist_beamlet_figure(ct: np.ndarray, ground_truth: np.ndarray, prediction
                             notes: Optional[Mapping[str, str]] = None,
                             styles: Optional[Mapping[str, Mapping]] = None, caption: str = "",
                             voxel_mm: float = 2.0, overlay_floor_pct: float = 5.0, contour_pct: float = 50.0,
-                            margin_mm: float = 30.0,
+                            margin_mm: float = 30.0, reference_label: str = "Ground truth",
+                            plane_titles: Tuple[str, str] = ("Axial", "Coronal"),
                             width_in: float = 7.2) -> Tuple[List[Path], Dict[str, pd.DataFrame]]:
     """Ground truth and every model of ``predictions`` in two planes, then the
     depth-dose curves and lateral profiles of all of them, at journal page width.
@@ -215,9 +216,12 @@ def finalist_beamlet_figure(ct: np.ndarray, ground_truth: np.ndarray, prediction
     Args:
         ct: ``(depth, y, x)`` CT channel of the model input (display only).
         ground_truth, predictions: ``(depth, y, x)`` dose in one unit.
-        notes: Per row label (``"Ground truth"`` or a prediction label), a short,
+        notes: Per row label (``reference_label`` or a prediction label), a short,
             possibly multi-line text for the right-hand column.
         styles: Per prediction label, a line style (:func:`model_styles`).
+        reference_label: Row and legend label of ``ground_truth`` (for instance a
+            higher-statistics Monte Carlo run that another one is compared with).
+        plane_titles: Titles of the fixed-y and fixed-x planes.
         figure_path: Output stem; SVG, PDF and PNG are written beside it.
 
     Returns:
@@ -225,8 +229,8 @@ def finalist_beamlet_figure(ct: np.ndarray, ground_truth: np.ndarray, prediction
         for the CSV beside the figure.
     """
     notes = dict(notes or {})
-    rows = {"Ground truth": ground_truth, **predictions}
-    styles = {"Ground truth": GT_STYLE, **(dict(styles) if styles else
+    rows = {reference_label: ground_truth, **predictions}
+    styles = {reference_label: GT_STYLE, **(dict(styles) if styles else
                                            {k: {"color": COLORS[i % len(COLORS)], "linewidth": 1.25,
                                                 "linestyle": LINESTYLES[i % len(LINESTYLES)]}
                                             for i, k in enumerate(predictions)})}
@@ -277,7 +281,7 @@ def finalist_beamlet_figure(ct: np.ndarray, ground_truth: np.ndarray, prediction
                 for spine in ax.spines.values():
                     spine.set_color("#555555")
                 if r == 0:
-                    ax.set_title(("Axial", "Coronal")[c] + " plane", loc="left", fontweight="semibold", pad=3)
+                    ax.set_title(plane_titles[c] + " plane", loc="left", fontweight="semibold", pad=3)
                 if r < n - 1:
                     ax.tick_params(labelbottom=False)
                 else:
@@ -305,7 +309,8 @@ def finalist_beamlet_figure(ct: np.ndarray, ground_truth: np.ndarray, prediction
                  va="bottom", fontsize=6.5, color="#444444", linespacing=1.1)
         cax = _axes_in(fig, size, gutter + 0.5 * pw, bar_top, pw + gap, 0.07)
         bar = fig.colorbar(image, cax=cax, orientation="horizontal")
-        bar.set_label("Dose [% of the ground-truth maximum]", labelpad=2)
+        scale_name = "ground-truth" if reference_label == "Ground truth" else reference_label
+        bar.set_label(f"Dose [% of the {scale_name} maximum]", labelpad=2)
         bar.ax.xaxis.set_label_position("top")
         bar.set_ticks([0, 25, 50, 75, 100])
         bar.outline.set_linewidth(0.5)
@@ -323,9 +328,9 @@ def finalist_beamlet_figure(ct: np.ndarray, ground_truth: np.ndarray, prediction
         handles = []
         for label in reversed(list(rows)):  # the ground truth on top
             style = styles[label]
-            ax_idd.plot(idd["depth_mm"], idd[label], **style, zorder=3 if label == "Ground truth" else 2)
+            ax_idd.plot(idd["depth_mm"], idd[label], **style, zorder=3 if label == reference_label else 2)
             line, = ax_lat.plot(profile["lateral_mm"], profile[label], **style,
-                                zorder=3 if label == "Ground truth" else 2)
+                                zorder=3 if label == reference_label else 2)
             handles.append((label, line))
         for ax, xlabel, ylabel, panel in (
                 (ax_idd, "Depth [mm]", "Integrated depth dose [%]", "Integrated depth dose"),
