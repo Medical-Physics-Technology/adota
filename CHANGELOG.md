@@ -15,6 +15,16 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 
 ### Added
 
+- **`scripts/active_learning/difficulty_engine_grids.py`**: the input-only difficulty
+  score against dose engines on saved beamlet grids, with
+  `src.active_learning.ensemble.engine_grids` and
+  `src.figures.difficulty_engine_grids` (`difficulty_story_figure`,
+  `difficulty_trend_figure`).
+- **`src.pencil_beam.saved_stages`**: `add_adota_predictions`, `score_blocks` and
+  `load_adota_engine`, moved out of `scripts/pencil_beam/score_saved_beamlets.py`. An
+  ADoTA engine can now name a training snapshot with `checkpoint` and `model_config`;
+  `write_missing_predictions` takes a `scale`.
+
 - **Scorer v2 in the active-learning loop**: `scripts/config_al.yaml` sets
   `candidates.scorer_path` to the vendored
   `src/acquisition/data/analytic_scorer_v2_exp0014.json` (`src.acquisition.scorer.SCORER_V2`).
