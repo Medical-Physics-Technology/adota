@@ -333,7 +333,8 @@ def compute_field_pba(engine, geom, bdl, roi_size, src: SourceDir, provenance: d
 
 def write_missing_predictions(src: SourceDir, model, device, provenance: dict, batch_size: int = 56,
                               tmp_root: Optional[Path] = None, suffix: str = PREDICTION_SUFFIX,
-                              provenance_file: str = ADOTA_PROVENANCE) -> int:
+                              provenance_file: str = ADOTA_PROVENANCE, scale: Optional[Mapping[str, float]] = None
+                              ) -> int:
     """Add ADoTA predictions as ``{stem}{suffix}`` for the beamlets of a block that
     have none; return how many.
 
@@ -341,6 +342,7 @@ def write_missing_predictions(src: SourceDir, model, device, provenance: dict, b
     ``{stem}_ds_pred.npy`` next to its inputs and would overwrite), and each
     prediction is then added to the source exclusively under ``suffix``, with a
     ``provenance_file`` that must match on reruns. Existing files are never touched.
+    ``scale`` is the model's normalisation; ``None`` is the inference default.
     """
     from src.beamlets.inference import InferenceConfig, run_inference
 
@@ -353,7 +355,8 @@ def write_missing_predictions(src: SourceDir, model, device, provenance: dict, b
         for stem in missing:
             for name in INPUT_SUFFIXES:
                 (tmp / f"{stem}{name}").symlink_to(src.path / f"{stem}{name}")
-        run_inference(tmp, model, device, InferenceConfig(batch_size=batch_size, grid_factor=1))
+        options = {"scale": dict(scale)} if scale is not None else {}
+        run_inference(tmp, model, device, InferenceConfig(batch_size=batch_size, grid_factor=1, **options))
         return sum(save_new_npy(src.path / f"{stem}{suffix}", np.load(tmp / f"{stem}{PREDICTION_SUFFIX}"))
                    for stem in missing)
 
