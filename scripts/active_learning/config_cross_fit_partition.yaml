@@ -10,7 +10,6 @@ output_dir: /scratch/mstryja/adota_runs/exp0014/partition
 
 # D: every record of the HDF5 not on the exclusion list (70,146 on v3).
 dataset_path: /scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5
-exclude_indexes_path: /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt
 # Supplies the anatomy (thorax | pelvic_abdominal) and the patient string per record.
 record_provenance_csv: /scratch/mstryja/adota_runs/20260707_124010/figures/acquisition/uuid_provenance_map.csv
 

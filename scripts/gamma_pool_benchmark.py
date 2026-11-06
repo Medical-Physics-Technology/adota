@@ -57,7 +57,7 @@ app = typer.Typer(help="Directly measured gamma cost over beamlet pools.", add_c
 
 TEST_H5 = Path("/scratch/mstryja/DoTA_dataset_v2/testset_downsampled_v0_all_SingleGaussian.h5")
 TRAIN_H5 = Path(
-    "/scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5"
+    "/scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5"
 )
 EXCLUDED = PROJECT_ROOT / (
     "data/excluded_indexes/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt"

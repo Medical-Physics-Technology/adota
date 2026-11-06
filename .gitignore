@@ -213,6 +213,7 @@ models/*
 # Data (keep README.md)
 data/*
 !data/README.md
+!data/excluded_indexes/
 
 # Runs (evaluation outputs)
 runs/

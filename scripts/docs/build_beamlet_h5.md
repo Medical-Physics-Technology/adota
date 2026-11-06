@@ -108,7 +108,7 @@ nohup uv run python scripts/build_beamlet_h5.py \
     --source trainset_pelvis --source initial_test_one_ct \
     --out /scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5 \
     --bdl /home/mstryja/tools/mcsquare/BDL/hptc_beam_model_rsnone.txt \
-    --exclusion-list /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt \
+    --exclusion-list data/excluded_indexes/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt \
     --device cuda:0 \
     --flux-batch 32 \
     --workers 32 \
@@ -137,7 +137,7 @@ uv run python scripts/build_beamlet_h5.py \
     --source trainset_pelvis --source initial_test_one_ct \
     --out /scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5 \
     --bdl /home/mstryja/tools/mcsquare/BDL/hptc_beam_model_rsnone.txt \
-    --exclusion-list /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt \
+    --exclusion-list data/excluded_indexes/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt \
     --resume
 ```
 
@@ -184,7 +184,7 @@ array equality, and attribute equivalence:
 uv run python scripts/check_beamlet_h5.py \
     --old /scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5 \
     --new /scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5 \
-    --exclusion-list /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt \
+    --exclusion-list data/excluded_indexes/IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt \
     --sample 2000 \
     --out /scratch/check_report.json
 ```

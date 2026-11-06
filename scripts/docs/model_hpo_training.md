@@ -49,7 +49,7 @@ the number of workers minus one.
 
 Each entry of `id_sets` is a CSV with a `sample_id` column, or a filter
 `{table, column, values}` on a table; relative paths are under `partition_dir`.
-Every set loses the records of `exclude_indexes_path` and the beamlets above
+Every set loses the records of `exclude_indexes_path`, if set, and the beamlets above
 `max_energy_mev` (`src.datasets.energy_cut.drop_above_energy`). The run stops if
 two sets that must be disjoint (search train / search validation / test, final
 train / test) share a scan (`scan_table`). The kept ids are written to `ids/`,

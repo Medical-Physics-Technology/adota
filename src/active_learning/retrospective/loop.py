@@ -40,7 +40,7 @@ from src.active_learning.retrospective.dataset import (
     batch_size_from_fraction,
     build_splits,
     cross_check_exclusions,
-    read_exclusion_list,
+    read_optional_exclusions,
     read_record_ids,
     read_splits,
     record_metadata,
@@ -84,8 +84,8 @@ def prepare_splits(cfg: RetroConfig, overwrite: bool = False) -> Dict[str, Any]:
     if existing.exists() and not overwrite:
         raise FileExistsError(f"{existing} exists; the splits are frozen. Pass overwrite "
                               "(--overwrite on the CLI) to redraw them deliberately.")
-    excluded = read_exclusion_list(Path(cfg.exclude_indexes_path))
-    check = cross_check_exclusions(Path(cfg.exclude_indexes_path))
+    excluded = read_optional_exclusions(cfg.exclude_indexes_path)
+    check = cross_check_exclusions(Path(cfg.exclude_indexes_path)) if cfg.exclude_indexes_path else None
     all_ids = read_record_ids(Path(cfg.dataset_path))
     kept = apply_exclusions(all_ids, excluded)
     from src.adota.config import DEFAULT_SCALE
@@ -205,7 +205,7 @@ def _update_manifest(run_dir: Path, **updates: Any) -> None:
 
 def _write_run_manifest(run_dir: Path, cfg: RetroConfig, inputs: RunInputs, **extra: Any) -> None:
     write_manifest(run_dir, config=cfg, dataset_path=Path(cfg.dataset_path),
-                   excluded_indexes_path=Path(cfg.exclude_indexes_path),
+                   excluded_indexes_path=Path(cfg.exclude_indexes_path) if cfg.exclude_indexes_path else None,
                    extra={"experiment": cfg.experiment, "kind": "al_retrospective",
                           "inputs": inputs.fingerprint(), "cycles": [], **extra})
     save_resolved_config(cfg, run_dir / "config.yaml")

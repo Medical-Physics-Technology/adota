@@ -48,9 +48,8 @@ from src.active_learning.ensemble.partition import (
 )
 from src.active_learning.retrospective.config import PROVENANCE_CSV
 from src.active_learning.retrospective.dataset import (
-    DEFAULT_EXCLUDE_PATH,
     apply_exclusions,
-    read_exclusion_list,
+    read_optional_exclusions,
     read_record_ids,
     record_metadata,
 )
@@ -65,7 +64,7 @@ logger = logging.getLogger("cross_fit_partition")
 DEFAULTS: Dict[str, Any] = {
     "experiment": "EXP-0014",
     "output_dir": "/scratch/mstryja/adota_runs/exp0014/partition",
-    "dataset_path": None, "exclude_indexes_path": DEFAULT_EXCLUDE_PATH,
+    "dataset_path": None, "exclude_indexes_path": None,
     "record_provenance_csv": PROVENANCE_CSV,
     "frozen_test_ids": None, "held_out_patients": None,
     "group_column": "patient_key", "stratify_column": "anatomy",
@@ -107,7 +106,7 @@ def main(
     save_resolved_config(cfg, out / "config.yaml")
 
     dataset = Path(cfg["dataset_path"])
-    ids = apply_exclusions(read_record_ids(dataset), read_exclusion_list(Path(cfg["exclude_indexes_path"])))
+    ids = apply_exclusions(read_record_ids(dataset), read_optional_exclusions(cfg["exclude_indexes_path"]))
     provenance = Path(cfg["record_provenance_csv"]) if cfg["record_provenance_csv"] else None
     metadata = record_metadata(dataset, ids, provenance)
     unknown = int((metadata[cfg["stratify_column"]] == "unknown").sum())
@@ -155,7 +154,7 @@ def main(
               for key in ("frozen_test_ids", "held_out_patients", "exclude_indexes_path",
                           "record_provenance_csv") if cfg[key] and Path(cfg[key]).exists()}
     write_manifest(out, config=cfg, dataset_path=dataset,
-                   excluded_indexes_path=Path(cfg["exclude_indexes_path"]),
+                   excluded_indexes_path=Path(cfg["exclude_indexes_path"]) if cfg["exclude_indexes_path"] else None,
                    extra={"experiment": cfg["experiment"], "kind": "cross_fit_partition",
                           "inputs": inputs})
     logger.info("%d records in %d scans; roles %s; F and V share %s", len(records), len(scans),

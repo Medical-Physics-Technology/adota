@@ -14,6 +14,7 @@ from src.active_learning.retrospective.dataset import (
     build_splits,
     cross_check_exclusions,
     read_exclusion_list,
+    read_optional_exclusions,
     read_splits,
     record_metadata,
     scheduled_size,
@@ -27,8 +28,21 @@ IDS = [f"r{i:04d}" for i in range(1000)]
 
 
 def test_missing_exclusion_list_fails_loudly(tmp_path):
-    with pytest.raises(FileNotFoundError, match="refusing to run on an unfiltered set"):
+    with pytest.raises(FileNotFoundError, match="missing.txt is missing"):
         read_exclusion_list(tmp_path / "missing.txt")
+
+
+@pytest.mark.parametrize("unset", [None, ""])
+def test_optional_exclusions_are_empty_without_a_path(unset):
+    assert read_optional_exclusions(unset) == []
+
+
+def test_optional_exclusions_read_a_named_list_and_reject_a_missing_one(tmp_path):
+    listing = tmp_path / "exclude.txt"
+    listing.write_text("x\ny\n")
+    assert read_optional_exclusions(listing) == ["x", "y"]
+    with pytest.raises(FileNotFoundError):
+        read_optional_exclusions(tmp_path / "missing.txt")
 
 
 def test_apply_exclusions_drops_listed_ids_in_file_order(tmp_path):

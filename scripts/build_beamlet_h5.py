@@ -3,7 +3,7 @@
     uv run python scripts/build_beamlet_h5.py \\
         --out /scratch/mstryja/DoTA_dataset_v3/trainset_v3.h5 \\
         --bdl /home/mstryja/tools/mcsquare/BDL/hptc_beam_model_rsnone.txt \\
-        --exclusion-list /home/mstryja/projects/dota_pytorch/auxilary_files/IndexesExclude_....txt
+        --exclusion-list data/excluded_indexes/IndexesExclude_....txt
 
 Reads every raw ``<id>_ct.npy`` / ``<id>_ds.npy`` / ``<id>_metadata.json`` triple
 under ``--raw-root/<source>`` for each ``--source``, applies the exclusion list and

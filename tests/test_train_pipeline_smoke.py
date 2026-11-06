@@ -24,12 +24,8 @@ from src.training.data import collate_h5
 from src.training.losses import LMSE
 
 DATASET_PATH = (
-    "/scratch/mstryja/DoTA_dataset_v2/"
-    "trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5"
-)
-EXCLUDED_PATH = (
-    "/home/mstryja/projects/dota_pytorch/auxilary_files/"
-    "IndexesExclude_trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.txt"
+    "/scratch/mstryja/DoTA_dataset_v3/"
+    "trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5"
 )
 
 # Real model config (scripts/config_train_adota.yaml).
@@ -54,8 +50,8 @@ EPOCHS = 3
 SEED = 1234
 
 pytestmark = pytest.mark.skipif(
-    not (os.path.exists(DATASET_PATH) and os.path.exists(EXCLUDED_PATH)),
-    reason="real dataset / exclusion file not available on this machine",
+    not os.path.exists(DATASET_PATH),
+    reason="real dataset not available on this machine",
 )
 
 
@@ -97,7 +93,6 @@ def test_training_smoke_on_real_data_slice():
         normalize=False,
         normalize_flux_only=True,
         flux_mode="analytical",
-        indexes_to_exclude_list=EXCLUDED_PATH,
     )
     assert len(dataset) == N_RECORDS
 

@@ -26,7 +26,7 @@ import matplotlib.pyplot as plt
 
 from src.beamlets.centerline import beam_line_from_metadata, render_centerline
 
-H5 = "/scratch/mstryja/DoTA_dataset_v2/trainset_pelvis_initial_test_one_ct_downsampled_v2_all_SingleGaussian.h5"
+H5 = "/scratch/mstryja/DoTA_dataset_v3/trainset_pelvis_initial_test_one_ct_downsampled_v3_all_SingleGaussian.h5"
 JDIRS = ["/RadiotherapyData/dataset_v0/trainset_pelvis",
          "/RadiotherapyData/dataset_v0/initial_test_one_ct"]
 OUT = Path("/home/mstryja/projects/adota/research/figures/projection_ablation")

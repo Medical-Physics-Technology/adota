@@ -144,7 +144,7 @@ YAML). Precedence: per-field option > `--set` > YAML > defaults, through
 |---|---|---|
 | `dataset_path` | the training HDF5 | Every record the loop may reveal. |
 | `data_fraction`, `data_fraction_seed` | 0.30, 20260911 | Share of D the experiment uses, drawn once before any split. The pilot runs at 0.30; scale-ups at 0.4, 0.5, 0.6, 1.0 each get their own `splits_dir` and `runs_dir`, and the run name carries `d<percent>`. |
-| `exclude_indexes_path` | the `IndexesExclude_...txt` list | Mandatory; a missing file is an error. Cross-checked against `data/excluded_indexes/`. |
+| `exclude_indexes_path` | unset | Optional, and not needed on v3. A named file that is missing is an error; a named list is cross-checked against `data/excluded_indexes/`. |
 | `record_provenance_csv` | the study's `uuid_provenance_map.csv` | Patient and anatomy per record for the fingerprint; optional. |
 | `splits_dir`, `runs_dir` | under `/scratch/mstryja/adota_runs/al_retro` | Where the splits and the runs go. |
 | `val_fraction`, `initial_fraction` | 0.15, 0.20 | `V` as a share of `D`; the cycle-0 set as a share of `T`. |
