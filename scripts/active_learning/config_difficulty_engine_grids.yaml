@@ -1,0 +1,82 @@
+# Input-only difficulty score against five dose engines on saved beamlet grids
+# =============================================================================
+#   TMPDIR=/scratch/mstryja/tmp uv run python scripts/active_learning/difficulty_engine_grids.py \
+#       --config scripts/active_learning/config_difficulty_engine_grids.yaml
+#
+# The complete 18 x 18 fields of the four CTs no engine trained on. Lung_Dx-G0037 and
+# StageII-Colorectal-CT-230 are training scans and are left out. The saved MC, PBA, v11
+# and EXP-0019 doses are used as they are; xLSTM and U-Net predictions are added next
+# to them. Guide: scripts/docs/difficulty_engine_grids.md
+
+output_root: /scratch/mstryja/adota_runs/exp0014/difficulty_engine_grids/energy_gantry_full
+
+sources:
+  - /scratch/mstryja/DoTA_dataset_v2/energy_gantry_full_thoracic_Lung_Dx-G0049_*
+  - /scratch/mstryja/DoTA_dataset_v2/energy_gantry_full_thoracic_Lung_Dx-G0056_*
+  - /scratch/mstryja/DoTA_dataset_v2/energy_gantry_full_abdominal_StageII-Colorectal-CT-222_*
+  - /scratch/mstryja/DoTA_dataset_v2/energy_gantry_full_abdominal_StageII-Colorectal-CT-225_*
+
+selection:
+  grid_n: 18
+  min_beamlets: 324             # only complete grids
+
+generation_config: scripts/mc/config_energy_gantry_full.yaml
+
+# Copied per block before scoring, never over an existing file. Gamma of PBA, v11 and
+# EXP-0019 is read from here with the same code and criteria; only new engines are scored.
+seed_metrics_from: /scratch/mstryja/pencil_beam/engine_comparison/energy_gantry_full_exp0019
+
+engines:
+  - name: v11
+    label: v11
+    kind: adota
+    suffix: _ds_pred.npy
+  - name: final_attndrop0
+    label: New model
+    kind: adota
+    suffix: _ds_pred_final_attndrop0.npy
+  - name: X0_mlstm_004
+    label: xLSTM
+    kind: adota
+    suffix: _ds_pred_x0_mlstm_004.npy
+    checkpoint: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/trials/mlstm_004/checkpoints/best.pth
+    model_config: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/trials/mlstm_004/config.yaml
+    device_index: 0
+    batch_size: 56
+  - name: U0_none_029
+    label: U-Net
+    kind: adota
+    suffix: _ds_pred_u0_none_029.npy
+    checkpoint: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/trials/none_029/checkpoints/best.pth
+    model_config: /scratch/mstryja/adota_runs/exp0014/hpo/hpo_20261019_192308/trials/none_029/config.yaml
+    device_index: 0
+    batch_size: 56
+  - name: PBA
+    label: Pencil beam
+    kind: pencil_beam
+    suffix: _ds_pba.npy
+
+scoring:
+  gamma_criteria:               # headline first: 2%/2mm, 10% cutoff, global (MC maximum)
+    - {dose: 2, dist: 2, cutoff: 10}
+    - {dose: 3, dist: 3, cutoff: 10}
+  workers: 40
+  mape_cutoff_fraction: 0.1     # voxels above 10% of the MC maximum
+
+difficulty:
+  scorer: src/acquisition/data/analytic_scorer_v2_exp0014.json
+  variant: full (ridge)
+  # d is the raw score's rank among these beamlets (the pool's test split), in [0, 1]
+  percentile_reference_features: /scratch/mstryja/adota_runs/exp0014/independence/features_pool/features_analytic.csv
+  workers: 32
+
+analysis:
+  n_bootstrap: 2000
+  seed: 0
+
+figure:
+  formats: [png]
+  examples:                     # chosen from the scores alone, before any error is read
+    Low: 10
+    Medium: 50
+    High: 90

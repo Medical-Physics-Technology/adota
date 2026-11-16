@@ -15,6 +15,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
+PUBLICATION_FORMATS = ("svg", "pdf", "png")
+
 
 def identify_axes(ax_dict: dict[str, plt.Axes], fontsize: int = 48) -> None:
     """
@@ -65,10 +67,10 @@ def aligned_colorbar(
     return colorbar
 
 
-def save_figure_as_publication_formats(fig, figure_path: str) -> list[Path]:
+def save_figure_as_publication_formats(fig, figure_path: str, formats=PUBLICATION_FORMATS) -> list[Path]:
     output_path = Path(figure_path)
     output_paths = [
-        output_path.with_suffix(f".{extension}") for extension in ("svg", "pdf", "png")
+        output_path.with_suffix(f".{extension}") for extension in formats
     ]
     for path in output_paths:
         fig.savefig(path, bbox_inches="tight", dpi=300)

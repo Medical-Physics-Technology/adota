@@ -82,6 +82,7 @@ select = ["E", "F", "I"]
 "scripts/analysis/acquisition_input_only_features.py" = ["E402"]
 # Same reason: the metrics of both hardness tables are computed in a process pool.
 "scripts/active_learning/beamlet_hardness.py" = ["E402"]
+"scripts/active_learning/difficulty_engine_grids.py" = ["E402"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

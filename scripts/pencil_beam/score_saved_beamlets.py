@@ -40,7 +40,6 @@ for _v in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXP
 import json
 import logging
 from collections import defaultdict
-from concurrent.futures import ProcessPoolExecutor
 from glob import glob
 from pathlib import Path
 from typing import Annotated, List, Optional
@@ -55,14 +54,12 @@ from src.pencil_beam.pipeline import provenance, write_rows_csv
 from src.pencil_beam.saved_beamlets import (
     compute_field_pba,
     engines_from_config,
-    engines_to_score,
     field_windows,
     load_doses,
     rank_beamlets,
-    score_beamlet,
     survey_dirs,
-    write_missing_predictions,
 )
+from src.pencil_beam.saved_stages import add_adota_predictions, score_blocks
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logging.getLogger("pymedphys").setLevel(logging.WARNING)
@@ -70,12 +67,6 @@ logger = logging.getLogger("score_saved_beamlets")
 app = typer.Typer(help="Dose engines (pencil beam, ADoTA models) against the saved MC on beamlet directories.")
 
 STAGES = ("pba", "adota", "score", "report")
-
-
-def _sha256(path: Path) -> str:
-    import hashlib
-
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def _stage_pba(blocks, cfg, engines, out_root: Path, run_provenance: dict, dry_run: bool = False) -> None:
@@ -134,66 +125,6 @@ def _stage_pba(blocks, cfg, engines, out_root: Path, run_provenance: dict, dry_r
                                 stats["computed"], stats["field_seconds"], stats["spot_seconds"])
                     (out_root / b.name).mkdir(parents=True, exist_ok=True)
                     (out_root / b.name / f"{e.tag}_run.json").write_text(json.dumps(stats, indent=2, default=str))
-
-
-def _stage_adota(blocks, engines, run_provenance: dict) -> None:
-    """For each ADoTA engine, add its prediction only where a beamlet has none."""
-    from src.adota.utils import load_model
-    from src.evaluation.cli import resolve_device
-
-    for e in (e for e in engines if e.kind == "adota"):
-        todo = [b for b in blocks if any(not (b.path / f"{s}{e.suffix}").exists() for s in b.stems)]
-        if not todo:
-            logger.info("%s: every beamlet already has a %s; nothing to add", e.name, e.suffix)
-            continue
-        if not e.settings.get("model_dir"):
-            raise typer.BadParameter(f"{len(todo)} blocks lack {e.suffix}; give engine {e.name!r} a model_dir")
-        model_dir = Path(e.settings["model_dir"])
-        ckpt = model_dir / e.settings.get("fname", "best_model.pth")
-        device = resolve_device(int(e.settings.get("device_index", 0)))
-        model = load_model(ckpt, model_dir / "hyperparams.json", device)
-        record = {"engine": e.name, "suffix": e.suffix, "checkpoint": str(ckpt), "checkpoint_sha256": _sha256(ckpt),
-                  "hyperparams_sha256": _sha256(model_dir / "hyperparams.json"), **run_provenance}
-        for b in todo:
-            n = write_missing_predictions(b, model, device, record, int(e.settings.get("batch_size", 56)),
-                                          suffix=e.suffix, provenance_file=e.provenance_file)
-            logger.info("%s %s: added %d missing predictions (%s)", e.name, b.name, n, e.suffix)
-
-
-def _stage_score(blocks, cfg, engines, out_root: Path, criteria, overwrite: bool) -> List[dict]:
-    workers = int(cfg.get("scoring", {}).get("workers", 32))
-    keys = [c.key for c in criteria] + ["r80_delta_mm"]
-    rows = []
-    for b in blocks:
-        path = out_root / b.name / "metrics.json"
-        cached = [] if overwrite or not path.exists() else json.loads(path.read_text())
-        if cached and {r["stem"] for r in cached} != set(b.stems):
-            cached = []                                   # another beamlet selection: score again
-        todo = engines_to_score(cached, engines, keys)
-        if not todo:
-            rows += cached
-            continue
-        for e in todo:
-            missing = [s for s in b.stems if not (b.path / f"{s}{e.suffix}").exists()]
-            if missing:
-                stage = "pba" if e.kind == "pencil_beam" else "adota"
-                raise typer.BadParameter(f"{b.name}: {len(missing)} beamlets have no {e.suffix} ({e.name}); "
-                                         f"run the {stage} stage")
-        tasks = [(str(b.path), s, tuple(criteria), b.name, tuple(todo)) for s in b.stems]
-        with ProcessPoolExecutor(max_workers=workers) as ex:
-            scored = {r["stem"]: r for r in ex.map(score_beamlet, tasks, chunksize=2)}
-        meta = {"anatomy": b.anatomy, "patient_id": b.patient_id, "energy": b.energy, "gantry": b.gantry,
-                "block_dir": str(b.path)}
-        by_stem = {r["stem"]: r for r in cached}
-        block_rows = [dict(by_stem.get(s, {}), **scored[s], **meta) for s in b.stems]
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(block_rows, indent=1, default=float))
-        head = criteria[0].key
-        logger.info("score %s (%s): median %s %s", b.name, ", ".join(e.name for e in todo), head, ", ".join(
-            f"{e.name} {np.nanmedian([r[f'{e.tag}_{head}'] for r in block_rows]):.1f}%" for e in engines))
-        rows += block_rows
-    write_rows_csv(rows, out_root / "all_beamlets.csv")
-    return rows
 
 
 def _groups(rows, summary_groups) -> dict:
@@ -353,10 +284,11 @@ def main(
     if "pba" in wanted:
         _stage_pba(blocks, cfg, engines, out_root, prov)
     if "adota" in wanted:
-        _stage_adota(blocks, engines, prov)
+        add_adota_predictions(blocks, engines, prov)
     rows = None
     if "score" in wanted:
-        rows = _stage_score(blocks, cfg, engines, out_root, criteria, rescore)
+        rows = score_blocks(blocks, engines, out_root, criteria, rescore,
+                            workers=int(cfg.get("scoring", {}).get("workers", 32)))
     if "report" in wanted:
         if rows is None:
             rows = [r for b in blocks for r in json.loads((out_root / b.name / "metrics.json").read_text())]
