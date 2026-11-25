@@ -25,3 +25,10 @@ engines:
     dosecuda_kernels: /home/mstryja/tools/dosecuda/current/dose_kernels.so
     model_dir: /home/mstryja/tools/dosecuda/models/hptc_rsnone_mcsquare_v1
     gpu_id: 0
+
+# One slide panel per beamlet (stage `panels`): the nine EXP-0022 pool examples, easy,
+# medium and hard per anatomy, nine patients.
+panels:
+  ids_csv: /scratch/mstryja/adota_runs/paper2/diagnostics/difficulty_explain_pool_20261125_132729/tables/selection.csv
+  label_column: label
+figure_formats: [png]
