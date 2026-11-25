@@ -103,7 +103,7 @@ def load_pool_beamlet(h5_path: Path, sample_id: str, scale: Mapping[str, float] 
                          energy_mev=float(record.energy_mev), mc_dose=dose)
 
 
-def _flux_weighted_hu(ct_hu: np.ndarray, flux: np.ndarray, frac: float) -> np.ndarray:
+def flux_weighted_hu(ct_hu: np.ndarray, flux: np.ndarray, frac: float) -> np.ndarray:
     """Per-slice flux-weighted mean HU, the rule of ``analyse_density_regions`` over every slice."""
     weights = np.abs(flux).astype(np.float64)
     f_max = weights.max(axis=(1, 2), keepdims=True)
@@ -140,7 +140,7 @@ def beam_axis_profile(inputs: BeamletInputs, config: FeatureConfig = FeatureConf
     return BeamAxisProfile(
         depth_mm=np.arange(ct_hu.shape[0]) * dz_mm,
         hu_axis=hu_axis,
-        hu_flux_weighted=_flux_weighted_hu(ct_hu, flux, config.flux_threshold_frac),
+        hu_flux_weighted=flux_weighted_hu(ct_hu, flux, config.flux_threshold_frac),
         rsp_axis=hu_to_rsp_mcsquare(hu_axis, energy=DEFAULT_ENERGY_MEV),
         wepl_axis_mm=cumulative_wepl(ct_hu, dz_mm)[:, h_peak, w_peak],
         idd_analytic=idd_analytic,
@@ -155,4 +155,5 @@ def beam_axis_profile(inputs: BeamletInputs, config: FeatureConfig = FeatureConf
     )
 
 
-__all__ = ["BeamAxisProfile", "BeamletInputs", "beam_axis_profile", "load_grid_beamlet", "load_pool_beamlet"]
+__all__ = ["BeamAxisProfile", "BeamletInputs", "beam_axis_profile", "flux_weighted_hu", "load_grid_beamlet",
+           "load_pool_beamlet"]

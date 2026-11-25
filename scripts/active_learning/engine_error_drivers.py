@@ -18,6 +18,12 @@ Stages (``--stages``, comma-separated, run in this order; ``--run-dir`` resumes 
                the pencil beam over the CT, their differences, the errors, depth dose and
                lateral profile (``figures/panel_<label>.png`` and the numbers beside them).
 
+* ``analyse`` -- what drives each engine's error (:mod:`src.engine_drivers.analysis`):
+               per error metric and site, Spearman of every feature with patient-bootstrap
+               intervals, grouped permutation importance of a gradient-boosted model fitted
+               with folds grouped by patient, partial dependence, and the difficulty score
+               against the error (``analysis/*.csv``, ``analysis/summary.md``).
+
 ``--ids-file`` (a CSV with ``sample_id``) restricts every stage to those beamlets; the
 pencil beam still rebuilds their whole field, but computes only them.
 
@@ -48,6 +54,7 @@ from src.active_learning.config import mc_from_config
 from src.active_learning.pool import RecordResolver
 from src.datasets.beamlet_h5 import sha256_of
 from src.engine_drivers.adota import predict_and_save
+from src.engine_drivers.analysis import run_analysis
 from src.engine_drivers.pba import field_doses, patient_cts, pool_fields, save_dose
 from src.engine_drivers.scoring import CRITERIA, export_scale, mc_model_grid, score_doses
 from src.evaluation.cli import (
@@ -64,7 +71,7 @@ from src.utils.scallers import inverse_minmax
 from src.utils.unit_conversions import mcsquare_to_gy_per_mu
 
 logger = logging.getLogger("engine_error_drivers")
-STAGES = ("pba", "adota", "score", "panels")
+STAGES = ("pba", "adota", "score", "panels", "analyse")
 DEFAULTS = {"output_dir": None, "device_index": 0, "split": "test"}
 
 
@@ -209,6 +216,9 @@ def main(
         stage_score(cfg, run, ids)
     if "panels" in chosen:
         stage_panels(cfg, run)
+    if "analyse" in chosen:
+        lines = run_analysis(cfg, run)
+        (run / "analysis" / "summary.md").write_text("\n".join(lines), encoding="utf-8")
     logger.info("done: %s", run)
 
 

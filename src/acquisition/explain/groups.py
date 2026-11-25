@@ -41,8 +41,10 @@ FAMILY: Mapping[str, str] = {
     "pflugfelder_hi": "WEPL spread across the beamlet", "wepl_std": "WEPL spread across the beamlet",
     "isi_sum": "interface severity", "isi_max": "interface severity", "isi_mean": "interface severity",
     "isi_axial_sum": "interface severity",
+    "air_gap_mm": "air in front of the patient", "lowdensity_path_mm": "low-density path to the peak",
 }
-"""The physical family of each of the 30 features, used only to name groups."""
+"""The physical family of each of the 30 features (and of the two path features of
+:mod:`src.engine_drivers.geometry`), used only to name groups."""
 
 
 @dataclass(frozen=True)

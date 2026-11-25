@@ -32,3 +32,15 @@ panels:
   ids_csv: /scratch/mstryja/adota_runs/paper2/diagnostics/difficulty_explain_pool_20261125_132729/tables/selection.csv
   label_column: label
 figure_formats: [png]
+
+# Stage `analyse`: what drives each engine's error, on the beamlets with the analytic peak
+# inside the crop (the 30 difficulty features of the pool test split) plus two path features.
+analysis:
+  features_csv: /scratch/mstryja/adota_runs/exp0014/independence/features_pool/features_analytic.csv
+  score_contributions: /scratch/mstryja/adota_runs/paper2/diagnostics/difficulty_explain_pool_20261125_132729/population/contributions_ensemble.csv
+  group_threshold: 0.7      # |Spearman| at which features form a group (EXP-0022)
+  n_folds: 5                # folds grouped by patient
+  n_repeats: 5              # permutations per group and fold
+  n_boot: 500               # patient resamples for every interval
+  seed: 20261125
+  threads: 16
