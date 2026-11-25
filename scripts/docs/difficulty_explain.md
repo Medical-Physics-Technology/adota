@@ -57,11 +57,14 @@ One run directory `difficulty_explain_<timestamp>/` under `output_dir`:
 
 - Read groups, not single features. Correlated features share credit and often carry large
   weights of opposite sign (`sobel_dw_edge_energy` +1.6 against `sobel_dw_mean` -1.2).
-- "depth and energy" mixes range with geometric depth. Geometric depth includes the air gap
-  in front of the patient and grows with low-density tissue on the path. Compare
-  `wepl_mean` with `bp_range_max_mm` to tell these apart.
+- Geometric depth includes the air gap in front of the patient.
 - `interface_bp_distance` returns the zone length when the peak zone has no interface, so a
-  homogeneous zone looks like "interface far away". Its weight is positive, so this term
-  favours homogeneous beamlets slightly. It is a definitional artefact.
+  homogeneous zone looks like "interface far away". Its weight is positive and it correlates
+  -0.75 with `hetero_fraction` (weight negative), so together they favour homogeneous peak
+  zones: credit sharing in the ridge, made worse by that fallback. Read the tissue-change
+  features as one group (they merge at `--group-threshold 0.6`).
+- "depth and energy" is carried by `bp_range_max_mm`, the 10% distal edge of the peak zone.
+  Behind the peak a low-density region (lung) stretches that edge, so the term can mean range,
+  low-density path or distal stretch. Compare the analytic peak depth and `wepl_mean`.
 - The beam-path marks are the region boundaries of `analyse_density_regions` and the location
   of `max_hu_gradient`, so they show where the features' values come from.
