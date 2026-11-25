@@ -73,8 +73,8 @@ One run directory `difficulty_explain_<timestamp>/` under `output_dir`:
 - `tables/`: `placement.csv`, `contributions_features.csv` and `contributions_groups.csv` (all
   scorers), `contrast_groups.csv`, `contrast_features.csv`, `agreement.csv`, `sum_check.csv`,
   `member_fit_check.csv`, `member_weights.csv`, `groups.csv`, `correlation_spearman.csv`,
-  `example_errors.csv`, `features_by_example.{csv,tex}`.
-- `figures/` (SVG, PDF, PNG, each with a `*_numbers.csv` beside it): `contributions_by_group`,
+  `example_errors.csv`, `features_by_example.csv` (and `.tex` with `latex_tables: true`).
+- `figures/` (PNG, or the `figure_formats` given, each with a `*_numbers.csv` beside it): `contributions_by_group`,
   `contrast_by_group`, `agreement_<pair>`, `feature_correlation`, `beam_path_<label>`.
 - `member_fits.json`: the member ridges, reusable with `--member-fits`.
 - With `pool_selection`: `tables/selection.csv` and per-anatomy figures
