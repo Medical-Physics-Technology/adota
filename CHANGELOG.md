@@ -45,6 +45,12 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
   (`contributions`, `members`, `groups`, `placement`, `profiles`, `analysis`, `report`,
   `tables`) and `src.figures.difficulty_explain` (`contribution_figure`, `contrast_figure`,
   `beam_path_figure`, `group_colors`). Guide: `scripts/docs/difficulty_explain.md`.
+  Across patients (`config_difficulty_explain_pool.yaml`): examples drawn per anatomy from
+  the pool and decile profiles of every reference beamlet, `src.acquisition.explain.population`
+  (`select_examples`, `population_groups`, `decile_profiles`, `variance_share`,
+  `leading_group_share`, `profile_agreement`) and `decile_profile_figure`. The script writes
+  PNG figures and CSV tables by default (`figure_formats`, `latex_tables`).
+- `src.figures.beamlet_hardness.annotated_heatmap` takes `formats` (default unchanged).
 - **`scripts/active_learning/difficulty_engine_grids.py`**: the input-only difficulty
   score against dose engines on saved beamlet grids, with
   `src.active_learning.ensemble.engine_grids` and

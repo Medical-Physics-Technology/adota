@@ -21,11 +21,36 @@ uv run python scripts/active_learning/difficulty_explain.py \
 uv run python scripts/active_learning/difficulty_explain.py \
     --example a=pool:c09e362a8d63f --example b=grid:<block>/<stem> --pair a:b \
     --member-fits <earlier run>/member_fits.json      # skips the 80 s member refit
+
+# across patients: examples drawn per anatomy from the pool, plus decile profiles of the reference
+uv run python scripts/active_learning/difficulty_explain.py \
+    --config scripts/active_learning/config_difficulty_explain_pool.yaml \
+    --member-fits <earlier run>/member_fits.json
 ```
 
 A grid beamlet is `grid:<block>/<stem>`, a saved EXP-0021 beamlet under `sources.grid.root`.
 A pool beamlet is `pool:<sample_id>`, a record of the pool test export. The analytic peak
 must lie inside the crop, because the score is not defined otherwise.
+
+Figures are written as PNG only (`figure_formats: [png]`; add `svg` and `pdf` when a figure
+goes into a paper) and tables as CSV only (`latex_tables: true` adds `features_by_example.tex`).
+
+### Across patients
+
+Two config blocks, used by `config_difficulty_explain_pool.yaml`:
+
+- `pool_selection` replaces `examples`: per anatomy (`by`), the pool-test beamlets nearest the
+  given `percentiles` of the score *within that anatomy*, named `<anatomy>_<level>`, no two from
+  the same patient (ties to the smaller sample id), paired within the anatomy (each level against
+  the one below). The contribution and contrast figures are then split per anatomy.
+- `population` decomposes every reference beamlet for the ensemble and each member (vectorised,
+  same sum check), cuts the ensemble score into `n_bins` equal-count deciles and writes
+  `population/`: per-beamlet group contributions, the decile profiles for all anatomies and per
+  anatomy, the share of the score's variance per group (`cov(group, score) / var(score)`, exact
+  and adding up to 1), the leading group per decile and the members' agreement with the
+  ensemble's profile.
+
+Both need the export index (`pool_patient_id`, `pool_anatomy`).
 
 ## What it computes
 
@@ -52,6 +77,12 @@ One run directory `difficulty_explain_<timestamp>/` under `output_dir`:
 - `figures/` (SVG, PDF, PNG, each with a `*_numbers.csv` beside it): `contributions_by_group`,
   `contrast_by_group`, `agreement_<pair>`, `feature_correlation`, `beam_path_<label>`.
 - `member_fits.json`: the member ridges, reusable with `--member-fits`.
+- With `pool_selection`: `tables/selection.csv` and per-anatomy figures
+  `contributions_by_group_<anatomy>` and `contrast_by_group_<anatomy>`.
+- With `population`: `population/contributions_ensemble.csv`, `decile_profiles.csv` (every
+  scorer), `variance_share.csv`, `leading_group_share.csv`, `profile_agreement.csv`, and the
+  figure `decile_profiles_by_group` (stacked mean group contributions per decile, the mean score
+  minus the baseline as a line; they agree exactly).
 
 ## Reading the results
 
@@ -63,8 +94,10 @@ One run directory `difficulty_explain_<timestamp>/` under `output_dir`:
   -0.75 with `hetero_fraction` (weight negative), so together they favour homogeneous peak
   zones: credit sharing in the ridge, made worse by that fallback. Read the tissue-change
   features as one group (they merge at `--group-threshold 0.6`).
-- "depth and energy" is carried by `bp_range_max_mm`, the 10% distal edge of the peak zone.
-  Behind the peak a low-density region (lung) stretches that edge, so the term can mean range,
-  low-density path or distal stretch. Compare the analytic peak depth and `wepl_mean`.
+- "depth and energy" is carried by `bp_range_max_mm`, the 10% distal edge of the peak zone, in
+  millimetres of geometry. Across the pool test split it correlates 0.98 with that edge and
+  0.68 with the energy, so the term mixes range, lung on the path, the distal stretch into
+  lung and the air in front of the patient (up to 118 mm in the EXP-0022 examples). Compare
+  the beam-axis WEPL in `figures/beam_path_profiles_numbers.csv` before reading it as range.
 - The beam-path marks are the region boundaries of `analyse_density_regions` and the location
   of `max_hu_gradient`, so they show where the features' values come from.
