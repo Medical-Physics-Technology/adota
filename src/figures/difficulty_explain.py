@@ -221,9 +221,10 @@ def beam_path_figure(inputs: BeamletInputs, profile: BeamAxisProfile, *, title: 
     """The beamlet on its beam axis: two image planes on the left, three depth profiles on the right.
 
     Left: ``Axial`` (depth x ``W``, fixed z) and ``Longitudinal`` (depth x ``H``, fixed y) planes through the
-    analytic peak, the CT in grey (-1000 to 1500 HU), the analytic dose faded in with its 50% isodose, the beam axis (dashed), the
-    Bragg-peak zone (band), the peak (marker) and the edge-metric sphere (circle). Right: HU along the axis and
-    flux-weighted, cumulative WEPL, and the laterally integrated dose. ``marks`` are drawn on all panels.
+    analytic peak, the CT in grey (-1000 to 1500 HU), the analytic dose faded in with its 50% isodose, the beam
+    axis (dashed), the Bragg-peak zone (band), the peak (marker) and the edge-metric sphere (circle).
+    Right: HU along the axis and flux-weighted, cumulative WEPL, and the laterally integrated dose.
+    ``marks`` are drawn on all panels.
     """
     dz = float(profile.dz_mm)
     pd_, ph, pw = (int(i) for i in profile.peak_index)
