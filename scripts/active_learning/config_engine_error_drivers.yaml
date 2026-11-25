@@ -1,0 +1,27 @@
+# What drives each dose engine's error? (EXP-0023, Paper 2 diagnostics)
+#   TMPDIR=/scratch/mstryja/tmp uv run python scripts/active_learning/engine_error_drivers.py \
+#       --config scripts/active_learning/config_engine_error_drivers.yaml --stages pba,adota,score
+# Guide: scripts/docs/engine_error_drivers.md
+
+output_dir: /scratch/mstryja/adota_runs/paper2/engine_drivers
+device_index: 0            # ADoTA inference and the torch gamma
+split: test
+
+# The beamlet pool: its raw store (1 mm crops + simulation metadata) for the pencil beam,
+# its v3-layout export (2 mm, normalised) for ADoTA and the Monte Carlo reference, and the
+# generator config the fields are rebuilt with. 130 patients, none of them a training scan
+# of ADoTA (registry match, EXP-0020).
+pool_store: /scratch/mstryja/adota_pool/v1_apollo_1e6
+pool_config: scripts/config_beamlet_pool.yaml
+dataset_path: /scratch/mstryja/adota_pool/exports/v1_apollo_1e6_test.h5
+
+engines:
+  adota:                   # EXP-0019, the current ADoTA
+    checkpoint: models/ADoTA_EXP0019_final_attndrop0/best_model.pth
+    model_config: models/ADoTA_EXP0019_final_attndrop0/hyperparams.json
+    batch_size: 16
+    num_workers: 8
+  pba:                     # EXP-0018's commissioned DoseCUDA pencil beam
+    dosecuda_kernels: /home/mstryja/tools/dosecuda/current/dose_kernels.so
+    model_dir: /home/mstryja/tools/dosecuda/models/hptc_rsnone_mcsquare_v1
+    gpu_id: 0
