@@ -14,6 +14,7 @@ from src.acquisition.explain.population import (
     profile_agreement,
     score_deciles,
     select_examples,
+    variance_share,
     within_stratum_pairs,
 )
 from src.acquisition.scorer import FULL, DifficultyScorer, percentile_grids
@@ -113,3 +114,13 @@ def test_leading_share_rows_sum_to_one_and_agreement_is_perfect_for_the_same_sco
     assert same["pearson_vs_reference"] == pytest.approx(1.0) and same["max_abs_difference"] == 0.0
     assert bool(same["same_top_decile_leader"])
     assert agree.set_index("scorer").loc["other", "max_abs_difference"] > 0
+
+
+def test_variance_shares_add_up_to_one_per_panel_and_match_a_single_group():
+    ref = _reference()
+    meta = _meta(ref.index)
+    grouped, total, _ = population_groups(_scorer(ref), ref, ref, GROUPS)
+    share = variance_share(grouped, total, meta)
+    np.testing.assert_allclose(share.groupby("panel")["variance_share"].sum(), 1.0, atol=1e-12)
+    one = variance_share(grouped[["G1"]] * 0 + total.to_frame("G1").to_numpy(), total, meta)
+    np.testing.assert_allclose(one["variance_share"], 1.0, atol=1e-12)

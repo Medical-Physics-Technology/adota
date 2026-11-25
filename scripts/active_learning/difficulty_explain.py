@@ -57,6 +57,7 @@ from src.acquisition.explain.population import (
     profile_agreement,
     score_deciles,
     select_examples,
+    variance_share,
     within_stratum_pairs,
 )
 from src.acquisition.explain.report import make_figures, make_population_figures
@@ -159,6 +160,8 @@ def _population(out: Path, cfg: dict, deployed: DifficultyScorer, members: Dict[
         g, t, _ = population_groups(scorer, reference, reference, groups.names)
         profiles[name] = decile_profiles(g, t, deciles, meta)
     pd.concat([p.assign(scorer=n) for n, p in profiles.items()]).to_csv(pop / "decile_profiles.csv", index=False)
+    var_share = variance_share(ens, total, meta)
+    var_share.to_csv(pop / "variance_share.csv", index=False)
     share = leading_group_share(ens, deciles)
     share.to_csv(pop / "leading_group_share.csv", index=False)
     panels = list(dict.fromkeys(profiles[ENSEMBLE]["panel"]))
@@ -179,6 +182,10 @@ def _population(out: Path, cfg: dict, deployed: DifficultyScorer, members: Dict[
         sub = ens_prof[ens_prof["panel"] == panel]
         top, bottom = sub[sub["decile"] == sub["decile"].max()], sub[sub["decile"] == sub["decile"].min()]
         lines.append(f"- {panel}: {_decile_text('top', top, True)}; {_decile_text('bottom', bottom, False)}.")
+    wide = var_share.pivot(index="group", columns="panel", values="variance_share")[panels]
+    wide = wide.loc[wide[ALL].sort_values(ascending=False).index]
+    lines += ["", "Share of the score's variance per group, cov(group, score) / var(score); each column adds up to 1:",
+              "", _markdown_table(wide.round(3).reset_index())]
     a_all = agree[agree["panel"] == ALL]
     rho = a_all["pearson_vs_reference"]
     lines += ["", f"Members vs ensemble (all anatomies): Pearson of the decile profiles {rho.min():.2f} to "

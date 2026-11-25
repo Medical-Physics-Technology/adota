@@ -135,6 +135,27 @@ def decile_profiles(grouped: pd.DataFrame, total: pd.Series, deciles: pd.Series,
     return pd.DataFrame(rows)
 
 
+def variance_share(grouped: pd.DataFrame, total: pd.Series, meta: pd.DataFrame, by: str = "anatomy") -> pd.DataFrame:
+    """Share of the score's variance carried by each group: ``cov(group, total) / var(total)``.
+
+    Exact and additive, because the total is the sum of the groups: the shares of a panel add up to 1.
+    A negative share is a group that, on average, moves against the score. Columns: ``panel`` (``all`` and
+    every stratum), ``group``, ``variance_share``, ``n_beamlets``.
+    """
+    strata = meta.reindex(grouped.index)[by]
+    panels: Dict[str, pd.Index] = {ALL: grouped.index}
+    panels.update({str(s): grouped.index[strata == s] for s in sorted(strata.dropna().unique())})
+    rows = []
+    for panel, ids in panels.items():
+        t = total.loc[ids].to_numpy()
+        t = t - t.mean()
+        for g in grouped.columns:
+            v = grouped.loc[ids, g].to_numpy()
+            rows.append({"panel": panel, "group": g, "variance_share": float(np.dot(v - v.mean(), t) / np.dot(t, t)),
+                         "n_beamlets": len(ids)})
+    return pd.DataFrame(rows)
+
+
 def leading_group_share(grouped: pd.DataFrame, deciles: pd.Series) -> pd.DataFrame:
     """Per decile, the share of beamlets whose largest positive contribution comes from each group.
 
@@ -171,4 +192,4 @@ def profile_agreement(profiles: Mapping[str, pd.DataFrame], reference: str, pane
 
 
 __all__ = ["ALL", "decile_profiles", "leading_group_share", "pool_metadata", "population_groups",
-           "profile_agreement", "score_deciles", "select_examples", "within_stratum_pairs"]
+           "profile_agreement", "score_deciles", "select_examples", "variance_share", "within_stratum_pairs"]

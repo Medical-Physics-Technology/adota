@@ -193,8 +193,8 @@ def decile_profile_figure(profile: pd.DataFrame, *, panels: Sequence[str], panel
     Each decile is a diverging stacked bar (positive group means up from 0, negative ones down, one colour per
     group, the same stacking order everywhere: the order of ``colors``) with the mean score minus baseline as a
     black line on top. The score is linear, so the line is exactly the sum of the bars (positive stack plus
-    negative stack). Deciles
-    with fewer than ``min_n`` beamlets show no bars and no marker, only a grey note. All panels share y limits.
+    negative stack). Deciles with fewer than ``min_n`` beamlets show no bars and no marker, only a grey note.
+    All panels share y limits.
 
     Args:
         profile: Columns ``panel, decile, group, mean_contribution, n_beamlets, n_patients, mean_total``.
