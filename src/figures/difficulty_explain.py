@@ -220,8 +220,8 @@ def beam_path_figure(inputs: BeamletInputs, profile: BeamAxisProfile, *, title: 
                      figure_path: str, formats: Sequence[str] = PUBLICATION_FORMATS) -> List[Path]:
     """The beamlet on its beam axis: two image planes on the left, three depth profiles on the right.
 
-    Left: ``Axial`` (depth x ``H``) and ``Longitudinal`` (depth x ``W``) planes through the analytic peak, the
-    CT in grey (-1000 to 1500 HU), the analytic dose faded in with its 50% isodose, the beam axis (dashed), the
+    Left: ``Axial`` (depth x ``W``, fixed z) and ``Longitudinal`` (depth x ``H``, fixed y) planes through the
+    analytic peak, the CT in grey (-1000 to 1500 HU), the analytic dose faded in with its 50% isodose, the beam axis (dashed), the
     Bragg-peak zone (band), the peak (marker) and the edge-metric sphere (circle). Right: HU along the axis and
     flux-weighted, cumulative WEPL, and the laterally integrated dose. ``marks`` are drawn on all panels.
     """
@@ -230,8 +230,10 @@ def beam_path_figure(inputs: BeamletInputs, profile: BeamAxisProfile, *, title: 
     peak_mm = pd_ * dz
     xlim = _depth_window(profile)
     dose, ct = np.asarray(profile.analytic_dose), np.asarray(inputs.ct_hu)
-    planes = {"Axial": (ct[:, :, pw].T, dose[:, :, pw].T, ph),
-              "Longitudinal": (ct[:, ph, :].T, dose[:, ph, :].T, pw)}
+    # The model grid is the (z, y, x) beam's-eye crop permuted to (x, z, y): H is z, W is y. The story
+    # figure's planes (pencil_beam._bev_planes) are "Axial" = fixed z and "Longitudinal" = fixed y.
+    planes = {"Axial": (ct[:, ph, :].T, dose[:, ph, :].T, pw),
+              "Longitudinal": (ct[:, :, pw].T, dose[:, :, pw].T, ph)}
     with plt.rc_context(_RC):
         fig = plt.figure(figsize=(13.0, 6.9))
         outer = fig.add_gridspec(1, 2, width_ratios=[1.0, 1.0], left=0.06, right=0.985, top=0.9, bottom=0.2,

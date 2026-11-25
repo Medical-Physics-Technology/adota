@@ -180,7 +180,7 @@ def main(
     ens_feat = by_feature[by_feature["scorer"] == ENSEMBLE]
     top_feats = {h: list(ens_feat[(ens_feat["harder"] == h) & ens_feat["top"]]["item"]) for h, _ in pairs}
     wide = example_table(placement, decs[ENSEMBLE].table, groups.names, top_feats)
-    write_csv_and_latex(wide, tables / "features_by_example", label="tab:difficulty_explain",
+    write_csv_and_latex(wide, tables / "features_by_example", label="tab:difficulty_explain", float_format="{:.3g}",
                         caption=(f"Difficulty features of the example beamlets against the reference population "
                                  f"({len(reference)} pool-test beamlets): value, percentile, robust z "
                                  f"(median and IQR/1.349) and contribution to the ensemble score. Bold: the "
