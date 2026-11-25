@@ -1,0 +1,42 @@
+# Why does a beamlet get its difficulty score? (Paper 2, Phase 0 diagnostics)
+#   TMPDIR=/scratch/mstryja/tmp uv run python scripts/active_learning/difficulty_explain.py \
+#       --config scripts/active_learning/config_difficulty_explain.yaml
+# Guide: scripts/docs/difficulty_explain.md. CPU only, about 2 minutes (1.5 of them refitting the
+# five member ridges; pass --member-fits <run>/member_fits.json to reuse an earlier run's).
+
+output_dir: /scratch/mstryja/adota_runs/paper2/diagnostics
+
+# The deployed score (EXP-0014 v2): one ridge on 30 percentile features, fitted to the mean of
+# five members' standardised log(1 + RDE). Its per-member ridges are refitted from the config
+# below and accepted only if they average to it (to 1e-8).
+scorer: src/acquisition/data/analytic_scorer_v2_exp0014.json
+independence_config: scripts/active_learning/config_difficulty_independence.yaml
+
+# Background for the baseline, percentiles, robust z and the feature correlations: the pool
+# test split (130 patients, none in the score's fit), peak inside the crop. Same reference
+# the d score of EXP-0021 is a percentile of.
+reference_features: /scratch/mstryja/adota_runs/exp0014/independence/features_pool/features_analytic.csv
+
+sources:
+  grid:   # EXP-0021: saved 18 x 18 fields of four unseen CTs
+    features: /scratch/mstryja/adota_runs/exp0014/difficulty_engine_grids/energy_gantry_full/features_analytic.csv
+    per_beamlet: /scratch/mstryja/adota_runs/exp0014/difficulty_engine_grids/energy_gantry_full/analysis/per_beamlet.csv
+    root: /scratch/mstryja/DoTA_dataset_v2
+  pool:
+    features: /scratch/mstryja/adota_runs/exp0014/independence/features_pool/features_analytic.csv
+    members_dir: /scratch/mstryja/adota_runs/exp0014/independence/infer/ensemble_agreement_20261103_130852/members
+    h5: /scratch/mstryja/adota_pool/exports/v1_apollo_1e6_test.h5
+
+# The three beamlets of the 20 Nov 2026 supervisor meeting (EXP-0021 story figure: nearest the
+# 10th, 50th and 90th score percentile of the grid set, chosen from the scores alone).
+examples:
+  easy: grid:energy_gantry_full_abdominal_StageII-Colorectal-CT-222_e102p6_g114p6_v1/a08_00
+  medium: grid:energy_gantry_full_abdominal_StageII-Colorectal-CT-222_e135_g197p8_v1/a00_12
+  hard: grid:energy_gantry_full_thoracic_Lung_Dx-G0049_e135_g262p2_v1/a05_15
+pairs:
+  - [medium, easy]
+  - [hard, medium]
+
+group_threshold: 0.7     # |Spearman| on the reference at which features join a group (CHG-0021: 0.7)
+top_k: 3
+make_figures: true

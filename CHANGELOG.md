@@ -36,6 +36,15 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 
 ### Added
 
+- **`scripts/active_learning/difficulty_explain.py`**: why a beamlet gets its difficulty
+  score. Exact additive contributions of the 30 features (the linear form makes them the
+  SHAP values, no sampling), for the deployed score v2, for the five per-member ridges it
+  averages (refitted on the frozen fit rows and accepted only if their mean reproduces the
+  deployed weights to 1e-8) and for the sparse variant; feature groups by correlation;
+  pair contrasts; member agreement; beam-path figures. New package `src.acquisition.explain`
+  (`contributions`, `members`, `groups`, `placement`, `profiles`, `analysis`, `report`,
+  `tables`) and `src.figures.difficulty_explain` (`contribution_figure`, `contrast_figure`,
+  `beam_path_figure`, `group_colors`). Guide: `scripts/docs/difficulty_explain.md`.
 - **`scripts/active_learning/difficulty_engine_grids.py`**: the input-only difficulty
   score against dose engines on saved beamlet grids, with
   `src.active_learning.ensemble.engine_grids` and
