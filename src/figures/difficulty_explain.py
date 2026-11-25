@@ -1,11 +1,13 @@
 """Slide figures that explain a beamlet's difficulty score.
 
-Three figures, all for a supervisor-meeting slide (readable fonts, units on every axis, one colour per
+Four figures, all for a supervisor-meeting slide (readable fonts, units on every axis, one colour per
 feature group across every figure):
 
 - :func:`contribution_figure`: per-group contributions to the score, one panel per scorer and example;
 - :func:`contrast_figure`: per-group difference between a harder and an easier beamlet, ensemble bars with
   the members' differences as markers;
+- :func:`decile_profile_figure`: per-group contributions and the mean score across the deciles of the
+  reference score, one panel per beamlet subset;
 - :func:`beam_path_figure`: the beamlet's CT, analytic dose and depth profiles along the beam axis, with the
   depth intervals the explanation refers to marked.
 
@@ -182,6 +184,91 @@ def contrast_figure(contrast: pd.DataFrame, *, pairs: Sequence[Tuple[str, str]],
     return paths
 
 
+def decile_profile_figure(profile: pd.DataFrame, *, panels: Sequence[str], panel_titles: Mapping[str, str],
+                          colors: Mapping[str, str], figure_path: str, title: str, min_n: int = 20,
+                          score_unit: str = "score units",
+                          formats: Sequence[str] = PUBLICATION_FORMATS) -> List[Path]:
+    """One panel per entry of ``panels``: per-group contributions across the deciles of the reference score.
+
+    Each decile is a diverging stacked bar (positive group means up from 0, negative ones down, one colour per
+    group, the same stacking order everywhere: the order of ``colors``) with the mean score minus baseline as a
+    black line on top. The score is linear, so the line is exactly the sum of the bars (positive stack plus
+    negative stack). Deciles
+    with fewer than ``min_n`` beamlets show no bars and no marker, only a grey note. All panels share y limits.
+
+    Args:
+        profile: Columns ``panel, decile, group, mean_contribution, n_beamlets, n_patients, mean_total``.
+        panels: Panel keys in drawing order (two columns).
+    """
+    groups = [g for g in colors if g in set(profile["group"])]
+    n_dec = int(profile["decile"].max())
+    deciles = np.arange(1, n_dec + 1)
+    stacks, lows, highs = {}, [], []
+    for panel in panels:
+        sub = profile[profile["panel"] == panel]
+        for d in deciles:
+            rows = sub[sub["decile"] == d]
+            n = int(rows["n_beamlets"].max()) if len(rows) else 0
+            if n < min_n:
+                stacks[(panel, d)] = None
+                continue
+            vals = rows.groupby("group")["mean_contribution"].sum()
+            total = float(rows["mean_total"].iloc[0])
+            stacks[(panel, d)] = (n, [(g, float(vals.get(g, 0.0))) for g in groups], total)
+            v = [float(vals.get(g, 0.0)) for g in groups]
+            lows.append(min(sum(x for x in v if x < 0), total))
+            highs.append(max(sum(x for x in v if x > 0), total))
+    lo, hi = (min(lows), max(highs)) if lows else (-1.0, 1.0)
+    pad = 0.08 * ((hi - lo) or 1.0)
+    ncols = min(2, len(panels))
+    nrows = -(-len(panels) // ncols)
+    fig_h = 3.9 * nrows + 2.3
+    with plt.rc_context(_RC):
+        fig, axes = plt.subplots(nrows, ncols, figsize=(6.6 * ncols, fig_h), squeeze=False,
+                                 gridspec_kw={"hspace": 0.55, "wspace": 0.22, "left": 0.08, "right": 0.985,
+                                              "top": 0.9, "bottom": 1.55 / fig_h})
+        flat = list(axes.ravel())
+        for ax in flat[len(panels):]:
+            ax.remove()
+        for ax, panel in zip(flat, panels):
+            ticks = []
+            xs, ys = [], []
+            for d in deciles:
+                st = stacks[(panel, d)]
+                n_all = profile[(profile["panel"] == panel) & (profile["decile"] == d)]["n_beamlets"]
+                ticks.append(f"D{d}\nn={int(n_all.max()) if len(n_all) else 0}")
+                if st is None:
+                    ax.text(d, 0.0, f"n < {min_n}", color="grey", fontsize=TICK_SIZE - 1.5, ha="center",
+                            va="center", rotation=90)
+                    continue
+                pos = neg = 0.0
+                for g, v in st[1]:
+                    base = pos if v >= 0 else neg
+                    ax.bar(d, v, bottom=base, width=0.75, color=colors[g], zorder=2)
+                    if v >= 0:
+                        pos += v
+                    else:
+                        neg += v
+                xs.append(d)
+                ys.append(st[2])
+            ax.plot(xs, ys, color="black", marker="o", markersize=4.5, linewidth=1.3, zorder=4)
+            ax.axhline(0.0, color="black", linewidth=0.9, zorder=3)
+            style_axis(ax, xlabel="Score decile of the reference (D1 easiest)",
+                       ylabel=f"Mean contribution [{score_unit}]", title=panel_titles.get(panel, panel))
+            ax.set_xticks(deciles)
+            ax.set_xticklabels(ticks, fontsize=TICK_SIZE - 1)
+            ax.set_xlim(0.4, n_dec + 0.6)
+            ax.set_ylim(lo - pad, hi + pad)
+        _group_legend(fig, groups, colors, ncol=min(4, len(groups)), y=1.05 / fig_h)
+        fig.legend(handles=[plt.Line2D([], [], color="black", marker="o", markersize=4.5,
+                                       label="mean score minus baseline")],
+                   loc="lower center", bbox_to_anchor=(0.5, 0.0), frameon=False, fontsize=TICK_SIZE)
+        fig.suptitle(title, x=0.012, y=0.985, ha="left", fontsize=13, fontweight="bold")
+        paths = save_figure_as_publication_formats(fig, figure_path, formats=formats)
+        plt.close(fig)
+    return paths
+
+
 @dataclass(frozen=True)
 class DepthMark:
     """A depth interval (or a point if start == end) to mark on the beam-path figure."""
@@ -310,4 +397,4 @@ def beam_path_figure(inputs: BeamletInputs, profile: BeamAxisProfile, *, title: 
 
 
 __all__ = ["DepthMark", "GROUP_PALETTE", "beam_path_figure", "contrast_figure", "contribution_figure",
-           "group_colors"]
+           "decile_profile_figure", "group_colors"]

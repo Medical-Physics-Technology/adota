@@ -12,6 +12,7 @@ from src.figures.difficulty_explain import (
     beam_path_figure,
     contrast_figure,
     contribution_figure,
+    decile_profile_figure,
     group_colors,
 )
 
@@ -116,3 +117,25 @@ def test_beam_path_figure_writes(tmp_path, with_mc):
     marks = [DepthMark("Bone slab", 100.0, 112.0, "#d62728"), DepthMark("Peak", 200.0, 200.0, "#2ca02c")]
     beam_path_figure(inputs, profile, title="Hard beamlet", marks=marks, figure_path=str(tmp_path / "x"))
     _assert_written(tmp_path)
+
+
+def _decile_profile():
+    rng = np.random.default_rng(2)
+    rows = []
+    for panel in ("all", "lung"):
+        for d in range(1, 11):
+            vals = rng.normal(0, 0.4, 4)
+            n = 5 if (panel == "lung" and d == 3) else 100 + d
+            rows += [{"panel": panel, "decile": d, "group": f"g{i}", "mean_contribution": float(v), "n_beamlets": n,
+                      "n_patients": 7, "mean_total": float(vals.sum())} for i, v in enumerate(vals)]
+    return pd.DataFrame(rows)
+
+
+def test_decile_profile_figure_writes_png_only(tmp_path):
+    colors = group_colors([f"g{i}" for i in range(4)])
+    paths = decile_profile_figure(_decile_profile(), panels=["all", "lung"], panel_titles={"all": "All"},
+                                  colors=colors, figure_path=str(tmp_path / "x"), title="t", formats=("png",))
+    assert [p.name for p in paths] == ["x.png"]
+    files = sorted(p.name for p in tmp_path.iterdir())
+    assert files == ["x.png"] and (tmp_path / "x.png").stat().st_size > 1000
+    assert not (tmp_path / "x.svg").exists() and not (tmp_path / "x.pdf").exists()

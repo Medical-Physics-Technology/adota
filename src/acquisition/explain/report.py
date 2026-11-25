@@ -13,7 +13,7 @@ inside the Bragg-peak zone, and the steepest HU step is the location of
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Mapping, Sequence, Tuple
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -28,12 +28,14 @@ from src.acquisition.explain.profiles import (
     load_pool_beamlet,
 )
 from src.acquisition.features import FeatureConfig, analyse_density_regions
+from src.figures.axes_utils import PUBLICATION_FORMATS
 from src.figures.beamlet_hardness import annotated_heatmap
 from src.figures.difficulty_explain import (
     DepthMark,
     beam_path_figure,
     contrast_figure,
     contribution_figure,
+    decile_profile_figure,
     group_colors,
 )
 
@@ -84,10 +86,14 @@ def _profile_frame(label: str, profile: BeamAxisProfile) -> pd.DataFrame:
 def make_figures(out: Path, sources: Mapping, refs: Sequence[BeamletRef], pairs: Sequence[Tuple[str, str]],
                  energies: Mapping[str, float], grouped: pd.DataFrame, by_group: pd.DataFrame,
                  totals: pd.DataFrame, groups: FeatureGroups, members: Sequence[str],
-                 titles: Mapping[str, str], short_titles: Mapping[str, str]) -> Dict[str, List[Path]]:
+                 titles: Mapping[str, str], short_titles: Mapping[str, str],
+                 panels: Optional[Mapping[str, Tuple[Sequence[str], Sequence[Tuple[str, str]]]]] = None,
+                 formats: Sequence[str] = PUBLICATION_FORMATS) -> Dict[str, List[Path]]:
     """Every figure of the run into ``out / "figures"``, a CSV of its numbers beside it.
 
     ``titles`` head the beam-path figures; ``short_titles`` head the columns of the contribution grid.
+    ``panels`` splits the contribution and contrast figures, ``{name: (labels, pairs)}`` written with a
+    ``_<name>`` suffix (default: one figure of every beamlet and pair). ``formats``: the file types written.
     """
     fig_dir = out / "figures"
     fig_dir.mkdir(parents=True, exist_ok=True)
@@ -95,20 +101,23 @@ def make_figures(out: Path, sources: Mapping, refs: Sequence[BeamletRef], pairs:
     scorers = [ENSEMBLE] + list(members)
     colors = group_colors(sorted(set(groups.names.values())))
     written: Dict[str, List[Path]] = {}
+    panels = panels or {"": (labels, pairs)}
 
     contrib = grouped[grouped["scorer"].isin(scorers)]
     contrib.to_csv(fig_dir / "contributions_numbers.csv", index=False)
-    written["contributions"] = contribution_figure(
-        contrib, totals[totals["scorer"].isin(scorers)], examples=labels, example_labels=short_titles, scorers=scorers,
-        colors=colors, figure_path=str(fig_dir / "contributions_by_group"),
-        title="Difficulty score minus the pool-test mean, by feature group")
-
     contrast = by_group[by_group["scorer"].isin(scorers)]
     contrast.to_csv(fig_dir / "contrast_numbers.csv", index=False)
-    written["contrast"] = contrast_figure(
-        contrast, pairs=pairs, pair_labels={p: f"{p[0]} vs {p[1]}" for p in pairs}, colors=colors,
-        figure_path=str(fig_dir / "contrast_by_group"),
-        title="Why the harder beamlet scores higher: ensemble (bars) and members (markers)")
+    for name, (panel_labels, panel_pairs) in panels.items():
+        suffix = f"_{name}" if name else ""
+        written[f"contributions{suffix}"] = contribution_figure(
+            contrib, totals[totals["scorer"].isin(scorers)], examples=list(panel_labels), example_labels=short_titles,
+            scorers=scorers, colors=colors, figure_path=str(fig_dir / f"contributions_by_group{suffix}"),
+            title="Difficulty score minus the pool-test mean, by feature group" + (f" ({name})" if name else ""),
+            formats=formats)
+        written[f"contrast{suffix}"] = contrast_figure(
+            contrast, pairs=list(panel_pairs), pair_labels={p: f"{p[0]} vs {p[1]}" for p in panel_pairs},
+            colors=colors, figure_path=str(fig_dir / f"contrast_by_group{suffix}"), formats=formats,
+            title="Why the harder beamlet scores higher: ensemble (bars) and members (markers)")
 
     for (h, e), sub in contrast.groupby(["harder", "easier"], sort=False):
         mat = sub.pivot(index="item", columns="scorer", values="difference")[scorers]
@@ -117,7 +126,8 @@ def make_figures(out: Path, sources: Mapping, refs: Sequence[BeamletRef], pairs:
         written[f"agreement_{h}_{e}"] = annotated_heatmap(
             mat, figure_path=str(fig_dir / f"agreement_{h}_vs_{e}"), value_label="Contribution difference",
             title=f"{h} minus {e}: group contribution difference per scorer",
-            caption="Rows: feature groups. Columns: the deployed ensemble and the five member ridges it averages.")
+            caption="Rows: feature groups. Columns: the deployed ensemble and the five member ridges it averages.",
+            formats=formats)
 
     order = sorted(groups.names, key=lambda f: (groups.names[f], f))
     corr = groups.clusters.correlation.loc[order, order]
@@ -126,7 +136,7 @@ def make_figures(out: Path, sources: Mapping, refs: Sequence[BeamletRef], pairs:
         corr, figure_path=str(fig_dir / "feature_correlation"), value_label="Spearman rho", fmt="{:.1f}",
         groups=[str(groups.clusters.assignment[f]) for f in order], vmax=1.0, cell_in=0.34,
         title=f"Feature correlation on the reference; groups at |rho| >= {groups.threshold:g}",
-        caption="Row prefix: group id (tables/groups.csv).")
+        caption="Row prefix: group id (tables/groups.csv).", formats=formats)
 
     profiles, marks_rows = [], []
     for ref in refs:
@@ -138,10 +148,24 @@ def make_figures(out: Path, sources: Mapping, refs: Sequence[BeamletRef], pairs:
                                             mc_bp_slice=profile.mc_bp_slice,
                                             bp_zone_min_mm=profile.bp_zone_mm[0], bp_zone_max_mm=profile.bp_zone_mm[1]))
         written[f"beam_path_{ref.label}"] = beam_path_figure(
-            inputs, profile, title=titles[ref.label], marks=marks, figure_path=str(fig_dir / f"beam_path_{ref.label}"))
+            inputs, profile, title=titles[ref.label], marks=marks, figure_path=str(fig_dir / f"beam_path_{ref.label}"),
+            formats=formats)
     pd.concat(profiles, ignore_index=True).to_csv(fig_dir / "beam_path_profiles_numbers.csv", index=False)
     pd.concat(marks_rows, ignore_index=True).to_csv(fig_dir / "beam_path_marks_numbers.csv", index=False)
     return written
 
 
-__all__ = ["depth_marks", "load_inputs", "make_figures"]
+def make_population_figures(out: Path, profiles: pd.DataFrame, groups: FeatureGroups, panel_titles: Mapping[str, str],
+                            n_reference: int, formats: Sequence[str] = PUBLICATION_FORMATS) -> List[Path]:
+    """The ensemble's decile profiles: mean group contribution per score decile, one panel per population."""
+    fig_dir = out / "figures"
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    profiles.to_csv(fig_dir / "decile_profiles_numbers.csv", index=False)
+    colors = group_colors(sorted(set(groups.names.values())))
+    return decile_profile_figure(
+        profiles, panels=list(dict.fromkeys(profiles["panel"])), panel_titles=panel_titles, colors=colors,
+        figure_path=str(fig_dir / "decile_profiles_by_group"), formats=formats,
+        title=f"What the score is made of, decile by decile ({n_reference} pool-test beamlets)")
+
+
+__all__ = ["depth_marks", "load_inputs", "make_figures", "make_population_figures"]

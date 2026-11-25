@@ -40,3 +40,5 @@ pairs:
 group_threshold: 0.7     # |Spearman| on the reference at which features join a group (CHG-0021: 0.7)
 top_k: 3
 make_figures: true
+figure_formats: [png]   # svg and pdf on request, e.g. [svg, pdf, png]
+latex_tables: false     # features_by_example.tex, for writing
