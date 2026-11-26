@@ -103,7 +103,8 @@ def hu_error_grid(table: pd.DataFrame, *, value: str, ylabel: str, title: str, f
         fig.suptitle(title, x=0.01, ha="left", fontsize=14, fontweight="bold", color=INK)
         if note:
             fig.text(0.01, 0.005, note, ha="left", va="bottom", fontsize=9, color=MUTED)
-        fig.subplots_adjust(left=0.1, right=0.99, top=0.9, bottom=0.08 if note else 0.06)
+        height = fig.get_figheight()
+        fig.subplots_adjust(left=0.1, right=0.99, top=1.0 - 0.95 / height, bottom=(1.0 if note else 0.7) / height)
         paths = save_figure_as_publication_formats(fig, str(Path(figure_path)), formats=tuple(formats))
         plt.close(fig)
     return paths
