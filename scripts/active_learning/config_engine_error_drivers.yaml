@@ -58,3 +58,7 @@ voxel_hu_error:             # stage voxel_hu_error (analysis/voxel_hu_error/)
   n_boot: 500
   seed: 20261126
   formats: [png, pdf]
+
+voxel_decomposition:        # stage voxel_decomposition (analysis/voxel_hu_error/decomposition/)
+  n_boot: 200               # patient resamples per decomposition
+  seed: 20261126
