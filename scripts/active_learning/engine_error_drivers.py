@@ -47,6 +47,11 @@ Stages (``--stages``, comma-separated, run in this order; ``--run-dir`` resumes 
                (``analysis/voxel_hu_error/decomposition/``,
                :mod:`src.engine_drivers.voxel_decomposition`). Needs ``voxel_hu_error`` first.
 
+* ``score_table`` -- one row per beamlet: metadata, difficulty score (score v2, EXP-0022) with
+               its decile and group contributions, and both engines' errors
+               (``analysis/score_table/beamlet_score_and_errors.csv``,
+               :mod:`src.engine_drivers.score_table`). Needs ``dataset_overview`` first.
+
 ``--ids-file`` (a CSV with ``sample_id``) restricts every stage to those beamlets; the
 pencil beam still rebuilds their whole field, but computes only them.
 
@@ -80,6 +85,7 @@ from src.engine_drivers.adota import predict_and_save
 from src.engine_drivers.analysis import run_analysis, run_ct_vs_error
 from src.engine_drivers.overview_stage import run_dataset_overview
 from src.engine_drivers.pba import field_doses, patient_cts, pool_fields, save_dose
+from src.engine_drivers.score_table import run_score_table
 from src.engine_drivers.scoring import CRITERIA, export_scale, mc_model_grid, score_doses
 from src.engine_drivers.voxel_decomposition import run_voxel_decomposition
 from src.engine_drivers.voxel_hu_error import run_voxel_hu_error
@@ -98,9 +104,9 @@ from src.utils.unit_conversions import mcsquare_to_gy_per_mu
 
 logger = logging.getLogger("engine_error_drivers")
 STAGES = ("pba", "adota", "score", "panels", "analyse", "ct_vs_error", "dataset_overview", "voxel_hu_error",
-          "voxel_decomposition")
+          "voxel_decomposition", "score_table")
 # Stages that add files to a finished run; run alone, they log in their own folder.
-ADD_ON_STAGES = ("dataset_overview", "voxel_hu_error", "voxel_decomposition")
+ADD_ON_STAGES = ("dataset_overview", "voxel_hu_error", "voxel_decomposition", "score_table")
 DEFAULTS = {"output_dir": None, "device_index": 0, "split": "test"}
 
 
@@ -281,6 +287,13 @@ def main(
         (out / "provenance.json").write_text(json.dumps(
             {"stage": "voxel_decomposition", "git": _git_info(), "config": cfg.get("voxel_decomposition")},
             indent=1, default=str))
+    if "score_table" in chosen:
+        out = run / "analysis" / "score_table"
+        lines = run_score_table(cfg, run)
+        (out / "summary.md").write_text("\n".join(lines), encoding="utf-8")
+        (out / "provenance.json").write_text(json.dumps(
+            {"stage": "score_table", "git": _git_info(), "score_contributions": cfg["analysis"]["score_contributions"],
+             "engines": cfg["engines"]}, indent=1, default=str))
     logger.info("done: %s", run)
 
 
