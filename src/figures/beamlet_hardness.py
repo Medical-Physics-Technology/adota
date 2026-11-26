@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 
 from src.figures.al_curves import COLORS
-from src.figures.axes_utils import aligned_colorbar, save_figure_as_publication_formats
+from src.figures.axes_utils import PUBLICATION_FORMATS, aligned_colorbar, save_figure_as_publication_formats
 from src.figures.hpo import MIXER_COLORS
 
 CONSENSUS_COLOR = "#4d4d4d"
@@ -39,7 +39,8 @@ for the published ADoTA, dark grey for the consensus of all engines."""
 def annotated_heatmap(values: pd.DataFrame, *, figure_path: str, title: str, value_label: str,
                       caption: str = "", groups: Optional[Sequence[str]] = None, vmax: Optional[float] = None,
                       cmap: str = "RdBu_r", fmt: str = "{:.2f}", lo: Optional[pd.DataFrame] = None,
-                      hi: Optional[pd.DataFrame] = None, cell_in: float = 0.52) -> List[Path]:
+                      hi: Optional[pd.DataFrame] = None, cell_in: float = 0.52,
+                      formats: Sequence[str] = PUBLICATION_FORMATS) -> List[Path]:
     """One annotated matrix on a symmetric diverging scale.
 
     Args:
@@ -80,7 +81,7 @@ def annotated_heatmap(values: pd.DataFrame, *, figure_path: str, title: str, val
     if caption:
         ax.set_xlabel(textwrap.fill(caption, width=int(16 * width)), fontsize=6.5)
     aligned_colorbar(fig, image, ax, value_label, label_coords=(4.2, 0.5), label_fontsize=7, tick_fontsize=6)
-    paths = save_figure_as_publication_formats(fig, figure_path)
+    paths = save_figure_as_publication_formats(fig, figure_path, formats=formats)
     plt.close(fig)
     return paths
 

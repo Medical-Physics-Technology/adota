@@ -1,0 +1,49 @@
+# Why does a beamlet get its difficulty score, across patients? (Paper 2, Phase 0 diagnostics)
+#   TMPDIR=/scratch/mstryja/tmp uv run python scripts/active_learning/difficulty_explain.py \
+#       --config scripts/active_learning/config_difficulty_explain_pool.yaml
+# Guide: scripts/docs/difficulty_explain.md. CPU only, about 2 minutes (1.5 of them refitting the
+# five member ridges; pass --member-fits <run>/member_fits.json to reuse an earlier run's).
+
+output_dir: /scratch/mstryja/adota_runs/paper2/diagnostics
+run_prefix: difficulty_explain_pool_
+
+# The deployed score (EXP-0014 v2): one ridge on 30 percentile features, fitted to the mean of
+# five members' standardised log(1 + RDE). Its per-member ridges are refitted from the config
+# below and accepted only if they average to it (to 1e-8).
+scorer: src/acquisition/data/analytic_scorer_v2_exp0014.json
+independence_config: scripts/active_learning/config_difficulty_independence.yaml
+
+# Background for the baseline, percentiles, robust z and the feature correlations: the pool
+# test split (130 patients, none in the score's fit), peak inside the crop. Same reference
+# the d score of EXP-0021 is a percentile of.
+reference_features: /scratch/mstryja/adota_runs/exp0014/independence/features_pool/features_analytic.csv
+
+sources:
+  grid:   # EXP-0021: saved 18 x 18 fields of four unseen CTs
+    features: /scratch/mstryja/adota_runs/exp0014/difficulty_engine_grids/energy_gantry_full/features_analytic.csv
+    per_beamlet: /scratch/mstryja/adota_runs/exp0014/difficulty_engine_grids/energy_gantry_full/analysis/per_beamlet.csv
+    root: /scratch/mstryja/DoTA_dataset_v2
+  pool:
+    features: /scratch/mstryja/adota_runs/exp0014/independence/features_pool/features_analytic.csv
+    members_dir: /scratch/mstryja/adota_runs/exp0014/independence/infer/ensemble_agreement_20261103_130852/members
+    h5: /scratch/mstryja/adota_pool/exports/v1_apollo_1e6_test.h5
+
+# Examples drawn from the pool test split instead of named: per anatomy, the beamlets nearest
+# the 10th, 50th and 90th percentile of the score within that anatomy, each from a different
+# patient, paired within the anatomy (medium vs easy, hard vs medium).
+pool_selection:
+  index: /scratch/mstryja/adota_pool/exports/v1_apollo_1e6_test_index.csv
+  percentiles: [10, 50, 90]
+  levels: [easy, medium, hard]
+  by: anatomy
+
+# Every reference beamlet decomposed (ensemble and members), averaged per score decile.
+population:
+  index: /scratch/mstryja/adota_pool/exports/v1_apollo_1e6_test_index.csv
+  n_bins: 10
+
+group_threshold: 0.7     # |Spearman| on the reference at which features join a group (CHG-0021: 0.7)
+top_k: 3
+make_figures: true
+figure_formats: [png]   # svg and pdf on request, e.g. [svg, pdf, png]
+latex_tables: false     # features_by_example.tex, for writing
