@@ -72,7 +72,7 @@ from src.evaluation.cli import (
 )
 from src.figures.engine_drivers import engine_panel_figure
 from src.pencil_beam.beam_model import model_fingerprint
-from src.training.run_dir import save_resolved_config, write_manifest
+from src.training.run_dir import _git_info, save_resolved_config, write_manifest
 from src.utils.scallers import inverse_minmax
 from src.utils.unit_conversions import mcsquare_to_gy_per_mu
 
@@ -228,6 +228,9 @@ def main(
     if "ct_vs_error" in chosen:
         lines = run_ct_vs_error(cfg, run)
         (run / "analysis" / "ct_vs_error" / "summary.md").write_text("\n".join(lines), encoding="utf-8")
+        (run / "analysis" / "ct_vs_error" / "provenance.json").write_text(
+            json.dumps({"stage": "ct_vs_error", "git": _git_info(), "config": cfg.get("analysis")}, indent=1,
+                       default=str))
     logger.info("done: %s", run)
 
 

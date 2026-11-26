@@ -59,7 +59,7 @@ FEATURE_LABELS: Mapping[str, str] = {
     "energy_mev": "Beam energy\nenergy_mev [MeV]",
 }
 ERROR_LABELS: Mapping[str, str] = {
-    "gpr_2pct_2mm_10pct": "GPR 2%/2mm, 10% cutoff [%] (worse to the right)",
+    "gpr_2pct_2mm_10pct": "GPR 2%/2mm, 10% cutoff [%]",
     "mape_pct": "MAPE [%]",
 }
 SITES = ("thoracic", "abdominal", "pelvic")

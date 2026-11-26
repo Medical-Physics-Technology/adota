@@ -55,10 +55,11 @@ def _fmt(row: pd.Series) -> str:
 def _title_lines(stats: pd.DataFrame, error: str, feature: str, sites: Sequence[str]) -> List[str]:
     """Two title lines for one panel: pooled and energy-controlled rho, then one item per site.
 
-    A scope absent from ``stats`` is skipped. A line with no items is omitted.
+    A scope absent from ``stats`` or without a finite value (e.g. energy controlled for itself) is
+    skipped. A line with no items is omitted.
     """
     sub = stats[(stats["error"] == error) & (stats["feature"] == feature)]
-    by_scope = {str(r["scope"]): r for _, r in sub.iterrows()}
+    by_scope = {str(r["scope"]): r for _, r in sub.iterrows() if np.isfinite(float(r["spearman"]))}
     first = []
     if "pooled" in by_scope:
         first.append(f"pooled rho {_fmt(by_scope['pooled'])}")
@@ -66,6 +67,13 @@ def _title_lines(stats: pd.DataFrame, error: str, feature: str, sites: Sequence[
         first.append(f"energy-controlled {_fmt(by_scope['energy_partial'])}")
     second = [f"{site[:4]} {_fmt(by_scope[site])}" for site in sites if site in by_scope]
     return [line for line in ("; ".join(first), "  ".join(second)) if line]
+
+
+def _axis_label(label: str, reversed_axis: bool, on_x: bool) -> str:
+    """An error axis label with its reading direction when the axis is inverted."""
+    if not reversed_axis:
+        return label
+    return f"{label}\n(axis reversed: worse to the right)" if on_x else f"{label}\n(axis reversed: worse upward)"
 
 
 def _limits(values: pd.Series, clip_quantiles: Tuple[float, float]) -> Tuple[float, float]:
@@ -130,15 +138,16 @@ def _grid(points: pd.DataFrame, table: pd.DataFrame, stats: pd.DataFrame, *, fea
                 ax.set_ylim(*y_lim)
                 if _is_reversed(error, reversed_errors):
                     (ax.invert_xaxis if error_on_x else ax.invert_yaxis)()
-                x_label = error_labels[error] if error_on_x else feature_labels[feature]
-                y_label = feature_labels[feature] if error_on_x else error_labels[error]
+                err_label = _axis_label(error_labels[error], _is_reversed(error, reversed_errors), error_on_x)
+                x_label = err_label if error_on_x else feature_labels[feature]
+                y_label = feature_labels[feature] if error_on_x else err_label
                 style_axis(ax, xlabel=x_label if (i == n_rows - 1 or not error_on_x) else "",
                            ylabel=y_label if j == 0 or error_on_x else "",
                            title="\n".join(_title_lines(stats, error, feature, sites)))
                 ax.set_title("\n".join(_title_lines(stats, error, feature, sites)), loc="left",
                              fontsize=TITLE_SIZE, fontweight="normal")
                 if i == 0:
-                    ax.annotate(error_labels[error], xy=(0.5, 1.0), xycoords="axes fraction", xytext=(0, 26),
+                    ax.annotate(err_label.replace("\n", " "), xy=(0.5, 1.0), xycoords="axes fraction", xytext=(0, 26),
                                 textcoords="offset points", ha="center", va="bottom", fontsize=10.5,
                                 fontweight="bold")
         _legend_axis(fig.add_subplot(gs[n_rows, :]), sites, caption, 190)

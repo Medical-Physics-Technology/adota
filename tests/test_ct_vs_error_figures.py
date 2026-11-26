@@ -99,3 +99,20 @@ def test_title_lines_skip_missing_scopes():
 def test_is_reversed():
     assert _is_reversed("gpr_2pct_2mm_10pct", ["gpr_2pct_2mm_10pct"])
     assert not _is_reversed("mape_pct", ["gpr_2pct_2mm_10pct"])
+
+
+def test_title_lines_skip_non_finite_scopes():
+    from src.figures.ct_vs_error import _title_lines
+    stats = pd.DataFrame([{"error": "e", "feature": "energy_mev", "scope": "pooled", "spearman": 0.3,
+                           "ci_low": 0.2, "ci_high": 0.4},
+                          {"error": "e", "feature": "energy_mev", "scope": "energy_partial", "spearman": float("nan"),
+                           "ci_low": float("nan"), "ci_high": float("nan")}])
+    lines = _title_lines(stats, "e", "energy_mev", ["thoracic"])
+    assert lines == ["pooled rho +0.30 [+0.20, +0.40]"]
+
+
+def test_axis_label_states_direction_only_when_reversed():
+    from src.figures.ct_vs_error import _axis_label
+    assert _axis_label("GPR", False, True) == "GPR"
+    assert "worse to the right" in _axis_label("GPR", True, True)
+    assert "worse upward" in _axis_label("GPR", True, False)
