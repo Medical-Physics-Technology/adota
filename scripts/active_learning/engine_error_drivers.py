@@ -30,6 +30,12 @@ Stages (``--stages``, comma-separated, run in this order; ``--run-dir`` resumes 
                directions, with pooled, per-site and energy-controlled correlations
                (``analysis/ct_vs_error/``).
 
+* ``dataset_overview`` -- what the split holds: per-beamlet metadata (site, field, gantry,
+               energy, spot position, joined to the error table with no lost rows), HU
+               histograms of the model-grid crops per site, energy, spot positions and gantry
+               per site, and a summary (``analysis/dataset_overview/``,
+               :mod:`src.engine_drivers.overview_stage`).
+
 ``--ids-file`` (a CSV with ``sample_id``) restricts every stage to those beamlets; the
 pencil beam still rebuilds their whole field, but computes only them.
 
@@ -61,6 +67,7 @@ from src.active_learning.pool import RecordResolver
 from src.datasets.beamlet_h5 import sha256_of
 from src.engine_drivers.adota import predict_and_save
 from src.engine_drivers.analysis import run_analysis, run_ct_vs_error
+from src.engine_drivers.overview_stage import run_dataset_overview
 from src.engine_drivers.pba import field_doses, patient_cts, pool_fields, save_dose
 from src.engine_drivers.scoring import CRITERIA, export_scale, mc_model_grid, score_doses
 from src.evaluation.cli import (
@@ -77,7 +84,7 @@ from src.utils.scallers import inverse_minmax
 from src.utils.unit_conversions import mcsquare_to_gy_per_mu
 
 logger = logging.getLogger("engine_error_drivers")
-STAGES = ("pba", "adota", "score", "panels", "analyse", "ct_vs_error")
+STAGES = ("pba", "adota", "score", "panels", "analyse", "ct_vs_error", "dataset_overview")
 DEFAULTS = {"output_dir": None, "device_index": 0, "split": "test"}
 
 
@@ -207,7 +214,10 @@ def main(
     else:
         run = Path(run_dir)
         (run / "tables").mkdir(parents=True, exist_ok=True)
-    setup_logging(run, log_filename="engine_error_drivers.log")
+    # dataset_overview alone adds files to a finished run, so it logs inside its own folder.
+    log_dir = run / "analysis" / "dataset_overview" if chosen == ["dataset_overview"] else run
+    log_dir.mkdir(parents=True, exist_ok=True)
+    setup_logging(log_dir, log_filename="engine_error_drivers.log")
 
     only = (list(pd.read_csv(ids_file, dtype={"sample_id": str})["sample_id"]) if ids_file else None)
     fields = pool_fields(Path(cfg["pool_store"]), cfg["split"], only)
@@ -231,6 +241,14 @@ def main(
         (run / "analysis" / "ct_vs_error" / "provenance.json").write_text(
             json.dumps({"stage": "ct_vs_error", "git": _git_info(), "config": cfg.get("analysis")}, indent=1,
                        default=str))
+    if "dataset_overview" in chosen:
+        out = run / "analysis" / "dataset_overview"
+        lines = run_dataset_overview(cfg, run)
+        (out / "summary.md").write_text("\n".join(lines), encoding="utf-8")
+        (out / "provenance.json").write_text(json.dumps(
+            {"stage": "dataset_overview", "git": _git_info(), "dataset_path": cfg["dataset_path"],
+             "config": cfg.get("dataset_overview"), "features_csv": cfg["analysis"]["features_csv"]},
+            indent=1, default=str))
     logger.info("done: %s", run)
 
 

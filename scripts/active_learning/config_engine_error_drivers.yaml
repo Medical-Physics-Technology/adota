@@ -45,3 +45,8 @@ analysis:
   seed: 20261125
   threads: 16
   ct_vs_error_formats: [png, pdf]   # stage ct_vs_error
+
+dataset_overview:           # stage dataset_overview (analysis/dataset_overview/)
+  plan_csv: /scratch/mstryja/adota_pool/v1_apollo_1e6/plan/plan.csv   # field_dir per candidate
+  gantry_bin_deg: 15
+  formats: [png, pdf]
