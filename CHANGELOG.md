@@ -36,6 +36,22 @@ Model behaviour is **unchanged**; the reference study's numbers are unchanged.
 
 ### Added
 
+- **`scripts/active_learning/engine_error_drivers.py`**: what drives the dose error of ADoTA
+  and the pencil beam (EXP-0023). Stages `pba`, `adota`, `score`, `panels`, `analyse`,
+  `ct_vs_error`, `dataset_overview`, `voxel_hu_error`, `voxel_decomposition`, `score_table`;
+  config `config_engine_error_drivers.yaml`; guide `scripts/docs/engine_error_drivers.md`.
+  New package `src.engine_drivers`: `pba` (pool fields, crop check, pencil-beam dose on the
+  model grid), `adota`, `scoring` (errors against the export's Monte Carlo through
+  `record_metrics`), `geometry` (`air_gap_mm`, `lowdensity_path_mm`), `importance`,
+  `analysis`, `ct_vs_error`, `dataset_overview`, `hu_histogram`, `overview_stage`,
+  `voxel_hu_error`, `voxel_decomposition`, `score_table`. New figure modules
+  `src.figures.engine_drivers` (`engine_panel_figure`), `src.figures.ct_vs_error`
+  (`correlation_overview`, `feature_shape_grid`, `feature_vs_error_grid`,
+  `error_vs_feature_grid`), `src.figures.dataset_overview` (`site_hu_histograms_figure`,
+  `energy_by_site_figure`, `spot_positions_figure`, `gantry_polar_figure`) and
+  `src.figures.voxel_hu_error` (`hu_error_grid`).
+- **`flux_weighted_hu`** is public in `src.acquisition.explain.profiles` (was
+  `_flux_weighted_hu`).
 - **`scripts/active_learning/difficulty_explain.py`**: why a beamlet gets its difficulty
   score. Exact additive contributions of the 30 features (the linear form makes them the
   SHAP values, no sampling), for the deployed score v2, for the five per-member ridges it
