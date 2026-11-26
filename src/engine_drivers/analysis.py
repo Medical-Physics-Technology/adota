@@ -13,6 +13,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Mapping
 
+import numpy as np
 import pandas as pd
 from threadpoolctl import threadpool_limits
 
@@ -130,3 +131,90 @@ def summary_lines(results: Mapping[str, pd.DataFrame], table: pd.DataFrame) -> L
 
 
 __all__ = ["load_table", "run_analysis", "summary_lines"]
+
+
+def run_ct_vs_error(cfg: Mapping, run: Path) -> List[str]:
+    """The ``ct_vs_error`` stage: the per-beamlet feature table, the statistics, the figures and the summary
+    lines (see :mod:`src.engine_drivers.ct_vs_error`). Writes only new files under ``<run>/analysis``."""
+    from src.engine_drivers import ct_vs_error as cv
+    from src.figures.ct_vs_error import error_vs_feature_grid, feature_vs_error_grid
+
+    acfg = cfg["analysis"]
+    out = run / "analysis" / "ct_vs_error"
+    out.mkdir(parents=True, exist_ok=True)
+    n_boot, seed = int(acfg.get("n_boot", 500)), int(acfg.get("seed", 20261125))
+    formats = tuple(acfg.get("ct_vs_error_formats", ["png", "pdf"]))
+    dataset = Path(cfg["dataset_path"])
+    index_csv = dataset.with_name(dataset.stem + "_index.csv")
+
+    feats = pd.read_csv(acfg["features_csv"], dtype={"sample_id": str}).set_index("sample_id")
+    paths = pd.read_csv(run / "analysis" / "path_features.csv", dtype={"sample_id": str}).set_index("sample_id")
+    missing = feats.index.difference(paths.index)
+    if len(missing):
+        extra = path_features(dataset, feats.loc[missing, "bp_slice"].astype(int).to_dict(), export_scale(dataset))
+        paths = pd.concat([paths, extra])
+    table = cv.beamlet_feature_table(Path(acfg["features_csv"]), index_csv, paths)
+    table.to_csv(run / "analysis" / "beamlet_features.csv", index=False)
+    logger.info("beamlet_features.csv: %d beamlets (%d with the peak inside the crop), %d path features computed now",
+                len(table), int(table["peak_inside_crop"].sum()), len(missing))
+
+    labels = {"ADoTA": "adota", "pencil beam": "pba"}
+    caption = ("Grey: all beamlets with the analytic peak inside the crop (log density; axes clipped to the 0.5 to "
+               "99.5 percentiles for display only). Lines: per-site medians per bin, bands: interquartile range. "
+               "Spearman correlations oriented so positive means a worse error (GPR as 100 - GPR); intervals from "
+               "resampling patients; energy-controlled = partial Spearman on beam energy. MAPE as in record_metrics: "
+               "relative to the engine's dose, over voxels above 10% of its maximum.")
+    summary: Dict[str, pd.DataFrame] = {}
+    for name, engine in labels.items():
+        errs = pd.read_csv(run / "tables" / f"errors_{engine}.csv", dtype={"sample_id": str})
+        points = cv.join_errors(table, errs)
+        points = points[points["peak_inside_crop"]].reset_index(drop=True)
+        feats_all = list(cv.CT_FEATURES) + list(cv.DEPTH_FEATURES)
+        stats = pd.concat([cv.correlations(points, feats_all, e, n_boot, seed) for e in cv.ERRORS], ignore_index=True)
+        ebins = pd.concat([cv.error_bins(points, feats_all, e) for e in cv.ERRORS], ignore_index=True)
+        fbins = pd.concat([cv.feature_bins(points, feats_all, e) for e in cv.ERRORS], ignore_index=True)
+        stats.to_csv(out / f"{engine}_correlations.csv", index=False)
+        ebins.to_csv(out / f"{engine}_feature_per_error_bin.csv", index=False)
+        fbins.to_csv(out / f"{engine}_error_per_feature_decile.csv", index=False)
+        summary[name] = stats
+        common = dict(errors=list(cv.ERRORS), feature_labels=cv.FEATURE_LABELS, error_labels=cv.ERROR_LABELS,
+                      reversed_errors=["gpr_2pct_2mm_10pct"], sites=list(cv.SITES), caption=caption, formats=formats)
+        for kind, feats_set in (("ct", cv.CT_FEATURES), ("depth", cv.DEPTH_FEATURES)):
+            n = len(points)
+            feature_vs_error_grid(points, ebins, stats, features=list(feats_set),
+                                  title=f"{name}: input CT features against per-beamlet error ({n} beamlets)",
+                                  figure_path=str(out / f"{engine}_{kind}_features_vs_error"), **common)
+            error_vs_feature_grid(points, fbins, stats, features=list(feats_set),
+                                  title=f"{name}: per-beamlet error per feature decile ({n} beamlets)",
+                                  figure_path=str(out / f"{engine}_{kind}_error_vs_features"), **common)
+        logger.info("ct_vs_error %s: %d beamlets, figures and tables written", name, len(points))
+    return ct_vs_error_summary(summary, int(table["peak_inside_crop"].sum()), len(table))
+
+
+def ct_vs_error_summary(stats: Mapping[str, pd.DataFrame], n_used: int, n_all: int) -> List[str]:
+    """Per feature: the pooled, per-site and energy-controlled correlations and one generated sentence."""
+    from src.engine_drivers import ct_vs_error as cv
+
+    def cell(s: pd.DataFrame, scope: str) -> str:
+        if scope not in s.index or not np.isfinite(s.loc[scope, "spearman"]):
+            return "n/a"
+        r = s.loc[scope]
+        return f"{r['spearman']:+.2f} [{r['ci_low']:+.2f}, {r['ci_high']:+.2f}]"
+
+    lines = ["# CT features against per-beamlet error (generated; numbers only, sentences by fixed rules)", "",
+             f"{n_used} of {n_all} beamlets (analytic peak inside the crop). Spearman, positive = worse error "
+             "(GPR as 100 - GPR); 95% intervals from resampling patients; energy-controlled = partial Spearman "
+             "on beam energy. A sentence says 'disappears' when the pooled interval excludes zero but the "
+             "energy-controlled one does not, and 'between sites' when no single site's interval excludes zero.", ""]
+    for f in list(cv.CT_FEATURES) + list(cv.DEPTH_FEATURES):
+        lines += [f"## {f}", "", "| engine | error | pooled | thoracic | abdominal | pelvic | energy-controlled |",
+                  "|---|---|---|---|---|---|---|"]
+        sentences = []
+        for name, st in stats.items():
+            for e in cv.ERRORS:
+                s = st[(st["error"] == e) & (st["feature"] == f)].set_index("scope")
+                lines.append(f"| {name} | {cv.ERRORS[e].label} | " + " | ".join(
+                    cell(s, k) for k in ("pooled", *cv.SITES, "energy_partial")) + " |")
+                sentences.append(f"- {name}, {cv.ERRORS[e].label}: {cv.verdict(st, e, f)[0]}")
+        lines += [""] + sentences + [""]
+    return lines

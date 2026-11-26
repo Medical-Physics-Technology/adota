@@ -44,3 +44,4 @@ analysis:
   n_boot: 500               # patient resamples for every interval
   seed: 20261125
   threads: 16
+  ct_vs_error_formats: [png, pdf]   # stage ct_vs_error
