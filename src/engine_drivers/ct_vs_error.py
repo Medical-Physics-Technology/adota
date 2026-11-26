@@ -47,10 +47,10 @@ DEPTH_FEATURES = ("max_grad_depth_mm", "energy_mev")
 
 FEATURE_LABELS: Mapping[str, str] = {
     "total_hu_change": "Tissue change in the peak zone\ntotal_hu_change [HU]",
-    "isi_sum": "Interface severity near the peak\nisi_sum [dimensionless]",
+    "isi_sum": "Interface severity, sum of RSP jumps squared\nisi_sum [dimensionless]",
     "sobel_th_mean": "Edge strength around the peak\nsobel_th_mean [a.u.]",
     "sobel_dw_anisotropy": "Edge anisotropy around the peak\nsobel_dw_anisotropy [0-1]",
-    "pflugfelder_hi": "WEPL spread across the beamlet\npflugfelder_hi [dimensionless]",
+    "pflugfelder_hi": "WEPL spread across the beamlet (std / mean)\npflugfelder_hi [dimensionless]",
     "interface_bp_distance": "Peak to nearest interface\ninterface_bp_distance [2 mm slices]",
     "lowdensity_path_mm": "Low-density path to the peak\nlowdensity_path_mm [mm]",
     "air_gap_mm": "Air (and couch) before the skin\nair_gap_mm [mm]",
@@ -191,9 +191,11 @@ def feature_bins(points: pd.DataFrame, features: Sequence[str], error: str, n_bi
 def verdict(stats: pd.DataFrame, error: str, feature: str, sites: Sequence[str] = SITES) -> Tuple[str, Dict[str, bool]]:
     """One plain sentence on how a feature relates to an error, by fixed rules, and the flags behind it.
 
-    Rules: *pooled* = the pooled interval excludes zero; *disappears with energy* = pooled holds but
-    the energy-controlled interval includes zero; *between sites only* = pooled holds but no site's
-    interval excludes zero; otherwise the direction and the sites where it holds are named.
+    A site counts when its interval excludes zero, and its sign is always taken into account. Rules:
+    pooled relation (interval excludes zero) -> its direction, the sites where it holds in the same
+    direction, the sites where it runs the other way, "between sites" when it holds in the same direction
+    within no site, and "disappears" when the energy-controlled interval includes zero. No pooled relation
+    -> the sites where one exists, and "cancel" when they disagree in sign.
     """
     s = stats[(stats["error"] == error) & (stats["feature"] == feature)].set_index("scope")
     pooled = s.loc["pooled"]
@@ -202,19 +204,33 @@ def verdict(stats: pd.DataFrame, error: str, feature: str, sites: Sequence[str] 
     partial_sig = bool(partial["ci_excludes_zero"]) if partial is not None and np.isfinite(partial["spearman"]) \
         else None
     site_sig = {x: bool(s.loc[x, "ci_excludes_zero"]) for x in sites if x in s.index}
+    site_rho = {x: float(s.loc[x, "spearman"]) for x in site_sig}
     flags = {"pooled": sig, "energy_partial": partial_sig, **{f"site_{k}": v for k, v in site_sig.items()}}
     what = "a worse error" if error != "gpr_2pct_2mm_10pct" else "more gamma failures"
+
+    def listing(names):
+        return ", ".join(f"{x} ({site_rho[x]:+.2f})" for x in names)
+
+    pos = [x for x, v in site_sig.items() if v and site_rho[x] > 0]
+    neg = [x for x, v in site_sig.items() if v and site_rho[x] < 0]
     if not sig:
-        held = [x for x, v in site_sig.items() if v]
-        tail = f" It does within {', '.join(held)}." if held else ""
-        return f"No pooled relation with {what} (rho {pooled['spearman']:+.2f}).{tail}", flags
+        text = f"No pooled relation with {what} (rho {pooled['spearman']:+.2f})"
+        if pos and neg:
+            text += (f"; the sites disagree, positive within {listing(pos)} and negative within {listing(neg)}, "
+                     "and cancel when pooled")
+        elif pos or neg:
+            text += f"; within {listing(pos or neg)} there is one"
+        return text + ".", flags
+    same, other = (pos, neg) if pooled["spearman"] > 0 else (neg, pos)
     direction = "higher" if pooled["spearman"] > 0 else "lower"
     text = f"A {direction} value goes with {what} (pooled rho {pooled['spearman']:+.2f})"
-    held = [x for x, v in site_sig.items() if v]
-    if not held:
-        text += ", but within no single site: the pooled relation comes from differences between sites"
+    if not same:
+        text += (", but within no single site in that direction: the pooled relation comes from differences "
+                 "between sites")
     else:
-        text += f"; it holds within {', '.join(held)}"
+        text += f"; it holds within {listing(same)}"
+    if other:
+        text += f"; within {listing(other)} it runs the other way"
     if partial_sig is False:
         text += ". It disappears after controlling for beam energy"
     elif partial_sig:

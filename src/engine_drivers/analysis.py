@@ -205,7 +205,10 @@ def ct_vs_error_summary(stats: Mapping[str, pd.DataFrame], n_used: int, n_all: i
              f"{n_used} of {n_all} beamlets (analytic peak inside the crop). Spearman, positive = worse error "
              "(GPR as 100 - GPR); 95% intervals from resampling patients; energy-controlled = partial Spearman "
              "on beam energy. A sentence says 'disappears' when the pooled interval excludes zero but the "
-             "energy-controlled one does not, and 'between sites' when no single site's interval excludes zero.", ""]
+             "energy-controlled one does not, and 'between sites' when no single site's interval excludes zero in "
+             "the pooled direction; sites running the other way are named. The energy control is applied to the "
+             "pooled beamlets only, not per site. A plain reading written by hand is in reading.md (never "
+             "regenerated).", ""]
     for f in list(cv.CT_FEATURES) + list(cv.DEPTH_FEATURES):
         lines += [f"## {f}", "", "| engine | error | pooled | thoracic | abdominal | pelvic | energy-controlled |",
                   "|---|---|---|---|---|---|---|"]

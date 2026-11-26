@@ -73,3 +73,24 @@ def test_verdict_says_disappears_and_between_sites():
                                               ("energy_partial", 0.3, 0.2, 0.4))])
     text, _ = verdict(fake, "mape_pct", "f")
     assert "differences between sites" in text
+
+
+def _fake(rows):
+    return pd.DataFrame([{"error": "mape_pct", "feature": "f", "scope": s, "spearman": v, "ci_low": lo,
+                          "ci_high": hi, "ci_excludes_zero": lo > 0 or hi < 0} for s, v, lo, hi in rows])
+
+
+def test_verdict_names_a_site_that_runs_the_other_way():
+    text, _ = verdict(_fake([("pooled", -0.15, -0.2, -0.1), ("thoracic", -0.2, -0.3, -0.1),
+                             ("abdominal", 0.3, 0.2, 0.4), ("pelvic", 0.0, -0.1, 0.1),
+                             ("energy_partial", -0.15, -0.2, -0.1)]), "mape_pct", "f")
+    assert "it holds within thoracic (-0.20)" in text
+    assert "within abdominal (+0.30) it runs the other way" in text
+    assert "holds within abdominal" not in text
+
+
+def test_verdict_says_sites_cancel_when_pooled_is_null():
+    text, _ = verdict(_fake([("pooled", 0.05, -0.01, 0.11), ("thoracic", 0.23, 0.17, 0.28),
+                             ("abdominal", -0.3, -0.4, -0.2), ("pelvic", 0.25, 0.13, 0.34),
+                             ("energy_partial", 0.6, 0.5, 0.7)]), "mape_pct", "f")
+    assert "the sites disagree" in text and "cancel when pooled" in text
