@@ -137,7 +137,12 @@ def run_ct_vs_error(cfg: Mapping, run: Path) -> List[str]:
     """The ``ct_vs_error`` stage: the per-beamlet feature table, the statistics, the figures and the summary
     lines (see :mod:`src.engine_drivers.ct_vs_error`). Writes only new files under ``<run>/analysis``."""
     from src.engine_drivers import ct_vs_error as cv
-    from src.figures.ct_vs_error import error_vs_feature_grid, feature_vs_error_grid
+    from src.figures.ct_vs_error import (
+        correlation_overview,
+        error_vs_feature_grid,
+        feature_shape_grid,
+        feature_vs_error_grid,
+    )
 
     acfg = cfg["analysis"]
     out = run / "analysis" / "ct_vs_error"
@@ -158,13 +163,16 @@ def run_ct_vs_error(cfg: Mapping, run: Path) -> List[str]:
     logger.info("beamlet_features.csv: %d beamlets (%d with the peak inside the crop), %d path features computed now",
                 len(table), int(table["peak_inside_crop"].sum()), len(missing))
 
-    labels = {"ADoTA": "adota", "pencil beam": "pba"}
+    labels = {"ADoTA": "adota", "Pencil beam": "pba"}
     caption = ("Grey: all beamlets with the analytic peak inside the crop (log density; axes clipped to the 0.5 to "
                "99.5 percentiles for display only). Lines: per-site medians per bin, bands: interquartile range. "
                "Spearman correlations oriented so positive means a worse error (GPR as 100 - GPR); intervals from "
                "resampling patients; energy-controlled = partial Spearman on beam energy. MAPE as in record_metrics: "
                "relative to the engine's dose, over voxels above 10% of its maximum.")
     summary: Dict[str, pd.DataFrame] = {}
+    appendix = out / "appendix"
+    appendix.mkdir(exist_ok=True)
+    shape_tables: Dict[str, Dict[str, pd.DataFrame]] = {"mape_pct": {}, "gpr_2pct_2mm_10pct": {}}
     for name, engine in labels.items():
         errs = pd.read_csv(run / "tables" / f"errors_{engine}.csv", dtype={"sample_id": str})
         points = cv.join_errors(table, errs)
@@ -183,12 +191,43 @@ def run_ct_vs_error(cfg: Mapping, run: Path) -> List[str]:
             n = len(points)
             feature_vs_error_grid(points, ebins, stats, features=list(feats_set),
                                   title=f"{name}: input CT features against per-beamlet error ({n} beamlets)",
-                                  figure_path=str(out / f"{engine}_{kind}_features_vs_error"), **common)
+                                  figure_path=str(appendix / f"{engine}_{kind}_features_vs_error"), **common)
             error_vs_feature_grid(points, fbins, stats, features=list(feats_set),
                                   title=f"{name}: per-beamlet error per feature decile ({n} beamlets)",
-                                  figure_path=str(out / f"{engine}_{kind}_error_vs_features"), **common)
+                                  figure_path=str(appendix / f"{engine}_{kind}_error_vs_features"), **common)
+        shape = list(cv.SHAPE_FEATURES)
+        mape = fbins[(fbins["error"] == "mape_pct") & fbins["feature"].isin(shape)]
+        shape_tables["mape_pct"][name] = mape.rename(columns={"error_median": "value"})[
+            ["error", "feature", "site", "bin", "feature_median", "n", "value"]]
+        shape_tables["gpr_2pct_2mm_10pct"][name] = cv.share_below(points, shape, "gpr_2pct_2mm_10pct", 95.0)
         logger.info("ct_vs_error %s: %d beamlets, figures and tables written", name, len(points))
-    return ct_vs_error_summary(summary, int(table["peak_inside_crop"].sum()), len(table))
+
+    names = {f: v[0] for f, v in cv.SHORT_NAMES.items()}
+    n_used = int(table["peak_inside_crop"].sum())
+    for error, key, xlabel, ylabel, what in (
+            ("mape_pct", "mape", "Spearman correlation with MAPE\n(positive: higher value, larger error)",
+             "median MAPE [%]", "a larger dose error (MAPE)"),
+            ("gpr_2pct_2mm_10pct", "gpr", "Spearman correlation with gamma failure 2%/2mm\n"
+             "(positive: higher value, more failures)", "beamlets below 95%\nGPR 2%/2mm [%]",
+             "more gamma failures (2%/2mm)")):
+        overview_rows = pd.concat([st[(st["error"] == error) & st["scope"].isin(["pooled", *cv.SITES])].assign(
+            engine=n) for n, st in summary.items()], ignore_index=True)
+        overview_rows.to_csv(out / f"overview_{key}_numbers.csv", index=False)
+        correlation_overview(summary, features=list(cv.CT_FEATURES), reference_features=list(cv.DEPTH_FEATURES),
+                             feature_names=names, error=error, sites=list(cv.SITES), xlabel=xlabel,
+                             title=f"Which CT features go with {what}? ({n_used} beamlets)",
+                             figure_path=str(out / f"overview_{key}"), formats=formats)
+        curves = shape_tables[error]
+        pd.concat([t.assign(engine=n) for n, t in curves.items()], ignore_index=True).to_csv(
+            out / f"shape_{key}_numbers.csv", index=False)
+        rho = {n: st[(st["error"] == error) & (st["scope"] == "pooled")].set_index("feature")["spearman"].to_dict()
+               for n, st in summary.items()}
+        detail = "median per feature decile" if error == "mape_pct" else "share below 95% per feature decile"
+        feature_shape_grid(curves, rho, features=list(cv.SHAPE_FEATURES), feature_names=cv.SHORT_NAMES,
+                           sites=list(cv.SITES), ylabel=ylabel,
+                           title=f"How the error changes with four CT features ({detail})",
+                           figure_path=str(out / f"shape_{key}"), formats=formats)
+    return ct_vs_error_summary(summary, n_used, len(table))
 
 
 def ct_vs_error_summary(stats: Mapping[str, pd.DataFrame], n_used: int, n_all: int) -> List[str]:

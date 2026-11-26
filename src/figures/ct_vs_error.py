@@ -14,6 +14,11 @@ drawn but stay in every table. Errors listed in ``reversed_errors`` (higher is b
 rate) are drawn with the axis inverted so that worse is always to the right (x) or up (y). Panel titles print the
 Spearman statistics from ``stats`` (already oriented so positive means worse).
 
+For slides, two summary figures ask one question each with at most one number per panel:
+:func:`correlation_overview` (which features go with a worse error, per engine) and
+:func:`feature_shape_grid` (how the error grows with a few features, per site). The grids above are the
+detailed appendix.
+
 Reuses ``ANATOMY_COLORS`` of :mod:`src.figures.validation_set`, ``style_axis`` of :mod:`src.figures.al_curves`,
 and saves through :func:`src.figures.axes_utils.save_figure_as_publication_formats`.
 """
@@ -191,3 +196,119 @@ def error_vs_feature_grid(points: pd.DataFrame, fbins: pd.DataFrame, stats: pd.D
                  error_labels=error_labels, reversed_errors=reversed_errors, sites=sites, title=title,
                  figure_path=figure_path, caption=caption, gridsize=gridsize, clip_quantiles=clip_quantiles,
                  formats=formats, error_on_x=False)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Summary figures for slides: one question per figure, at most one number per panel.
+# ---------------------------------------------------------------------------------------------------------------
+
+SITE_MARKERS = {"thoracic": "o", "abdominal": "s", "pelvic": "^"}
+"""Second encoding of the site, so identity never rests on colour alone."""
+INK, MUTED, GRID, REF_BAND = "#222222", "#6b6b6b", "#e6e6e6", "#f4f4f4"
+_RC_SUMMARY = {"font.size": 11, "axes.edgecolor": MUTED, "axes.labelcolor": INK, "xtick.color": MUTED,
+               "ytick.color": MUTED, "axes.spines.top": False, "axes.spines.right": False,
+               "axes.titleweight": "bold", "axes.titlesize": 12, "axes.titlecolor": INK}
+
+
+def _site_handles(sites: Sequence[str], line: bool) -> List[Line2D]:
+    return [Line2D([], [], color=ANATOMY_COLORS[s], marker=SITE_MARKERS.get(s, "o"),
+                   linestyle="-" if line else "", linewidth=2, label=s) for s in sites]
+
+
+def correlation_overview(stats: Mapping[str, pd.DataFrame], *, features: Sequence[str],
+                         reference_features: Sequence[str], feature_names: Mapping[str, str], error: str,
+                         sites: Sequence[str], xlabel: str, title: str, figure_path: str,
+                         xlim: Tuple[float, float] = (-0.75, 0.9),
+                         formats: Sequence[str] = ("png", "pdf")) -> List[Path]:
+    """Dot plot of each feature's Spearman correlation with one error, one panel per engine.
+
+    Black dot and bar: the pooled correlation and its 95% interval; small coloured markers: each site. The
+    ``reference_features`` (depth, energy) sit at the bottom on a grey band.
+
+    Args:
+        stats: ``{engine label: correlations}`` with columns ``error, feature, scope, spearman, ci_low, ci_high``
+            (``scope`` ``pooled`` and each site), oriented so that positive means a worse error.
+        features: Rows from the top, then ``reference_features``.
+    """
+    order = list(features) + list(reference_features)
+    ypos = {f: len(order) - 1 - i for i, f in enumerate(order)}
+    with plt.rc_context(_RC_SUMMARY):
+        fig, axes = plt.subplots(1, len(stats), figsize=(5.5 * len(stats) + 2.0, 0.5 * len(order) + 2.4),
+                                 sharey=True, squeeze=False)
+        for ax, (engine, table) in zip(axes[0], stats.items()):
+            s = table[table["error"] == error].set_index(["feature", "scope"])
+            ax.axhspan(-0.5, len(reference_features) - 0.5, color=REF_BAND, zorder=0)
+            ax.axvline(0.0, color=MUTED, linewidth=1, zorder=1)
+            for f in order:
+                p = s.loc[(f, "pooled")]
+                ax.plot([p["ci_low"], p["ci_high"]], [ypos[f]] * 2, color=INK, linewidth=2,
+                        solid_capstyle="round", zorder=3)
+                ax.plot(p["spearman"], ypos[f], "o", color=INK, markersize=7, zorder=4)
+                for k, site in enumerate(sites):
+                    if (f, site) in s.index:
+                        ax.plot(s.loc[(f, site), "spearman"], ypos[f] + 0.22 * (1 - k), SITE_MARKERS.get(site, "o"),
+                                color=ANATOMY_COLORS[site], markersize=5, markeredgewidth=0, zorder=2)
+            ax.set_xlim(*xlim)
+            ax.set_title(engine, loc="left")
+            ax.grid(axis="x", color=GRID, linewidth=0.8)
+            ax.set_xlabel(xlabel)
+            ax.tick_params(axis="y", length=0)
+        axes[0, 0].set_yticks([ypos[f] for f in order])
+        axes[0, 0].set_yticklabels([feature_names.get(f, f) for f in order])
+        axes[0, 0].text(xlim[0] + 0.01, len(reference_features) - 0.62, "reference", fontsize=9, color=MUTED,
+                        va="top")
+        handles = [Line2D([], [], color=INK, marker="o", linewidth=2, label="all sites (95% interval)")]
+        handles += _site_handles(sites, line=False)
+        fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False, bbox_to_anchor=(0.55, 0.0))
+        fig.suptitle(title, x=0.02, ha="left", fontsize=14, fontweight="bold", color=INK)
+        fig.subplots_adjust(left=0.26, right=0.98, top=0.88, bottom=0.2, wspace=0.08)
+        paths = save_figure_as_publication_formats(fig, figure_path, formats=formats)
+        plt.close(fig)
+    return paths
+
+
+def feature_shape_grid(curves: Mapping[str, pd.DataFrame], rho: Mapping[str, Mapping[str, float]], *,
+                       features: Sequence[str], feature_names: Mapping[str, Tuple[str, str]], sites: Sequence[str],
+                       ylabel: str, title: str, figure_path: str, min_bins: int = 3,
+                       formats: Sequence[str] = ("png", "pdf")) -> List[Path]:
+    """Small multiples of an error against a few features: rows engines, columns features, one line per site.
+
+    Args:
+        curves: ``{engine label: table}`` with columns ``feature, site, bin, feature_median, value``: the
+            error summary (``value``) per feature bin of one site.
+        rho: ``{engine label: {feature: pooled Spearman}}``, printed once per panel.
+        feature_names: ``{feature: (plain name, unit)}``.
+        min_bins: A site with fewer bins for a feature (a feature that is almost always zero there) is not drawn.
+    """
+    engines = list(curves)
+    with plt.rc_context(_RC_SUMMARY):
+        fig, axes = plt.subplots(len(engines), len(features), figsize=(3.3 * len(features) + 0.6,
+                                                                        3.2 * len(engines)),
+                                 sharey="row", squeeze=False)
+        for r, engine in enumerate(engines):
+            table = curves[engine]
+            for c, f in enumerate(features):
+                ax = axes[r, c]
+                for site in sites:
+                    b = table[(table["feature"] == f) & (table["site"] == site)].sort_values("bin")
+                    if len(b) < min_bins:
+                        continue
+                    ax.plot(b["feature_median"], b["value"], color=ANATOMY_COLORS[site], linewidth=2,
+                            marker=SITE_MARKERS.get(site, "o"), markersize=5, markeredgewidth=0)
+                ax.grid(color=GRID, linewidth=0.8)
+                if f in rho.get(engine, {}):
+                    ax.text(0.03, 0.95, f"rho = {rho[engine][f]:+.2f}", transform=ax.transAxes, va="top",
+                            fontsize=10, color=INK)
+                name, unit = feature_names.get(f, (f, ""))
+                if r == 0:
+                    ax.set_title(name, loc="left", fontsize=11)
+                ax.set_xlabel(f"[{unit}]" if unit else "", color=MUTED, fontsize=10)
+                if c == 0:
+                    ax.set_ylabel(f"{engine}\n{ylabel}")
+        fig.legend(handles=_site_handles(sites, line=True), loc="lower center", ncol=len(sites), frameon=False,
+                   bbox_to_anchor=(0.5, 0.0))
+        fig.suptitle(title, x=0.02, ha="left", fontsize=14, fontweight="bold", color=INK)
+        fig.subplots_adjust(left=0.09, right=0.99, top=0.85, bottom=0.17, hspace=0.55, wspace=0.12)
+        paths = save_figure_as_publication_formats(fig, figure_path, formats=formats)
+        plt.close(fig)
+    return paths

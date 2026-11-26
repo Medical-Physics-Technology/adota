@@ -116,3 +116,32 @@ def test_axis_label_states_direction_only_when_reversed():
     assert _axis_label("GPR", False, True) == "GPR"
     assert "worse to the right" in _axis_label("GPR", True, True)
     assert "worse upward" in _axis_label("GPR", True, False)
+
+
+def _summary_inputs():
+    rng = np.random.default_rng(3)
+    stats = []
+    for f in ("a", "b", "depth"):
+        for scope in ("pooled", "thoracic", "abdominal", "pelvic"):
+            r = float(rng.uniform(-0.3, 0.6))
+            stats.append({"error": "mape_pct", "feature": f, "scope": scope, "spearman": r, "ci_low": r - 0.05,
+                          "ci_high": r + 0.05})
+    stats = pd.DataFrame(stats)
+    curves = pd.DataFrame([{"feature": f, "site": s, "bin": k, "feature_median": float(k), "value": float(k + i)}
+                           for f in ("a", "b") for i, s in enumerate(("thoracic", "abdominal", "pelvic"))
+                           for k in range(1, 6)])
+    return stats, curves
+
+
+def test_correlation_overview_and_shape_grid_write_the_formats(tmp_path):
+    from src.figures.ct_vs_error import correlation_overview, feature_shape_grid
+    stats, curves = _summary_inputs()
+    sites = ["thoracic", "abdominal", "pelvic"]
+    paths = correlation_overview({"E1": stats, "E2": stats}, features=["a", "b"], reference_features=["depth"],
+                                 feature_names={"a": "Feature A"}, error="mape_pct", sites=sites, xlabel="rho",
+                                 title="t", figure_path=str(tmp_path / "ov"), formats=("png",))
+    assert [p.suffix for p in paths] == [".png"] and paths[0].stat().st_size > 1000
+    paths = feature_shape_grid({"E1": curves, "E2": curves}, {"E1": {"a": 0.3}}, features=["a", "b"],
+                               feature_names={"a": ("Feature A", "mm")}, sites=sites, ylabel="MAPE", title="t",
+                               figure_path=str(tmp_path / "sh"), formats=("png", "pdf"))
+    assert sorted(p.suffix for p in paths) == [".pdf", ".png"]

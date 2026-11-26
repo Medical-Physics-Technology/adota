@@ -188,6 +188,25 @@ def feature_bins(points: pd.DataFrame, features: Sequence[str], error: str, n_bi
                                               "error_median", "error_q25", "error_q75"]]
 
 
+def share_below(points: pd.DataFrame, features: Sequence[str], error: str, threshold: float = 95.0,
+                n_bins: int = 10, sites: Sequence[str] = SITES) -> pd.DataFrame:
+    """Per site and feature decile (tie-aware bins): the share of beamlets whose ``error`` is below ``threshold``.
+
+    Schema ``error, feature, site, bin, feature_median, n, value`` with ``value`` in percent; this is the
+    readable form of a saturated pass rate (a median near 99% hides the failures).
+    """
+    rows = []
+    for f in features:
+        for site in sites:
+            sub = points[points["site"] == site]
+            b = _bins(sub[f], n_bins)
+            for k, g in sub.groupby(b):
+                rows.append({"error": error, "feature": f, "site": site, "bin": int(k),
+                             "feature_median": float(g[f].median()), "n": len(g),
+                             "value": float(100.0 * (g[error] < threshold).mean())})
+    return pd.DataFrame(rows)
+
+
 def verdict(stats: pd.DataFrame, error: str, feature: str, sites: Sequence[str] = SITES) -> Tuple[str, Dict[str, bool]]:
     """One plain sentence on how a feature relates to an error, by fixed rules, and the flags behind it.
 
@@ -238,6 +257,23 @@ def verdict(stats: pd.DataFrame, error: str, feature: str, sites: Sequence[str] 
     return text + ".", flags
 
 
-__all__ = ["CT_FEATURES", "DEPTH_FEATURES", "ERRORS", "ERROR_LABELS", "FEATURE_LABELS", "MC_DIAGNOSTICS", "SITES",
-           "beamlet_feature_table", "binned", "correlations", "error_bins", "feature_bins", "join_errors",
-           "partial_spearman", "verdict"]
+SHAPE_FEATURES = ("lowdensity_path_mm", "total_hu_change", "pflugfelder_hi", "air_gap_mm")
+"""The four features of the shape figures: the strongest MAPE drivers across the two engines."""
+SHORT_NAMES: Mapping[str, Tuple[str, str]] = {
+    "lowdensity_path_mm": ("Lung on the way to the peak", "mm"),
+    "total_hu_change": ("Tissue change in the peak zone", "HU"),
+    "pflugfelder_hi": ("WEPL spread across the beamlet", "std / mean"),
+    "air_gap_mm": ("Air before the skin", "mm"),
+    "isi_sum": ("Interface severity near the peak", "dimensionless"),
+    "sobel_th_mean": ("Edge strength around the peak", "a.u."),
+    "interface_bp_distance": ("Peak to nearest interface", "2 mm slices"),
+    "ct_max_hu": ("Densest voxel in the crop", "HU"),
+    "sobel_dw_anisotropy": ("Edge anisotropy around the peak", "0-1"),
+    "max_grad_depth_mm": ("Depth of the steepest dose rise", "mm"),
+    "energy_mev": ("Beam energy", "MeV"),
+}
+"""Plain names and units for the overview and shape figures."""
+
+__all__ = ["CT_FEATURES", "DEPTH_FEATURES", "ERRORS", "ERROR_LABELS", "FEATURE_LABELS", "MC_DIAGNOSTICS",
+           "SHAPE_FEATURES", "SHORT_NAMES", "SITES", "beamlet_feature_table", "binned", "correlations", "error_bins",
+           "feature_bins", "join_errors", "partial_spearman", "share_below", "verdict"]

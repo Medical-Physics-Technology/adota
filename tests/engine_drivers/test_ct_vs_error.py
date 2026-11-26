@@ -94,3 +94,15 @@ def test_verdict_says_sites_cancel_when_pooled_is_null():
                              ("abdominal", -0.3, -0.4, -0.2), ("pelvic", 0.25, 0.13, 0.34),
                              ("energy_partial", 0.6, 0.5, 0.7)]), "mape_pct", "f")
     assert "the sites disagree" in text and "cancel when pooled" in text
+
+
+def test_share_below_is_a_percentage_per_feature_bin():
+    from src.engine_drivers.ct_vs_error import share_below
+    p = _points()
+    out = share_below(p, ["own"], "gpr_2pct_2mm_10pct", threshold=95.0)
+    assert set(out.columns) == {"error", "feature", "site", "bin", "feature_median", "n", "value"}
+    assert out["value"].between(0, 100).all()
+    assert out.groupby("site")["n"].sum().sum() == len(p)
+    # 'own' raises MAPE, so GPR (= 100 - MAPE here) falls: the top bin has the larger share below 95
+    th = out[out["site"] == "thoracic"].sort_values("bin")
+    assert th["value"].iloc[-1] >= th["value"].iloc[0]
