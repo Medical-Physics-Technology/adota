@@ -36,6 +36,11 @@ Stages (``--stages``, comma-separated, run in this order; ``--run-dir`` resumes 
                per site, and a summary (``analysis/dataset_overview/``,
                :mod:`src.engine_drivers.overview_stage`).
 
+* ``voxel_hu_error`` -- per voxel above 0.1% of the beamlet's Monte Carlo maximum, each
+               engine's dose error against the voxel's HU, per dose band and site, with
+               patient-resampling intervals (``analysis/voxel_hu_error/``,
+               :mod:`src.engine_drivers.voxel_hu_error`). Needs ``dataset_overview`` first.
+
 ``--ids-file`` (a CSV with ``sample_id``) restricts every stage to those beamlets; the
 pencil beam still rebuilds their whole field, but computes only them.
 
@@ -70,6 +75,7 @@ from src.engine_drivers.analysis import run_analysis, run_ct_vs_error
 from src.engine_drivers.overview_stage import run_dataset_overview
 from src.engine_drivers.pba import field_doses, patient_cts, pool_fields, save_dose
 from src.engine_drivers.scoring import CRITERIA, export_scale, mc_model_grid, score_doses
+from src.engine_drivers.voxel_hu_error import run_voxel_hu_error
 from src.evaluation.cli import (
     load_yaml_config,
     merge_config,
@@ -84,7 +90,8 @@ from src.utils.scallers import inverse_minmax
 from src.utils.unit_conversions import mcsquare_to_gy_per_mu
 
 logger = logging.getLogger("engine_error_drivers")
-STAGES = ("pba", "adota", "score", "panels", "analyse", "ct_vs_error", "dataset_overview")
+STAGES = ("pba", "adota", "score", "panels", "analyse", "ct_vs_error", "dataset_overview", "voxel_hu_error")
+ADD_ON_STAGES = ("dataset_overview", "voxel_hu_error")   # add files to a finished run, log in their folder
 DEFAULTS = {"output_dir": None, "device_index": 0, "split": "test"}
 
 
@@ -214,8 +221,8 @@ def main(
     else:
         run = Path(run_dir)
         (run / "tables").mkdir(parents=True, exist_ok=True)
-    # dataset_overview alone adds files to a finished run, so it logs inside its own folder.
-    log_dir = run / "analysis" / "dataset_overview" if chosen == ["dataset_overview"] else run
+    # An add-on stage run alone adds files to a finished run, so it logs inside its own folder.
+    log_dir = run / "analysis" / chosen[0] if len(chosen) == 1 and chosen[0] in ADD_ON_STAGES else run
     log_dir.mkdir(parents=True, exist_ok=True)
     setup_logging(log_dir, log_filename="engine_error_drivers.log")
 
@@ -249,6 +256,13 @@ def main(
             {"stage": "dataset_overview", "git": _git_info(), "dataset_path": cfg["dataset_path"],
              "config": cfg.get("dataset_overview"), "features_csv": cfg["analysis"]["features_csv"]},
             indent=1, default=str))
+    if "voxel_hu_error" in chosen:
+        out = run / "analysis" / "voxel_hu_error"
+        lines = run_voxel_hu_error(cfg, run)
+        (out / "summary.md").write_text("\n".join(lines), encoding="utf-8")
+        (out / "provenance.json").write_text(json.dumps(
+            {"stage": "voxel_hu_error", "git": _git_info(), "dataset_path": cfg["dataset_path"],
+             "config": cfg.get("voxel_hu_error")}, indent=1, default=str))
     logger.info("done: %s", run)
 
 

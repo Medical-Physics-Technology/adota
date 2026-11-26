@@ -50,3 +50,11 @@ dataset_overview:           # stage dataset_overview (analysis/dataset_overview/
   plan_csv: /scratch/mstryja/adota_pool/v1_apollo_1e6/plan/plan.csv   # field_dir per candidate
   gantry_bin_deg: 15
   formats: [png, pdf]
+
+voxel_hu_error:             # stage voxel_hu_error (analysis/voxel_hu_error/)
+  dose_cutoff: 0.001        # voxels with MC dose >= 0.1% of the beamlet's MC maximum
+  local_min: 0.10           # local error only where MC dose >= 10% of the maximum
+  min_patients: 5           # an HU bin is drawn only if seen in this many patients
+  n_boot: 500
+  seed: 20261126
+  formats: [png, pdf]
