@@ -213,7 +213,7 @@ def run_ct_vs_error(cfg: Mapping, run: Path) -> List[str]:
         overview_rows = pd.concat([st[(st["error"] == error) & st["scope"].isin(["pooled", *cv.SITES])].assign(
             engine=n) for n, st in summary.items()], ignore_index=True)
         overview_rows.to_csv(out / f"overview_{key}_numbers.csv", index=False)
-        correlation_overview(summary, features=list(cv.CT_FEATURES), reference_features=list(cv.DEPTH_FEATURES),
+        correlation_overview(summary, features=list(cv.OVERVIEW_ORDER), reference_features=list(cv.DEPTH_FEATURES),
                              feature_names=names, error=error, sites=list(cv.SITES), xlabel=xlabel,
                              title=f"Which CT features go with {what}? ({n_used} beamlets)",
                              figure_path=str(out / f"overview_{key}"), formats=formats)

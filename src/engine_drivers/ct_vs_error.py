@@ -257,6 +257,10 @@ def verdict(stats: pd.DataFrame, error: str, feature: str, sites: Sequence[str] 
     return text + ".", flags
 
 
+OVERVIEW_ORDER = ("lowdensity_path_mm", "total_hu_change", "pflugfelder_hi", "air_gap_mm", "isi_sum", "sobel_th_mean",
+                  "interface_bp_distance", "ct_max_hu", "sobel_dw_anisotropy")
+"""Rows of both overview figures: the CT features from the strongest to the weakest MAPE driver, one fixed order
+so the MAPE and gamma overviews compare row by row."""
 SHAPE_FEATURES = ("lowdensity_path_mm", "total_hu_change", "pflugfelder_hi", "air_gap_mm")
 """The four features of the shape figures: the strongest MAPE drivers across the two engines."""
 SHORT_NAMES: Mapping[str, Tuple[str, str]] = {
@@ -275,5 +279,5 @@ SHORT_NAMES: Mapping[str, Tuple[str, str]] = {
 """Plain names and units for the overview and shape figures."""
 
 __all__ = ["CT_FEATURES", "DEPTH_FEATURES", "ERRORS", "ERROR_LABELS", "FEATURE_LABELS", "MC_DIAGNOSTICS",
-           "SHAPE_FEATURES", "SHORT_NAMES", "SITES", "beamlet_feature_table", "binned", "correlations", "error_bins",
-           "feature_bins", "join_errors", "partial_spearman", "share_below", "verdict"]
+           "OVERVIEW_ORDER", "SHAPE_FEATURES", "SHORT_NAMES", "SITES", "beamlet_feature_table", "binned",
+           "correlations", "error_bins", "feature_bins", "join_errors", "partial_spearman", "share_below", "verdict"]
