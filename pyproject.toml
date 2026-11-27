@@ -83,6 +83,8 @@ select = ["E", "F", "I"]
 # Same reason: the metrics of both hardness tables are computed in a process pool.
 "scripts/active_learning/beamlet_hardness.py" = ["E402"]
 "scripts/active_learning/difficulty_engine_grids.py" = ["E402"]
+# Pins BLAS to one thread before numpy loads: thousands of small gamma and metric calls.
+"scripts/active_learning/engine_error_drivers.py" = ["E402"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
